@@ -1555,6 +1555,31 @@ static BoxModel dom_node_to_boxmodel(DOMNode* node) {
     bm.floatdir = static_cast<BoxModel::Float>(static_cast<int>(node->floatdir));
     bm.bg_image = node->bg_image;
     bm.bg_color = node->bg_color;
+
+    // Overlay JS-set style_props on top of parsed values
+    if (!node->style_props.empty()) {
+        auto sp = [&](const char* k) -> std::string {
+            auto it = node->style_props.find(k);
+            return it != node->style_props.end() ? it->second : "";
+        };
+        std::string v;
+        if (!(v = sp("background-color")).empty()) bm.bg_color = v;
+        if (!(v = sp("color")).empty()) { /* handled in text render */ }
+        if (!(v = sp("width")).empty()) { int px = atoi(v.c_str()); if (px > 0) bm.width = px; }
+        if (!(v = sp("height")).empty()) { int px = atoi(v.c_str()); if (px > 0) bm.height = px; }
+        if (!(v = sp("border-radius")).empty()) { int px = atoi(v.c_str()); if (px >= 0) bm.border_radius = px; }
+        if (!(v = sp("padding")).empty()) {
+            int px = atoi(v.c_str());
+            if (px >= 0) for (int i = 0; i < 4; i++) bm.padding[i] = px;
+        }
+        if (!(v = sp("margin")).empty()) {
+            int px = atoi(v.c_str());
+            for (int i = 0; i < 4; i++) bm.margin[i] = px;
+        }
+        fprintf(stderr, "[DEBUG dom_node_to_boxmodel] <%s id='%s'> style_props=%zu bg_color='%s'\n",
+                node->tag_name.c_str(), node->id.c_str(), node->style_props.size(), bm.bg_color.c_str());
+    }
+
     return bm;
 }
 
@@ -1578,13 +1603,24 @@ static void render_node(AppState* st, DOMNode* node, int gen,
         int text_align = node->text_align_computed;
         std::string href = node->href;
 
-        // Inherit from ancestors
+        // Inherit from ancestors (also check style_props for JS-set values)
+        auto get_sp_color = [](DOMNode* n) -> std::string {
+            auto it = n->style_props.find("color");
+            return it != n->style_props.end() ? it->second : "";
+        };
+        // Check own style_props first
+        { std::string sc = get_sp_color(node); if (!sc.empty()) color = sc; }
+
         DOMNode* p = node->parent;
         while (p) {
             if (fw == -1 && p->fw_computed != -1) fw = p->fw_computed;
             if (fi == -1 && p->fi_computed != -1) fi = p->fi_computed;
             if (fs <= 0 && p->fs_computed > 0) fs = p->fs_computed;
-            if (color.empty() && !p->color_computed.empty()) color = p->color_computed;
+            if (color.empty()) {
+                std::string sc = get_sp_color(p);
+                if (!sc.empty()) color = sc;
+                else if (!p->color_computed.empty()) color = p->color_computed;
+            }
             if (text_align < 0 && p->text_align_computed >= 0) text_align = p->text_align_computed;
             if (lh < 0 && p->lh_computed >= 0) lh = p->lh_computed;
             if (href.empty() && !p->href.empty()) href = p->href;
