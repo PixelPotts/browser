@@ -3,9 +3,183 @@
 #include "js_event.h"
 #include "dom.h"
 #include <cstdio>
+#include <thread>
+#include <curl/curl.h>
+#include <gtk/gtk.h>
 
 extern "C" {
 #include "quickjs.h"
+}
+
+// ---- fetch() support ----
+
+struct FetchBuf { std::string data; };
+static size_t fetch_write_cb(char* p, size_t s, size_t n, void* ud) {
+    static_cast<FetchBuf*>(ud)->data.append(p, s*n); return s*n;
+}
+
+static bool do_fetch(const std::string& url, FetchBuf& out) {
+    CURL* c = curl_easy_init(); if (!c) return false;
+    curl_easy_setopt(c, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, fetch_write_cb);
+    curl_easy_setopt(c, CURLOPT_WRITEDATA, &out);
+    curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(c, CURLOPT_USERAGENT, "Mozilla/5.0");
+    curl_easy_setopt(c, CURLOPT_TIMEOUT, 15L);
+    curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, 0L);
+    CURLcode rc = curl_easy_perform(c); curl_easy_cleanup(c);
+    return rc == CURLE_OK;
+}
+
+// Response class for fetch()
+static JSClassID js_response_class_id = 0;
+
+struct ResponseOpaque {
+    std::string body;
+    int status;
+    bool ok;
+};
+
+static void js_response_finalizer(JSRuntime* rt, JSValue val) {
+    auto* op = (ResponseOpaque*)JS_GetOpaque(val, js_response_class_id);
+    delete op;
+}
+
+static const JSClassDef js_response_class_def = {
+    "Response", js_response_finalizer, nullptr, nullptr, nullptr
+};
+
+static JSValue js_response_text(JSContext* ctx, JSValueConst this_val,
+                                 int argc, JSValueConst* argv) {
+    auto* op = (ResponseOpaque*)JS_GetOpaque(this_val, js_response_class_id);
+    if (!op) return JS_EXCEPTION;
+
+    // Return a promise that resolves with the body text
+    JSValue resolving[2];
+    JSValue promise = JS_NewPromiseCapability(ctx, resolving);
+    JSValue text_val = JS_NewString(ctx, op->body.c_str());
+    JSValue ret = JS_Call(ctx, resolving[0], JS_UNDEFINED, 1, &text_val);
+    JS_FreeValue(ctx, ret);
+    JS_FreeValue(ctx, text_val);
+    JS_FreeValue(ctx, resolving[0]);
+    JS_FreeValue(ctx, resolving[1]);
+    return promise;
+}
+
+static JSValue js_response_json(JSContext* ctx, JSValueConst this_val,
+                                 int argc, JSValueConst* argv) {
+    auto* op = (ResponseOpaque*)JS_GetOpaque(this_val, js_response_class_id);
+    if (!op) return JS_EXCEPTION;
+
+    JSValue resolving[2];
+    JSValue promise = JS_NewPromiseCapability(ctx, resolving);
+    JSValue json_val = JS_ParseJSON(ctx, op->body.c_str(), op->body.size(), "<json>");
+    if (JS_IsException(json_val)) {
+        JSValue exc = JS_GetException(ctx);
+        JSValue ret = JS_Call(ctx, resolving[1], JS_UNDEFINED, 1, &exc);
+        JS_FreeValue(ctx, ret);
+        JS_FreeValue(ctx, exc);
+    } else {
+        JSValue ret = JS_Call(ctx, resolving[0], JS_UNDEFINED, 1, &json_val);
+        JS_FreeValue(ctx, ret);
+    }
+    JS_FreeValue(ctx, json_val);
+    JS_FreeValue(ctx, resolving[0]);
+    JS_FreeValue(ctx, resolving[1]);
+    return promise;
+}
+
+static JSValue js_response_get_ok(JSContext* ctx, JSValueConst this_val) {
+    auto* op = (ResponseOpaque*)JS_GetOpaque(this_val, js_response_class_id);
+    return op ? JS_NewBool(ctx, op->ok) : JS_FALSE;
+}
+
+static JSValue js_response_get_status(JSContext* ctx, JSValueConst this_val) {
+    auto* op = (ResponseOpaque*)JS_GetOpaque(this_val, js_response_class_id);
+    return op ? JS_NewInt32(ctx, op->status) : JS_NewInt32(ctx, 0);
+}
+
+static JSValue js_fetch(JSContext* ctx, JSValueConst this_val,
+                         int argc, JSValueConst* argv) {
+    if (argc < 1 || !g_js_engine) return JS_EXCEPTION;
+
+    const char* url = JS_ToCString(ctx, argv[0]);
+    if (!url) return JS_EXCEPTION;
+    std::string url_str(url);
+    JS_FreeCString(ctx, url);
+
+    // Create promise
+    JSValue resolving[2];
+    JSValue promise = JS_NewPromiseCapability(ctx, resolving);
+
+    // Dup the resolve/reject functions for the background thread
+    JSValue resolve = JS_DupValue(ctx, resolving[0]);
+    JSValue reject = JS_DupValue(ctx, resolving[1]);
+    JS_FreeValue(ctx, resolving[0]);
+    JS_FreeValue(ctx, resolving[1]);
+
+    // Fetch in background thread, resolve on main thread
+    JSEngine* engine = g_js_engine;
+    std::thread([engine, url_str, resolve, reject]() {
+        FetchBuf buf;
+        bool ok = do_fetch(url_str, buf);
+
+        // Use g_idle_add to resolve/reject on main thread
+        struct ResolveData {
+            JSEngine* engine;
+            JSValue resolve, reject;
+            std::string body;
+            bool ok;
+        };
+        auto* rd = new ResolveData{engine, resolve, reject, std::move(buf.data), ok};
+
+        g_idle_add([](gpointer data) -> gboolean {
+            auto* rd = static_cast<ResolveData*>(data);
+            if (!rd->engine || !rd->engine->ctx) {
+                delete rd;
+                return G_SOURCE_REMOVE;
+            }
+            JSContext* ctx = rd->engine->ctx;
+
+            if (rd->ok) {
+                // Create Response object
+                JSValue resp = JS_NewObjectClass(ctx, js_response_class_id);
+                auto* op = new ResponseOpaque{std::move(rd->body), 200, true};
+                JS_SetOpaque(resp, op);
+
+                // Set methods
+                JS_SetPropertyStr(ctx, resp, "text",
+                    JS_NewCFunction(ctx, js_response_text, "text", 0));
+                JS_SetPropertyStr(ctx, resp, "json",
+                    JS_NewCFunction(ctx, js_response_json, "json", 0));
+                JS_DefinePropertyGetSet(ctx, resp,
+                    JS_NewAtom(ctx, "ok"),
+                    JS_NewCFunction(ctx, (JSCFunction*)js_response_get_ok, "get ok", 0),
+                    JS_UNDEFINED, JS_PROP_CONFIGURABLE);
+                JS_DefinePropertyGetSet(ctx, resp,
+                    JS_NewAtom(ctx, "status"),
+                    JS_NewCFunction(ctx, (JSCFunction*)js_response_get_status, "get status", 0),
+                    JS_UNDEFINED, JS_PROP_CONFIGURABLE);
+
+                JSValue ret = JS_Call(ctx, rd->resolve, JS_UNDEFINED, 1, &resp);
+                JS_FreeValue(ctx, ret);
+                JS_FreeValue(ctx, resp);
+            } else {
+                JSValue err = JS_NewString(ctx, "Network error");
+                JSValue ret = JS_Call(ctx, rd->reject, JS_UNDEFINED, 1, &err);
+                JS_FreeValue(ctx, ret);
+                JS_FreeValue(ctx, err);
+            }
+
+            JS_FreeValue(ctx, rd->resolve);
+            JS_FreeValue(ctx, rd->reject);
+            rd->engine->executePendingJobs();
+            delete rd;
+            return G_SOURCE_REMOVE;
+        }, rd);
+    }).detach();
+
+    return promise;
 }
 
 JSEngine* g_js_engine = nullptr;
@@ -171,7 +345,17 @@ void JSEngine::shutdown() {
 }
 
 void JSEngine::setupGlobals() {
+    // Register Response class for fetch()
+    JS_NewClassID(&js_response_class_id);
+    JS_NewClass(rt, js_response_class_id, &js_response_class_def);
+    JSValue resp_proto = JS_NewObject(ctx);
+    JS_SetClassProto(ctx, js_response_class_id, resp_proto);
+
     JSValue global = JS_GetGlobalObject(ctx);
+
+    // fetch()
+    JS_SetPropertyStr(ctx, global, "fetch",
+        JS_NewCFunction(ctx, js_fetch, "fetch", 1));
 
     // console object
     JSValue console = JS_NewObject(ctx);
