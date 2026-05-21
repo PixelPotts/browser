@@ -739,7 +739,10 @@ static std::string strip_selector_extras(const std::string& raw) {
 static bool simple_match(const std::string& raw, const StackEntry& e) {
     if (raw.empty() || raw=="*") return true;
     std::string tok = strip_selector_extras(raw);
-    if (tok.empty()) return true;
+    // If raw had content but stripping [attr] and :pseudo left nothing,
+    // the selector is purely attribute/pseudo-based (e.g. "[hidden]").
+    // We can't evaluate these, so conservatively return false.
+    if (tok.empty()) return false;
     if (tok[0]=='#') return e.id == tok.substr(1);
     // parse tag part and class parts from e.g. "div.foo.bar" or ".foo.bar" or "div"
     std::string tag_part;
