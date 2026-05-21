@@ -186,7 +186,11 @@ static JSValue js_element_set_innerHTML(JSContext* ctx, JSValueConst this_val, i
         // Simple innerHTML: clear children, add as text
         // Full HTML parsing would require re-invoking the parser
         node->children.clear();
-        node->setTextContent(s, g_js_engine->document->next_id);
+        if (s[0] != '\0') {
+            node->setTextContent(s, g_js_engine->document->next_id);
+        } else {
+            node->markDirty();
+        }
         JS_FreeCString(ctx, s);
         g_js_engine->scheduleRerender();
     }

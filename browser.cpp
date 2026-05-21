@@ -1878,6 +1878,12 @@ void do_rerender(AppState* st) {
     clear_dirty(st->document->root.get());
 }
 
+// ---- test mode (forward decls) ----
+static bool g_test_mode = false;
+static int g_probe_pass = 0;
+static int g_probe_fail = 0;
+static void run_test_probes(AppState* st);
+
 // ---- page fetch ----
 
 static void fetch_page(AppState* st, std::string url, int gen) {
@@ -1973,6 +1979,17 @@ static void fetch_page(AppState* st, std::string url, int gen) {
 
         // Execute pending microtasks after all scripts
         engine->executePendingJobs();
+
+        // Run C++ DOM probes if --test mode
+        if (g_test_mode) {
+            // Schedule probes after a short delay so timers (setTimeout 500ms) fire first
+            g_timeout_add(800, [](gpointer data) -> gboolean {
+                auto* st = static_cast<AppState*>(data);
+                if (st->js_engine) st->js_engine->executePendingJobs();
+                run_test_probes(st);
+                return G_SOURCE_REMOVE;
+            }, st);
+        }
     });
 }
 
@@ -2056,6 +2073,436 @@ static void on_refresh(GtkButton*, gpointer d) {
     if (!st->current_url.empty()) load_url(st, st->current_url);
 }
 
+// ---- C++ DOM probes (--test mode) ----
+// These verify JS engine results by inspecting the DOM tree directly from C++.
+// No JavaScript is used in any verification — only raw DOMNode field reads.
+
+static void probe_check(const char* name, bool cond) {
+    if (cond) {
+        fprintf(stderr, "  \033[32mPASS\033[0m  %s\n", name);
+        g_probe_pass++;
+    } else {
+        fprintf(stderr, "  \033[31mFAIL\033[0m  %s\n", name);
+        g_probe_fail++;
+    }
+}
+
+// Helper: get text content of a node by id (walks DOM tree, no JS)
+static std::string probe_text(Document* doc, const std::string& id) {
+    DOMNode* n = doc->getElementById(id);
+    return n ? n->getTextContent() : "";
+}
+
+// Helper: get a DOMNode by id
+static DOMNode* probe_node(Document* doc, const std::string& id) {
+    return doc->getElementById(id);
+}
+
+// Phase 1: probes that run right after scripts finish (checks initial JS execution)
+static void run_probes_phase1(AppState* st) {
+    Document* doc = st->document.get();
+    if (!doc) { fprintf(stderr, "FAIL: no document\n"); return; }
+
+    fprintf(stderr, "\n\033[1m=== C++ DOM Probes: Phase 1 (post-script) ===\033[0m\n");
+
+    // -- Probe: document.body exists
+    probe_check("document.body exists", doc->body != nullptr);
+
+    // -- Probe: getElementById works (node exists in id_map)
+    probe_check("getElementById('query-target') exists", doc->getElementById("query-target") != nullptr);
+    probe_check("getElementById('nonexistent') is null", doc->getElementById("nonexistent") == nullptr);
+
+    // -- Probe: textContent was mutated by JS
+    {
+        std::string t = probe_text(doc, "text-target");
+        probe_check("textContent set: 'Modified via textContent'",
+            t == "Modified via textContent");
+    }
+
+    // -- Probe: query-result was filled by JS (contains 'PASS')
+    {
+        std::string t = probe_text(doc, "query-result");
+        probe_check("query-result contains 'PASS'", t.find("PASS") != std::string::npos);
+        probe_check("query-result contains 'getElementById'", t.find("getElementById") != std::string::npos);
+    }
+
+    // -- Probe: style-box textContent changed to "Red"
+    probe_check("style-box text is 'Red'", probe_text(doc, "style-box") == "Red");
+    probe_check("style-box2 text is 'Green'", probe_text(doc, "style-box2") == "Green");
+    probe_check("style-box3 text is 'Blue'", probe_text(doc, "style-box3") == "Blue");
+
+    // -- Probe: style-box has background-color set via JS
+    {
+        DOMNode* box = probe_node(doc, "style-box");
+        probe_check("style-box style_props has background-color",
+            box && box->style_props.count("background-color") > 0);
+        if (box && box->style_props.count("background-color"))
+            probe_check("style-box background-color is '#e74c3c'",
+                box->style_props["background-color"] == "#e74c3c");
+    }
+
+    // -- Probe: classList mutations
+    {
+        DOMNode* ct = probe_node(doc, "class-target");
+        probe_check("class-target exists", ct != nullptr);
+        if (ct) {
+            probe_check("class-target has 'new-class'", ct->hasClass("new-class"));
+            probe_check("class-target lost 'original-class'", !ct->hasClass("original-class"));
+            probe_check("class-target lost 'toggled-class'", !ct->hasClass("toggled-class"));
+        }
+    }
+
+    // -- Probe: classList result text
+    {
+        std::string t = probe_text(doc, "class-result");
+        probe_check("class-result all PASS", t.find("FAIL") == std::string::npos && t.find("PASS") != std::string::npos);
+    }
+
+    // -- Probe: createElement appended children to creation-container
+    {
+        DOMNode* cc = probe_node(doc, "creation-container");
+        probe_check("creation-container exists", cc != nullptr);
+        if (cc) {
+            probe_check("creation-container has >= 3 children (div+p+text)",
+                cc->children.size() >= 3);
+            // First child should be a div with text "Dynamically created div"
+            if (cc->children.size() >= 1) {
+                probe_check("first child is <div>",
+                    cc->children[0]->tag_name == "div");
+                probe_check("first child text is 'Dynamically created div'",
+                    cc->children[0]->getTextContent() == "Dynamically created div");
+            }
+            // Second child should be a p
+            if (cc->children.size() >= 2) {
+                probe_check("second child is <p>",
+                    cc->children[1]->tag_name == "p");
+            }
+            // Third child should be a text node
+            if (cc->children.size() >= 3) {
+                probe_check("third child is TEXT node",
+                    cc->children[2]->node_type == DOMNode::TEXT);
+                probe_check("third child text is 'A raw text node'",
+                    cc->children[2]->text_content == "A raw text node");
+            }
+        }
+    }
+
+    // -- Probe: attributes
+    {
+        DOMNode* at = probe_node(doc, "attr-target");
+        probe_check("attr-target exists", at != nullptr);
+        if (at) {
+            // setAttribute("data-custom","hello-world") should have stuck
+            probe_check("attr-target has data-custom='hello-world'",
+                at->attributes.count("data-custom") && at->attributes["data-custom"] == "hello-world");
+            // removeAttribute("data-name") should have removed it
+            probe_check("attr-target lost data-name",
+                at->attributes.count("data-name") == 0);
+            // data-value should still be "42"
+            probe_check("attr-target still has data-value='42'",
+                at->attributes.count("data-value") && at->attributes["data-value"] == "42");
+        }
+    }
+
+    // -- Probe: attr-result text contains all PASS
+    {
+        std::string t = probe_text(doc, "attr-result");
+        probe_check("attr-result all PASS", t.find("FAIL") == std::string::npos && t.find("PASS") != std::string::npos);
+    }
+
+    // -- Probe: tree traversal
+    {
+        DOMNode* tp = probe_node(doc, "tree-parent");
+        probe_check("tree-parent exists", tp != nullptr);
+        if (tp) {
+            // Count element children (skip text nodes)
+            int elem_count = 0;
+            for (auto& c : tp->children)
+                if (c->node_type == DOMNode::ELEMENT) elem_count++;
+            probe_check("tree-parent has 3 element children", elem_count == 3);
+
+            DOMNode* c1 = probe_node(doc, "tree-child1");
+            if (c1) {
+                probe_check("tree-child1 parent is tree-parent",
+                    c1->parent == tp);
+            }
+        }
+    }
+
+    // -- Probe: tree-result text
+    {
+        std::string t = probe_text(doc, "tree-result");
+        probe_check("tree-result all PASS",
+            t.find("FAIL") == std::string::npos && t.find("PASS") != std::string::npos);
+    }
+
+    // -- Probe: event listeners were attached
+    {
+        DOMNode* btn = probe_node(doc, "click-btn");
+        probe_check("click-btn exists", btn != nullptr);
+        if (btn) {
+            probe_check("click-btn has >= 1 listener",
+                btn->listeners.size() >= 1);
+            if (!btn->listeners.empty())
+                probe_check("click-btn listener type is 'click'",
+                    btn->listeners[0].type == "click");
+        }
+    }
+
+    // -- Probe: console log captured entries
+    if (st->js_engine) {
+        auto& log = st->js_engine->console_log;
+        probe_check("console_log has >= 10 entries", log.size() >= 10);
+        // Check for specific messages
+        bool found_log = false, found_warn = false, found_info = false;
+        for (auto& e : log) {
+            if (e.level == ConsoleLevel::LOG && e.message.find("Test 1") != std::string::npos) found_log = true;
+            if (e.level == ConsoleLevel::WARN) found_warn = true;
+            if (e.level == ConsoleLevel::INFO) found_info = true;
+        }
+        probe_check("console captured LOG entry 'Test 1...'", found_log);
+        probe_check("console captured WARN entry", found_warn);
+        probe_check("console captured INFO entry", found_info);
+    }
+
+    // -- Probe: querySelectorAll via Document C++ API
+    {
+        auto results = doc->querySelectorAll(".test-section");
+        probe_check("querySelectorAll('.test-section') finds >= 10 nodes",
+            results.size() >= 10);
+    }
+
+    // -- Probe: node_map integrity
+    {
+        bool ok = true;
+        for (auto& [id, node] : doc->node_map) {
+            if (node->node_id != id) { ok = false; break; }
+        }
+        probe_check("node_map IDs are consistent", ok);
+    }
+
+    // -- Probe: toggle-target initial inline style
+    {
+        DOMNode* tt = probe_node(doc, "toggle-target");
+        probe_check("toggle-target exists", tt != nullptr);
+        if (tt) {
+            probe_check("toggle-target has padding in inline_style_raw",
+                tt->inline_style_raw.find("padding") != std::string::npos);
+        }
+    }
+}
+
+// Phase 2: simulate a click on click-count-btn and verify DOM changes
+static void run_probes_phase2(AppState* st) {
+    Document* doc = st->document.get();
+    if (!doc || !st->js_engine) return;
+
+    fprintf(stderr, "\n\033[1m=== C++ DOM Probes: Phase 2 (after simulated click) ===\033[0m\n");
+
+    // Find click-count-btn and simulate a click via the event system
+    DOMNode* btn = probe_node(doc, "click-count-btn");
+    probe_check("click-count-btn exists for click sim", btn != nullptr);
+    if (!btn) return;
+
+    std::string before = btn->getTextContent();
+    probe_check("click-count-btn text before click is 'Count: 0'", before == "Count: 0");
+
+    // Dispatch click event from C++ (not JS)
+    st->js_engine->dispatchEvent(btn->node_id, "click", 0, 0);
+    st->js_engine->executePendingJobs();
+
+    std::string after1 = btn->getTextContent();
+    probe_check("click-count-btn text after 1 click is 'Count: 1'", after1 == "Count: 1");
+
+    // Click again
+    st->js_engine->dispatchEvent(btn->node_id, "click", 0, 0);
+    st->js_engine->executePendingJobs();
+
+    std::string after2 = btn->getTextContent();
+    probe_check("click-count-btn text after 2 clicks is 'Count: 2'", after2 == "Count: 2");
+
+    // Click the main click-btn and check event-result
+    DOMNode* click_btn = probe_node(doc, "click-btn");
+    if (click_btn) {
+        st->js_engine->dispatchEvent(click_btn->node_id, "click", 42, 99);
+        st->js_engine->executePendingJobs();
+        std::string ev_result = probe_text(doc, "event-result");
+        probe_check("event-result updated after click", ev_result.find("clicked") != std::string::npos);
+    }
+}
+
+// Phase 3: simulate toggle-style click and verify style changes
+static void run_probes_phase3(AppState* st) {
+    Document* doc = st->document.get();
+    if (!doc || !st->js_engine) return;
+
+    fprintf(stderr, "\n\033[1m=== C++ DOM Probes: Phase 3 (style toggle) ===\033[0m\n");
+
+    DOMNode* toggle_btn = probe_node(doc, "toggle-style");
+    DOMNode* target = probe_node(doc, "toggle-target");
+    probe_check("toggle-style btn exists", toggle_btn != nullptr);
+    probe_check("toggle-target exists", target != nullptr);
+    if (!toggle_btn || !target) return;
+
+    // Click toggle
+    st->js_engine->dispatchEvent(toggle_btn->node_id, "click", 0, 0);
+    st->js_engine->executePendingJobs();
+
+    probe_check("toggle-target bg changed to '#e74c3c'",
+        target->style_props.count("background-color") &&
+        target->style_props["background-color"] == "#e74c3c");
+    probe_check("toggle-target text after toggle ON",
+        target->getTextContent().find("toggled ON") != std::string::npos);
+
+    // Toggle back
+    st->js_engine->dispatchEvent(toggle_btn->node_id, "click", 0, 0);
+    st->js_engine->executePendingJobs();
+
+    probe_check("toggle-target bg changed back to '#3498db'",
+        target->style_props.count("background-color") &&
+        target->style_props["background-color"] == "#3498db");
+    probe_check("toggle-target text after toggle OFF",
+        target->getTextContent().find("toggled OFF") != std::string::npos);
+}
+
+// Phase 4: todo list add/clear via simulated clicks
+static void run_probes_phase4(AppState* st) {
+    Document* doc = st->document.get();
+    if (!doc || !st->js_engine) return;
+
+    fprintf(stderr, "\n\033[1m=== C++ DOM Probes: Phase 4 (todo list) ===\033[0m\n");
+
+    DOMNode* add_btn = probe_node(doc, "add-todo");
+    DOMNode* clear_btn = probe_node(doc, "clear-todos");
+    DOMNode* list = probe_node(doc, "todo-list");
+    probe_check("add-todo btn exists", add_btn != nullptr);
+    probe_check("todo-list exists", list != nullptr);
+    if (!add_btn || !list) return;
+
+    // Add 3 items
+    for (int i = 0; i < 3; i++) {
+        st->js_engine->dispatchEvent(add_btn->node_id, "click", 0, 0);
+        st->js_engine->executePendingJobs();
+    }
+
+    int li_count = 0;
+    for (auto& c : list->children)
+        if (c->node_type == DOMNode::ELEMENT && c->tag_name == "li") li_count++;
+    probe_check("todo-list has 3 <li> children after 3 adds", li_count == 3);
+
+    // Check todo-count text
+    std::string count_text = probe_text(doc, "todo-count");
+    probe_check("todo-count shows 'Items: 3'", count_text == "Items: 3");
+
+    // Verify first li has content
+    if (!list->children.empty()) {
+        std::string li_text = list->children[0]->getTextContent();
+        probe_check("first <li> has 'Todo item' text",
+            li_text.find("Todo item") != std::string::npos);
+        // Verify data-id attribute was set
+        probe_check("first <li> has data-id attribute",
+            list->children[0]->attributes.count("data-id") > 0);
+    }
+
+    // Clear all
+    if (clear_btn) {
+        st->js_engine->dispatchEvent(clear_btn->node_id, "click", 0, 0);
+        st->js_engine->executePendingJobs();
+    }
+
+    li_count = 0;
+    for (auto& c : list->children)
+        if (c->node_type == DOMNode::ELEMENT && c->tag_name == "li") li_count++;
+    probe_check("todo-list empty after clear", li_count == 0);
+
+    count_text = probe_text(doc, "todo-count");
+    probe_check("todo-count shows 'Items: 0' after clear", count_text == "Items: 0");
+}
+
+// Phase 5: error handling — trigger errors and verify they land in console_log
+static void run_probes_phase5(AppState* st) {
+    Document* doc = st->document.get();
+    if (!doc || !st->js_engine) return;
+
+    fprintf(stderr, "\n\033[1m=== C++ DOM Probes: Phase 5 (error capture) ===\033[0m\n");
+
+    size_t log_before = st->js_engine->console_log.size();
+
+    // Click trigger-error button (causes ReferenceError)
+    DOMNode* err_btn = probe_node(doc, "trigger-error");
+    if (err_btn) {
+        st->js_engine->dispatchEvent(err_btn->node_id, "click", 0, 0);
+        st->js_engine->executePendingJobs();
+    }
+
+    size_t log_after = st->js_engine->console_log.size();
+    probe_check("ReferenceError captured in console_log", log_after > log_before);
+    if (log_after > log_before) {
+        auto& last = st->js_engine->console_log.back();
+        probe_check("error entry level is ERROR", last.level == ConsoleLevel::ERROR);
+        probe_check("error message mentions 'not defined' or similar",
+            last.message.find("not defined") != std::string::npos ||
+            last.message.find("ReferenceError") != std::string::npos);
+    }
+
+    // Click trigger-type-error button
+    log_before = st->js_engine->console_log.size();
+    DOMNode* terr_btn = probe_node(doc, "trigger-type-error");
+    if (terr_btn) {
+        st->js_engine->dispatchEvent(terr_btn->node_id, "click", 0, 0);
+        st->js_engine->executePendingJobs();
+    }
+
+    log_after = st->js_engine->console_log.size();
+    probe_check("TypeError captured in console_log", log_after > log_before);
+
+    // Click log-all and verify 4 new entries
+    log_before = st->js_engine->console_log.size();
+    DOMNode* log_btn = probe_node(doc, "log-all");
+    if (log_btn) {
+        st->js_engine->dispatchEvent(log_btn->node_id, "click", 0, 0);
+        st->js_engine->executePendingJobs();
+    }
+
+    log_after = st->js_engine->console_log.size();
+    probe_check("log-all added 4 entries", log_after - log_before == 4);
+    if (log_after - log_before >= 4) {
+        auto& entries = st->js_engine->console_log;
+        probe_check("log-all: LOG level present",
+            entries[log_before].level == ConsoleLevel::LOG);
+        probe_check("log-all: INFO level present",
+            entries[log_before+1].level == ConsoleLevel::INFO);
+        probe_check("log-all: WARN level present",
+            entries[log_before+2].level == ConsoleLevel::WARN);
+        probe_check("log-all: ERROR level present",
+            entries[log_before+3].level == ConsoleLevel::ERROR);
+    }
+}
+
+static void run_test_probes(AppState* st) {
+    fprintf(stderr, "\n\033[1;36m╔══════════════════════════════════════════╗\033[0m\n");
+    fprintf(stderr, "\033[1;36m║     C++ DOM PROBE TEST SUITE             ║\033[0m\n");
+    fprintf(stderr, "\033[1;36m╚══════════════════════════════════════════╝\033[0m\n");
+
+    run_probes_phase1(st);
+    run_probes_phase2(st);
+    run_probes_phase3(st);
+    run_probes_phase4(st);
+    run_probes_phase5(st);
+
+    fprintf(stderr, "\n\033[1m═══════════════════════════════════════════\033[0m\n");
+    fprintf(stderr, "  Total: %d passed, %d failed, %d total\n",
+        g_probe_pass, g_probe_fail, g_probe_pass + g_probe_fail);
+    if (g_probe_fail == 0)
+        fprintf(stderr, "  \033[32;1mALL TESTS PASSED\033[0m\n");
+    else
+        fprintf(stderr, "  \033[31;1m%d TESTS FAILED\033[0m\n", g_probe_fail);
+    fprintf(stderr, "\033[1m═══════════════════════════════════════════\033[0m\n\n");
+
+    // Exit after test
+    gtk_main_quit();
+}
+
 // ---- main ----
 
 int main(int argc, char** argv) {
@@ -2133,11 +2580,12 @@ int main(int argc, char** argv) {
 
     gtk_widget_show_all(st->window);
 
-    // Accept URL from command line, default to mattmontag.com
+    // Accept URL and flags from command line
     std::string start_url = "mattmontag.com";
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
-        if (!arg.empty() && arg[0] != '-') { start_url = arg; break; }
+        if (arg == "--test") { g_test_mode = true; continue; }
+        if (!arg.empty() && arg[0] != '-') { start_url = arg; }
     }
     gtk_entry_set_text(GTK_ENTRY(st->address_bar), start_url.c_str());
     navigate(st, start_url);

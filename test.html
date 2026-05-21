@@ -372,11 +372,8 @@
         });
 
         document.getElementById("clear-todos").addEventListener("click", function() {
-            // Remove all children
-            var children = list.children;
-            while (children.length > 0) {
-                list.removeChild(children[0]);
-            }
+            // Remove all children using innerHTML (children is a snapshot, not live)
+            list.innerHTML = "";
             items = [];
             updateCount();
             console.log("Cleared all todos");
