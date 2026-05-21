@@ -114,9 +114,34 @@ static bool is_void_element(const std::string& tag) {
     return false;
 }
 
+// UA bold tags (must match browser.cpp BOLD_TAGS)
+static bool is_bold_tag(const std::string& tag) {
+    return tag == "b" || tag == "strong" || tag == "h1" || tag == "h2" ||
+           tag == "h3" || tag == "h4" || tag == "h5" || tag == "h6";
+}
+
+// UA italic tags
+static bool is_italic_tag(const std::string& tag) {
+    return tag == "i" || tag == "em" || tag == "cite" || tag == "dfn" || tag == "var";
+}
+
+// UA heading font sizes (in px)
+static int heading_font_size(const std::string& tag) {
+    if (tag == "h1") return 32;
+    if (tag == "h2") return 24;
+    if (tag == "h3") return 19;
+    if (tag == "h4") return 16;
+    if (tag == "h5") return 13;
+    if (tag == "h6") return 11;
+    return 0;
+}
+
 void DOMNode::setInnerHTML(const std::string& html, uint32_t& next_id,
                            std::unordered_map<uint32_t, DOMNode*>& node_map,
                            std::unordered_map<std::string, DOMNode*>& id_map) {
+    fprintf(stderr, "[DEBUG setInnerHTML] on <%s id='%s'> html='%.80s%s'\n",
+            tag_name.c_str(), id.c_str(), html.c_str(), html.size() > 80 ? "..." : "");
+
     // Unregister old children from maps
     std::function<void(DOMNode*)> unreg = [&](DOMNode* n) {
         node_map.erase(n->node_id);
@@ -149,6 +174,8 @@ void DOMNode::setInnerHTML(const std::string& html, uint32_t& next_id,
                 while (!close_tag.empty() && isspace((unsigned char)close_tag.back()))
                     close_tag.pop_back();
                 if (i < len) i++; // skip >
+                fprintf(stderr, "[DEBUG setInnerHTML]   close </%s> cur now=<%s>\n",
+                        close_tag.c_str(), cur->tag_name.c_str());
                 // Walk up to find matching open tag
                 DOMNode* p = cur;
                 while (p && p != this && p->tag_name != close_tag)
@@ -177,8 +204,20 @@ void DOMNode::setInnerHTML(const std::string& html, uint32_t& next_id,
             elem->parent = cur;
             parse_tag_attrs(tag_body, elem.get());
 
+            // Apply UA defaults for bold/italic/heading tags
+            if (is_bold_tag(tag_name)) {
+                elem->fw_computed = 700; // PANGO_WEIGHT_BOLD
+                fprintf(stderr, "[DEBUG setInnerHTML]   <%s> -> fw_computed=700 (bold)\n", tag_name.c_str());
+            }
+            int hsz = heading_font_size(tag_name);
+            if (hsz > 0) elem->fs_computed = hsz;
+
             node_map[elem->node_id] = elem.get();
             if (!elem->id.empty()) id_map[elem->id] = elem.get();
+
+            fprintf(stderr, "[DEBUG setInnerHTML]   open <%s> id=%u fw=%d fs=%d parent=<%s>\n",
+                    tag_name.c_str(), elem->node_id, elem->fw_computed, elem->fs_computed,
+                    cur->tag_name.c_str());
 
             cur->children.push_back(elem);
 
@@ -198,9 +237,25 @@ void DOMNode::setInnerHTML(const std::string& html, uint32_t& next_id,
                 tn->parent = cur;
                 node_map[tn->node_id] = tn.get();
                 cur->children.push_back(tn);
+                fprintf(stderr, "[DEBUG setInnerHTML]   text '%s' parent=<%s> parent_fw=%d\n",
+                        text.c_str(), cur->tag_name.c_str(), cur->fw_computed);
             }
         }
     }
+
+    // Debug: dump resulting child tree
+    std::function<void(DOMNode*, int)> dump = [&](DOMNode* n, int depth) {
+        std::string indent(depth * 2, ' ');
+        if (n->node_type == DOMNode::TEXT)
+            fprintf(stderr, "[DEBUG setInnerHTML] %s TEXT: '%s'\n", indent.c_str(), n->text_content.c_str());
+        else
+            fprintf(stderr, "[DEBUG setInnerHTML] %s <%s> fw=%d fs=%d children=%zu\n",
+                    indent.c_str(), n->tag_name.c_str(), n->fw_computed, n->fs_computed, n->children.size());
+        for (auto& c : n->children) dump(c.get(), depth + 1);
+    };
+    fprintf(stderr, "[DEBUG setInnerHTML] resulting tree for <%s id='%s'>:\n", tag_name.c_str(), id.c_str());
+    for (auto& c : children) dump(c.get(), 1);
+
     markDirty();
 }
 

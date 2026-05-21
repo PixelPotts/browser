@@ -1562,26 +1562,32 @@ static void render_node(AppState* st, DOMNode* node, int gen,
 
         float_rows.back() = nullptr;
 
-        int fw = node->fw_computed != -1 ? node->fw_computed : PANGO_WEIGHT_NORMAL;
+        int fw = node->fw_computed;  // -1 = inherit
         int fs = node->fs_computed;
         double lh = node->lh_computed;
         std::string color = node->color_computed;
-        int text_align = node->text_align_computed >= 0 ? node->text_align_computed : 0;
+        int text_align = node->text_align_computed;
         std::string href = node->href;
 
-        if (fw == -1 || color.empty() || text_align < 0 || lh < 0 || href.empty()) {
-            DOMNode* p = node->parent;
-            while (p) {
-                if (fw == -1 && p->fw_computed != -1) fw = p->fw_computed;
-                if (color.empty() && !p->color_computed.empty()) color = p->color_computed;
-                if (text_align < 0 && p->text_align_computed >= 0) text_align = p->text_align_computed;
-                if (lh < 0 && p->lh_computed >= 0) lh = p->lh_computed;
-                if (href.empty() && !p->href.empty()) href = p->href;
-                p = p->parent;
-            }
+        // Inherit from ancestors
+        DOMNode* p = node->parent;
+        while (p) {
+            if (fw == -1 && p->fw_computed != -1) fw = p->fw_computed;
+            if (fs <= 0 && p->fs_computed > 0) fs = p->fs_computed;
+            if (color.empty() && !p->color_computed.empty()) color = p->color_computed;
+            if (text_align < 0 && p->text_align_computed >= 0) text_align = p->text_align_computed;
+            if (lh < 0 && p->lh_computed >= 0) lh = p->lh_computed;
+            if (href.empty() && !p->href.empty()) href = p->href;
+            p = p->parent;
         }
+
         if (fw == -1) fw = PANGO_WEIGHT_NORMAL;
         if (text_align < 0) text_align = 0;
+        if (fs <= 0) fs = 16;
+
+        fprintf(stderr, "[DEBUG render_text] text='%.40s' fw=%d fs=%d parent=<%s> parent_fw=%d\n",
+                text.c_str(), fw, fs, node->parent ? node->parent->tag_name.c_str() : "NONE",
+                node->parent ? node->parent->fw_computed : -999);
 
         GtkWidget* cur = cstack.back();
         GtkWidget* lbl = gtk_label_new(text.c_str());
