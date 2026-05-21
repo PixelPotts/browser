@@ -239,9 +239,6 @@ static JSValue js_alert(JSContext* ctx, JSValueConst this_val,
     printf("[alert] %s\n", msg ? msg : "");
 
     // GTK dialog (must be on main thread - we are since JS runs on main thread)
-    GtkWidget* window = g_js_engine->app_state ? nullptr : nullptr;
-    // We'll get the window pointer through the engine
-    // For now, use a message dialog without parent
     GtkWidget* dialog = gtk_message_dialog_new(
         nullptr, GTK_DIALOG_MODAL, GTK_MESSAGE_INFO, GTK_BUTTONS_OK,
         "%s", msg ? msg : "");

@@ -159,8 +159,6 @@ DOMNode* Document::getElementById(const std::string& id) const {
 
 // ---- CSS selector matching for DOM tree ----
 
-static char dom_lc(char c) { return (char)std::tolower((unsigned char)c); }
-
 bool dom_simple_match(const std::string& raw, DOMNode* node) {
     if (raw.empty() || raw == "*") return true;
     if (node->node_type != DOMNode::ELEMENT) return false;
