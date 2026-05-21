@@ -655,6 +655,8 @@ static JSValue js_element_addEventListener(JSContext* ctx, JSValueConst this_val
     listener.type = type;
     listener.handler_id = handler_id;
     node->listeners.push_back(listener);
+    fprintf(stderr, "[DEBUG addEventListener] node_id=%u tag=<%s> id='%s' type='%s' handler=%u total_listeners=%zu addr=%p\n",
+            node->node_id, node->tag_name.c_str(), node->id.c_str(), type, handler_id, node->listeners.size(), (void*)node);
 
     // Store the actual JS function globally so we can call it later
     // Use a property on the global object keyed by handler_id

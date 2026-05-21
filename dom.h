@@ -33,6 +33,7 @@ struct DOMNode {
 
     // Computed style fields (filled during parse/CSS cascade)
     int fw_computed  = -1;      // font-weight (Pango value, -1=inherit)
+    int fi_computed  = -1;      // font-style: -1=inherit, 0=normal, 1=italic, 2=oblique
     int fs_computed  = 16;      // font-size in px
     double lh_computed = -1.0;  // line-height factor
     std::string color_computed; // text color

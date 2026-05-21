@@ -209,6 +209,10 @@ void DOMNode::setInnerHTML(const std::string& html, uint32_t& next_id,
                 elem->fw_computed = 700; // PANGO_WEIGHT_BOLD
                 fprintf(stderr, "[DEBUG setInnerHTML]   <%s> -> fw_computed=700 (bold)\n", tag_name.c_str());
             }
+            if (is_italic_tag(tag_name)) {
+                elem->fi_computed = 2; // PANGO_STYLE_ITALIC
+                fprintf(stderr, "[DEBUG setInnerHTML]   <%s> -> fi_computed=2 (italic)\n", tag_name.c_str());
+            }
             int hsz = heading_font_size(tag_name);
             if (hsz > 0) elem->fs_computed = hsz;
 

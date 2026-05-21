@@ -996,6 +996,10 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
             for (int bi = 0; BOLD_TAGS[bi]; ++bi)
                 if (tname == BOLD_TAGS[bi]) elem->fw_computed = PANGO_WEIGHT_BOLD;
 
+            // UA defaults for italic tags
+            if (tname == "i" || tname == "em" || tname == "cite" || tname == "dfn" || tname == "var")
+                elem->fi_computed = PANGO_STYLE_ITALIC;
+
             // UA font-size defaults for headings
             if (tname == "h1") elem->fs_computed = 32;
             else if (tname == "h2") elem->fs_computed = 24;
@@ -1048,6 +1052,10 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
             std::string ist = style_it != elem->attributes.end() ? style_it->second : "";
             elem->inline_style_raw = ist;
             { int v = fw_value(prop_val(ist, "font-weight")); if (v != -1) elem->fw_computed = v; }
+            { std::string fs = prop_val(ist, "font-style");
+              if (fs == "italic") elem->fi_computed = PANGO_STYLE_ITALIC;
+              else if (fs == "oblique") elem->fi_computed = PANGO_STYLE_OBLIQUE;
+              else if (fs == "normal") elem->fi_computed = PANGO_STYLE_NORMAL; }
             { int px = parse_fs(prop_val(ist, "font-size"), parent_fs); if (px > 0) elem->fs_computed = px; }
             { double f = parse_lh(prop_val(ist, "line-height"), elem->fs_computed); if (f >= 0) elem->lh_computed = f; }
             apply_box(ist, bm);
@@ -1563,6 +1571,7 @@ static void render_node(AppState* st, DOMNode* node, int gen,
         float_rows.back() = nullptr;
 
         int fw = node->fw_computed;  // -1 = inherit
+        int fi = node->fi_computed;  // -1 = inherit
         int fs = node->fs_computed;
         double lh = node->lh_computed;
         std::string color = node->color_computed;
@@ -1573,6 +1582,7 @@ static void render_node(AppState* st, DOMNode* node, int gen,
         DOMNode* p = node->parent;
         while (p) {
             if (fw == -1 && p->fw_computed != -1) fw = p->fw_computed;
+            if (fi == -1 && p->fi_computed != -1) fi = p->fi_computed;
             if (fs <= 0 && p->fs_computed > 0) fs = p->fs_computed;
             if (color.empty() && !p->color_computed.empty()) color = p->color_computed;
             if (text_align < 0 && p->text_align_computed >= 0) text_align = p->text_align_computed;
@@ -1582,12 +1592,12 @@ static void render_node(AppState* st, DOMNode* node, int gen,
         }
 
         if (fw == -1) fw = PANGO_WEIGHT_NORMAL;
+        if (fi == -1) fi = PANGO_STYLE_NORMAL;
         if (text_align < 0) text_align = 0;
         if (fs <= 0) fs = 16;
 
-        fprintf(stderr, "[DEBUG render_text] text='%.40s' fw=%d fs=%d parent=<%s> parent_fw=%d\n",
-                text.c_str(), fw, fs, node->parent ? node->parent->tag_name.c_str() : "NONE",
-                node->parent ? node->parent->fw_computed : -999);
+        fprintf(stderr, "[DEBUG render_text] text='%.40s' fw=%d fi=%d fs=%d parent=<%s>\n",
+                text.c_str(), fw, fi, fs, node->parent ? node->parent->tag_name.c_str() : "NONE");
 
         GtkWidget* cur = cstack.back();
         GtkWidget* lbl = gtk_label_new(text.c_str());
@@ -1602,6 +1612,8 @@ static void render_node(AppState* st, DOMNode* node, int gen,
         PangoAttrList* al = pango_attr_list_new();
         if (fw != PANGO_WEIGHT_NORMAL)
             pango_attr_list_insert(al, pango_attr_weight_new((PangoWeight)fw));
+        if (fi != PANGO_STYLE_NORMAL)
+            pango_attr_list_insert(al, pango_attr_style_new((PangoStyle)fi));
         pango_attr_list_insert(al, pango_attr_size_new_absolute(fs * PANGO_SCALE));
         if (lh >= 0)
             pango_attr_list_insert(al, pango_attr_line_height_new(lh));
@@ -2247,6 +2259,17 @@ static void run_probes_phase1(AppState* st) {
         DOMNode* btn = probe_node(doc, "click-btn");
         probe_check("click-btn exists", btn != nullptr);
         if (btn) {
+            fprintf(stderr, "[DEBUG probe] click-btn node_id=%u listeners=%zu tag=%s addr=%p\n",
+                    btn->node_id, btn->listeners.size(), btn->tag_name.c_str(), (void*)btn);
+            // Also check node_map for this node_id
+            auto it = doc->node_map.find(btn->node_id);
+            if (it != doc->node_map.end()) {
+                fprintf(stderr, "[DEBUG probe] node_map[%u] listeners=%zu same_ptr=%d addr=%p\n",
+                        btn->node_id, it->second->listeners.size(), it->second == btn, (void*)it->second);
+            } else {
+                fprintf(stderr, "[DEBUG probe] node_map[%u] NOT FOUND! id_map has %zu entries\n",
+                        btn->node_id, doc->id_map.size());
+            }
             probe_check("click-btn has >= 1 listener",
                 btn->listeners.size() >= 1);
             if (!btn->listeners.empty())
