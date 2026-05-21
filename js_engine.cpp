@@ -321,6 +321,7 @@ void JSEngine::init(AppState* as, Document* doc) {
     setupGlobals();
     js_bindings_init(this);
     js_event_init(this);
+    setupDocPolyfills(); // must run after js_bindings_init creates document
 
     // Start the job pump (16ms interval for microtask execution)
     job_pump_id = g_timeout_add(16, job_pump_callback, this);
@@ -821,24 +822,182 @@ globalThis.XMLHttpRequest = function XMLHttpRequest() {
     this.removeEventListener = function() {};
 };
 
+)JS";
+
+    eval(polyfills, "<browser-polyfills>");
+}
+
+void JSEngine::setupDocPolyfills() {
+    // These polyfills need 'document' to exist (set by js_bindings_init)
+    const char* doc_polyfills = R"JS(
 // document additions
 document.addEventListener = function() {};
 document.removeEventListener = function() {};
+document.dispatchEvent = function() { return true; };
 document.createEvent = function(type) { return new Event(type); };
 document.createDocumentFragment = function() {
-    return { appendChild: function(c) { return c; }, childNodes: [], children: [] };
+    var frag = {
+        childNodes: [], children: [],
+        appendChild: function(c) { this.childNodes.push(c); this.children.push(c); return c; },
+        querySelectorAll: function() { return []; },
+        querySelector: function() { return null; },
+        getElementById: function() { return null; },
+        cloneNode: function() { return document.createDocumentFragment(); }
+    };
+    return frag;
+};
+document.createComment = function(text) {
+    return { nodeType: 8, textContent: text || '', nodeName: '#comment' };
 };
 document.cookie = '';
 document.readyState = 'complete';
 document.title = '';
-document.domain = location.hostname;
+document.domain = location.hostname || '';
 document.referrer = '';
 document.compatMode = 'CSS1Compat';
 document.characterSet = 'UTF-8';
 document.contentType = 'text/html';
+document.defaultView = window;
+document.nodeType = 9;
+document.nodeName = '#document';
+document.ownerDocument = null;
+document.URL = location.href || '';
+document.documentURI = location.href || '';
+document.location = location;
+
+// document.implementation (needed by jQuery)
+document.implementation = {
+    createHTMLDocument: function(title) {
+        return {
+            body: document.createElement('div'),
+            head: document.createElement('div'),
+            createElement: document.createElement.bind(document),
+            createTextNode: document.createTextNode.bind(document),
+            querySelector: function() { return null; },
+            querySelectorAll: function() { return []; }
+        };
+    },
+    hasFeature: function() { return true; },
+    createDocumentType: function() { return {}; },
+    createDocument: function() { return document; }
+};
+
+// document.getElementsByTagName / getElementsByClassName
+document.getElementsByTagName = function(tag) {
+    return document.querySelectorAll(tag);
+};
+document.getElementsByClassName = function(cls) {
+    return document.querySelectorAll('.' + cls);
+};
+document.getElementsByName = function(name) {
+    return document.querySelectorAll('[name="' + name + '"]');
+};
+
+// Element prototype additions that jQuery/other libs expect
+(function() {
+    // We need to patch the Element prototype used by our wrapped nodes
+    // Since we can't access the C++ class prototype directly from JS,
+    // we'll add these as fallbacks on wrapped elements via document methods
+    var _origGetById = document.getElementById;
+    var _origQS = document.querySelector;
+
+    function patchElement(el) {
+        if (!el || el._patched) return el;
+        el._patched = true;
+        if (!el.hasAttribute) el.hasAttribute = function(n) {
+            return this.getAttribute(n) !== null;
+        };
+        if (!el.matches) el.matches = function(sel) {
+            var all = document.querySelectorAll(sel);
+            for (var i = 0; i < all.length; i++) if (all[i] === this) return true;
+            return false;
+        };
+        if (!el.closest) el.closest = function(sel) {
+            var cur = this;
+            while (cur) {
+                if (cur.matches && cur.matches(sel)) return cur;
+                cur = cur.parentNode;
+            }
+            return null;
+        };
+        if (!el.contains) el.contains = function(other) {
+            var cur = other;
+            while (cur) {
+                if (cur === this) return true;
+                cur = cur.parentNode;
+            }
+            return false;
+        };
+        if (!el.getBoundingClientRect) el.getBoundingClientRect = function() {
+            return { top: 0, left: 0, bottom: 0, right: 0, width: 0, height: 0, x: 0, y: 0 };
+        };
+        if (!el.getElementsByTagName) el.getElementsByTagName = function(tag) {
+            return this.querySelectorAll(tag);
+        };
+        if (!el.getElementsByClassName) el.getElementsByClassName = function(cls) {
+            return this.querySelectorAll('.' + cls);
+        };
+        if (!el.cloneNode) el.cloneNode = function(deep) {
+            var c = document.createElement(this.tagName || 'div');
+            c.innerHTML = deep ? this.innerHTML : '';
+            return c;
+        };
+        if (!el.insertBefore) el.insertBefore = function(newNode, refNode) {
+            this.appendChild(newNode);
+            return newNode;
+        };
+        if (!el.replaceChild) el.replaceChild = function(newNode, oldNode) {
+            this.insertBefore(newNode, oldNode);
+            this.removeChild(oldNode);
+            return oldNode;
+        };
+        if (!el.dispatchEvent) el.dispatchEvent = function() { return true; };
+        if (!el.focus) el.focus = function() {};
+        if (!el.blur) el.blur = function() {};
+        if (!el.click) el.click = function() {};
+        if (el.offsetWidth === undefined) el.offsetWidth = 0;
+        if (el.offsetHeight === undefined) el.offsetHeight = 0;
+        if (el.offsetTop === undefined) el.offsetTop = 0;
+        if (el.offsetLeft === undefined) el.offsetLeft = 0;
+        if (el.scrollWidth === undefined) el.scrollWidth = 0;
+        if (el.scrollHeight === undefined) el.scrollHeight = 0;
+        if (el.scrollTop === undefined) el.scrollTop = 0;
+        if (el.scrollLeft === undefined) el.scrollLeft = 0;
+        if (el.clientWidth === undefined) el.clientWidth = 0;
+        if (el.clientHeight === undefined) el.clientHeight = 0;
+        if (el.ownerDocument === undefined) el.ownerDocument = document;
+        return el;
+    }
+
+    // Wrap document query methods to auto-patch results
+    document.getElementById = function(id) {
+        return patchElement(_origGetById.call(document, id));
+    };
+    document.querySelector = function(sel) {
+        return patchElement(_origQS.call(document, sel));
+    };
+    var _origQSA = document.querySelectorAll;
+    document.querySelectorAll = function(sel) {
+        var results = _origQSA.call(document, sel);
+        if (results && results.length) {
+            for (var i = 0; i < results.length; i++) patchElement(results[i]);
+        }
+        return results;
+    };
+    var _origCreate = document.createElement;
+    document.createElement = function(tag) {
+        return patchElement(_origCreate.call(document, tag));
+    };
+    var _origCreateText = document.createTextNode;
+    document.createTextNode = function(text) {
+        var n = _origCreateText.call(document, text);
+        if (n) { n.ownerDocument = document; n.nodeType = 3; }
+        return n;
+    };
+})();
 )JS";
 
-    eval(polyfills, "<browser-polyfills>");
+    eval(doc_polyfills, "<browser-doc-polyfills>");
 }
 
 bool JSEngine::eval(const std::string& code, const std::string& filename) {

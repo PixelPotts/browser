@@ -62,6 +62,7 @@ public:
 
 private:
     void setupGlobals();
+    void setupDocPolyfills();
 
     // Timer state
     struct TimerEntry {
