@@ -695,6 +695,90 @@ globalThis.CustomEvent = function CustomEvent(type, opts) {
     this.detail = (opts && opts.detail) || null;
 };
 
+// Web Components API stubs (prevents webcomponents-loader from crashing)
+Element.prototype.attachShadow = function(opts) {
+    var shadow = { host: this, mode: (opts && opts.mode) || 'open', childNodes: [], children: [],
+        appendChild: function(c) { this.childNodes.push(c); this.children.push(c); return c; },
+        removeChild: function(c) { var i = this.childNodes.indexOf(c); if (i>=0) this.childNodes.splice(i,1); return c; },
+        querySelector: function() { return null; },
+        querySelectorAll: function() { return []; },
+        getElementById: function() { return null; },
+        innerHTML: '' };
+    this.shadowRoot = shadow;
+    return shadow;
+};
+Element.prototype.getRootNode = function() {
+    var n = this;
+    while (n.parentNode) n = n.parentNode;
+    return n;
+};
+
+// customElements registry stub
+if (!globalThis.customElements) {
+    globalThis.customElements = {
+        _registry: {},
+        define: function(name, ctor, opts) { this._registry[name] = ctor; },
+        get: function(name) { return this._registry[name] || undefined; },
+        whenDefined: function(name) { return Promise.resolve(); },
+        upgrade: function() {},
+        forcePolyfill: false
+    };
+}
+
+// ShadowRoot constructor stub
+globalThis.ShadowRoot = function ShadowRoot() {};
+
+// DOMException constructor stub
+globalThis.DOMException = function DOMException(msg, name) {
+    this.message = msg || '';
+    this.name = name || 'Error';
+    this.code = 0;
+};
+
+// Blob / File / FormData stubs for instanceof checks
+if (typeof globalThis.Blob === 'undefined') {
+    globalThis.Blob = function Blob(parts, opts) {
+        this.size = 0; this.type = (opts && opts.type) || '';
+    };
+}
+if (typeof globalThis.File === 'undefined') {
+    globalThis.File = function File(parts, name, opts) {
+        this.name = name || ''; this.size = 0; this.type = (opts && opts.type) || '';
+    };
+}
+if (typeof globalThis.FormData === 'undefined') {
+    globalThis.FormData = function FormData() { this._data = {}; };
+    FormData.prototype.append = function(k, v) { this._data[k] = v; };
+    FormData.prototype.get = function(k) { return this._data[k] || null; };
+    FormData.prototype.has = function(k) { return k in this._data; };
+    FormData.prototype.delete = function(k) { delete this._data[k]; };
+}
+if (typeof globalThis.AbortController === 'undefined') {
+    globalThis.AbortController = function AbortController() {
+        this.signal = { aborted: false, addEventListener: function(){}, removeEventListener: function(){} };
+    };
+    AbortController.prototype.abort = function() { this.signal.aborted = true; };
+}
+if (typeof globalThis.Headers === 'undefined') {
+    globalThis.Headers = function Headers(init) { this._h = init || {}; };
+    Headers.prototype.get = function(n) { return this._h[n.toLowerCase()] || null; };
+    Headers.prototype.set = function(n, v) { this._h[n.toLowerCase()] = v; };
+    Headers.prototype.has = function(n) { return n.toLowerCase() in this._h; };
+    Headers.prototype.forEach = function(cb) { for (var k in this._h) cb(this._h[k], k, this); };
+}
+if (typeof globalThis.Response === 'undefined') {
+    globalThis.Response = function Response(body, opts) {
+        this.ok = true; this.status = 200; this.statusText = 'OK'; this.body = body;
+    };
+    Response.prototype.json = function() { return Promise.resolve({}); };
+    Response.prototype.text = function() { return Promise.resolve(''); };
+}
+if (typeof globalThis.Request === 'undefined') {
+    globalThis.Request = function Request(url, opts) {
+        this.url = url; this.method = (opts && opts.method) || 'GET';
+    };
+}
+
 // PointerEvent constructor stub
 globalThis.PointerEvent = function PointerEvent(type, opts) {
     Event.call(this, type, opts);
@@ -1159,6 +1243,22 @@ if (typeof window.adsbygoogle === 'undefined') window.adsbygoogle = [];
 // Google Ads bootstrapper stubs
 if (typeof window.__google_ad_request_done === 'undefined') window.__google_ad_request_done = function() {};
 if (typeof window._gaq === 'undefined') window._gaq = { push: function() {} };
+
+// picturefill stub (responsive images library)
+if (typeof window.picturefill === 'undefined') window.picturefill = function() {};
+
+// Web Components readiness stub
+window.WebComponents = window.WebComponents || {};
+window.WebComponents.ready = true;
+window.WebComponents.waitFor = window.WebComponents.waitFor || function(cb) { if (cb) cb(); };
+
+// HTMLTemplateElement stub
+if (typeof HTMLTemplateElement === 'undefined') {
+    globalThis.HTMLTemplateElement = function HTMLTemplateElement() {};
+    HTMLTemplateElement.prototype = Object.create(HTMLElement.prototype);
+    HTMLTemplateElement.prototype.constructor = HTMLTemplateElement;
+    HTMLTemplateElement.bootstrap = function() {};
+}
 
 )JS";
 
