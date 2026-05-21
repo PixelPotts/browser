@@ -911,6 +911,7 @@ static std::vector<Element> parse_elements(const std::string& html, const std::s
 
         if (!closing && tname=="script") { state=SCRIPT_SKIP; continue; }
         if (!closing && tname=="style")  { state=STYLE_SKIP;  continue; }
+        if (!tname.empty() && tname[0] == '!') continue; // skip <!DOCTYPE> etc.
 
         if (!closing && tname=="img") {
             std::string src = extract_attr(tag, "src");
@@ -1178,6 +1179,8 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
             state = SCRIPT_CAP; continue;
         }
         if (!closing && tname == "style") { state = STYLE_SKIP; continue; }
+        // Skip <!DOCTYPE>, <!-- -->, and other !-prefixed declarations
+        if (!tname.empty() && tname[0] == '!') continue;
 
         if (!closing && tname == "img") {
             std::string src = extract_attr(tag, "src");
