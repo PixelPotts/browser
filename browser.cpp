@@ -712,22 +712,30 @@ struct StackEntry {
 };
 
 // Strip attribute selectors [attr...] and pseudo-classes from a simple selector,
-// returning the base selector part (tag.class#id)
-static std::string strip_selector_extras(const std::string& raw) {
+// returning the base selector part (tag.class#id).
+// Sets has_pseudo_element=true if selector targets ::before, ::after, etc.
+static std::string strip_selector_extras(const std::string& raw, bool& has_pseudo_element) {
     std::string result;
+    has_pseudo_element = false;
     size_t i = 0, n = raw.size();
     while (i < n) {
         if (raw[i] == '[') {
             int depth = 1; ++i;
             while (i < n && depth > 0) { if (raw[i]=='[') ++depth; else if (raw[i]==']') --depth; ++i; }
         } else if (raw[i] == ':') {
-            // skip pseudo-class (including :not(...))
             ++i;
-            if (i < n && raw[i] == ':') ++i; // ::pseudo-element
-            while (i < n && raw[i] != '.' && raw[i] != '#' && raw[i] != '[' && raw[i] != ':') {
-                if (raw[i] == '(') { int d=1; ++i; while(i<n&&d>0){if(raw[i]=='(')++d;else if(raw[i]==')')--d;++i;} }
-                else ++i;
-            }
+            bool is_double = (i < n && raw[i] == ':');
+            if (is_double) ++i; // ::pseudo-element
+            // Extract pseudo name
+            size_t ps = i;
+            while (i < n && raw[i] != '.' && raw[i] != '#' && raw[i] != '[' && raw[i] != ':' && raw[i] != '(') ++i;
+            std::string pname = raw.substr(ps, i - ps);
+            // Skip function args if present
+            if (i < n && raw[i] == '(') { int d=1; ++i; while(i<n&&d>0){if(raw[i]=='(')++d;else if(raw[i]==')')--d;++i;} }
+            // Check for pseudo-elements (target generated content, not the element itself)
+            if (is_double || pname == "before" || pname == "after" ||
+                pname == "first-line" || pname == "first-letter" || pname == "placeholder")
+                has_pseudo_element = true;
         } else {
             result += raw[i++];
         }
@@ -738,7 +746,11 @@ static std::string strip_selector_extras(const std::string& raw) {
 // Match a single simple selector token (tag, .class, #id, tag.class, .a.b, with optional :pseudo and [attr])
 static bool simple_match(const std::string& raw, const StackEntry& e) {
     if (raw.empty() || raw=="*") return true;
-    std::string tok = strip_selector_extras(raw);
+    bool has_pseudo_element = false;
+    std::string tok = strip_selector_extras(raw, has_pseudo_element);
+    // Pseudo-elements (::before, ::after, etc.) target generated content,
+    // not the element itself — never match the actual element.
+    if (has_pseudo_element) return false;
     // If raw had content but stripping [attr] and :pseudo left nothing,
     // the selector is purely attribute/pseudo-based (e.g. "[hidden]").
     // We can't evaluate these, so conservatively return false.
@@ -2838,6 +2850,26 @@ static void render_node(AppState* st, DOMNode* node, int gen,
 static void render_dom_to_gtk(AppState* st, Document* doc, int gen) {
     std::vector<GtkWidget*> cstack = {st->content_box};
     std::vector<GtkWidget*> float_rows = {nullptr};
+    // Debug: dump DOM tree structure
+    std::function<void(DOMNode*, int)> dump_tree = [&](DOMNode* n, int depth) {
+        if (!n) return;
+        std::string indent(depth*2, ' ');
+        if (n->node_type == DOMNode::TEXT) {
+            std::string t = n->text_content.substr(0, 40);
+            if (!collapse_ws(t).empty())
+                fprintf(stderr, "%s TEXT: '%.40s' display=%d\n", indent.c_str(), t.c_str(), (int)n->display);
+        } else {
+            fprintf(stderr, "%s <%s id='%s' class='", indent.c_str(), n->tag_name.c_str(), n->id.c_str());
+            for (size_t i=0; i<n->class_list.size() && i<3; i++) fprintf(stderr, "%s ", n->class_list[i].c_str());
+            fprintf(stderr, "' display=%d> children=%zu\n", (int)n->display, n->children.size());
+        }
+        if (depth < 6) for (auto& c : n->children) dump_tree(c.get(), depth+1);
+    };
+    if (doc->body) {
+        fprintf(stderr, "[RENDER] body has %zu children, display=%d\n",
+            doc->body->children.size(), (int)doc->body->display);
+        dump_tree(doc->body, 0);
+    }
     if (doc->body) {
         render_node(st, doc->body, gen, cstack, float_rows);
     } else {
