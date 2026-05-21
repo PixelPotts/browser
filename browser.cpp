@@ -2571,6 +2571,293 @@ static void run_probes_phase5(AppState* st) {
     }
 }
 
+// Phase 6: 50 new DOM probes across tests 15-40
+static void run_probes_phase6(AppState* st) {
+    Document* doc = st->document.get();
+    if (!doc || !st->js_engine) return;
+
+    fprintf(stderr, "\n\033[1m=== C++ DOM Probes: Phase 6 (extended tests 15-40) ===\033[0m\n");
+
+    // T15: Nested innerHTML
+    {
+        DOMNode* np = probe_node(doc, "nest-p");
+        probe_check("T15: nest-p found via getElementById after innerHTML", np != nullptr);
+        if (np) probe_check("T15: nest-p textContent='Hello World'",
+            np->getTextContent() == "Hello World");
+        DOMNode* outer = probe_node(doc, "nest-outer");
+        if (outer) {
+            int ec = 0; for (auto& c : outer->children) if (c->node_type == DOMNode::ELEMENT) ec++;
+            probe_check("T15: nest-outer has 2 element children (p + ul)", ec == 2);
+        }
+    }
+
+    // T16: classList bulk
+    {
+        DOMNode* mc = probe_node(doc, "multi-class");
+        probe_check("T16: multi-class exists", mc != nullptr);
+        if (mc) {
+            probe_check("T16: has base-cls", mc->hasClass("base-cls"));
+            probe_check("T16: has cls-a", mc->hasClass("cls-a"));
+            probe_check("T16: has cls-c", mc->hasClass("cls-c"));
+            probe_check("T16: lost cls-b", !mc->hasClass("cls-b"));
+            probe_check("T16: lost cls-d (toggled off)", !mc->hasClass("cls-d"));
+        }
+    }
+
+    // T17: Deep nesting
+    {
+        DOMNode* leaf = probe_node(doc, "deep-leaf");
+        probe_check("T17: deep-leaf found", leaf != nullptr);
+        if (leaf) {
+            int depth = 0; DOMNode* p = leaf;
+            while (p->parent) { p = p->parent; depth++; }
+            probe_check("T17: depth >= 5", depth >= 5);
+            probe_check("T17: leaf text='Leaf'", leaf->getTextContent() == "Leaf");
+        }
+    }
+
+    // T18: Sibling navigation
+    {
+        DOMNode* a = probe_node(doc, "sib-a");
+        DOMNode* c = probe_node(doc, "sib-c");
+        DOMNode* list = probe_node(doc, "sib-list");
+        probe_check("T18: sib-a exists", a != nullptr);
+        probe_check("T18: sib-c exists", c != nullptr);
+        if (list) {
+            int li_cnt = 0;
+            for (auto& ch : list->children) if (ch->node_type == DOMNode::ELEMENT) li_cnt++;
+            probe_check("T18: sib-list has 3 <li> children", li_cnt == 3);
+            probe_check("T18: firstChild='A'", !list->children.empty() && list->children.front()->getTextContent() == "A");
+            probe_check("T18: lastChild='C'", !list->children.empty() && list->children.back()->getTextContent() == "C");
+        }
+    }
+
+    // T19: Style chaining
+    {
+        DOMNode* sc = probe_node(doc, "style-chain");
+        probe_check("T19: style-chain exists", sc != nullptr);
+        if (sc) {
+            probe_check("T19: bg-color set", sc->style_props.count("background-color") && sc->style_props["background-color"] == "#2ecc71");
+            probe_check("T19: color set", sc->style_props.count("color") && sc->style_props["color"] == "#fff");
+            probe_check("T19: border-radius set", sc->style_props.count("border-radius") && sc->style_props["border-radius"] == "8px");
+            probe_check("T19: font-weight set", sc->style_props.count("font-weight") && sc->style_props["font-weight"] == "bold");
+        }
+    }
+
+    // T20: Edge cases
+    {
+        DOMNode* ed = probe_node(doc, "empty-div");
+        probe_check("T20: empty-div exists", ed != nullptr);
+        if (ed) probe_check("T20: empty-div now='now filled'", ed->getTextContent() == "now filled");
+        DOMNode* sp = probe_node(doc, "special-chars");
+        probe_check("T20: special-chars exists", sp != nullptr);
+        if (sp) probe_check("T20: special-chars has content", !sp->getTextContent().empty());
+    }
+
+    // T21: NodeList forEach
+    {
+        DOMNode* fp = probe_node(doc, "foreach-parent");
+        probe_check("T21: foreach-parent exists", fp != nullptr);
+        if (fp) {
+            int span_cnt = 0;
+            for (auto& c : fp->children) if (c->node_type == DOMNode::ELEMENT && c->tag_name == "span") span_cnt++;
+            probe_check("T21: 4 span children", span_cnt == 4);
+        }
+        std::string fr = probe_text(doc, "foreach-result");
+        probe_check("T21: forEach result contains PASS", fr.find("PASS") != std::string::npos);
+    }
+
+    // T22: createElement variety
+    {
+        DOMNode* cv = probe_node(doc, "create-variety");
+        probe_check("T22: create-variety exists", cv != nullptr);
+        if (cv) {
+            int ec = 0; for (auto& c : cv->children) if (c->node_type == DOMNode::ELEMENT) ec++;
+            probe_check("T22: 5 created elements", ec == 5);
+            if (ec >= 5) {
+                probe_check("T22: first is div", cv->children[0]->tag_name == "div");
+                probe_check("T22: last is li", cv->children[4]->tag_name == "li");
+            }
+        }
+    }
+
+    // T23: Data attributes
+    {
+        DOMNode* dd = probe_node(doc, "data-div");
+        probe_check("T23: data-div exists", dd != nullptr);
+        if (dd) {
+            probe_check("T23: data-x=10", dd->attributes.count("data-x") && dd->attributes["data-x"] == "10");
+            probe_check("T23: data-new=42 (JS-set)", dd->attributes.count("data-new") && dd->attributes["data-new"] == "42");
+            probe_check("T23: data-flag removed", dd->attributes.count("data-flag") == 0);
+        }
+    }
+
+    // T24: Selector combinators
+    {
+        std::string sr = probe_text(doc, "sel-result");
+        probe_check("T24: sel-result has PASS", sr.find("PASS") != std::string::npos);
+        auto inners = doc->querySelectorAll(".sel-inner");
+        probe_check("T24: querySelectorAll .sel-inner finds 2", inners.size() == 2);
+    }
+
+    // T26: textContent on nested
+    {
+        DOMNode* tc = probe_node(doc, "tc-nested");
+        probe_check("T26: tc-nested exists", tc != nullptr);
+        if (tc) {
+            probe_check("T26: text='Replaced all'", tc->getTextContent() == "Replaced all");
+            int ec = 0; for (auto& c : tc->children) if (c->node_type == DOMNode::ELEMENT) ec++;
+            probe_check("T26: children cleared (0 elements)", ec == 0);
+        }
+    }
+
+    // T27: className
+    {
+        DOMNode* cn = probe_node(doc, "cn-target");
+        probe_check("T27: cn-target exists", cn != nullptr);
+        if (cn) {
+            probe_check("T27: has 'gamma'", cn->hasClass("gamma"));
+            probe_check("T27: has 'delta'", cn->hasClass("delta"));
+            probe_check("T27: has 'epsilon'", cn->hasClass("epsilon"));
+            probe_check("T27: lost 'alpha'", !cn->hasClass("alpha"));
+        }
+    }
+
+    // T28: parentNode chain
+    {
+        DOMNode* deep = probe_node(doc, "pc-deep");
+        probe_check("T28: pc-deep exists", deep != nullptr);
+        if (deep) {
+            probe_check("T28: parent is pc-mid", deep->parent && deep->parent->id == "pc-mid");
+            probe_check("T28: grandparent is pc-root",
+                deep->parent && deep->parent->parent && deep->parent->parent->id == "pc-root");
+        }
+    }
+
+    // T29: removeChild
+    {
+        DOMNode* rcp = probe_node(doc, "rc-parent");
+        probe_check("T29: rc-parent exists", rcp != nullptr);
+        if (rcp) {
+            int ec = 0; for (auto& c : rcp->children) if (c->node_type == DOMNode::ELEMENT) ec++;
+            probe_check("T29: 2 children after removeChild", ec == 2);
+            probe_check("T29: first is C1", !rcp->children.empty() && rcp->children.front()->getTextContent() == "C1");
+            probe_check("T29: last is C3", !rcp->children.empty() && rcp->children.back()->getTextContent() == "C3");
+        }
+    }
+
+    // T30: innerHTML with attributes
+    {
+        DOMNode* ihn = probe_node(doc, "ih-new");
+        probe_check("T30: ih-new found after innerHTML", ihn != nullptr);
+        if (ihn) {
+            probe_check("T30: data-val=99", ihn->attributes.count("data-val") && ihn->attributes["data-val"] == "99");
+            probe_check("T30: has class ih-cls", ihn->hasClass("ih-cls"));
+            probe_check("T30: text='Attributed'", ihn->getTextContent() == "Attributed");
+        }
+    }
+
+    // T31: Style computed values
+    {
+        DOMNode* scb = probe_node(doc, "sc-box");
+        probe_check("T31: sc-box exists", scb != nullptr);
+        if (scb) {
+            probe_check("T31: style.width set", scb->style_props.count("width") > 0);
+            probe_check("T31: style.bg set", scb->style_props.count("background-color") > 0);
+        }
+    }
+
+    // T33: nodeType
+    {
+        DOMNode* nte = probe_node(doc, "nt-elem");
+        probe_check("T33: nt-elem exists", nte != nullptr);
+        if (nte) {
+            probe_check("T33: element nodeType=1", nte->node_type == DOMNode::ELEMENT);
+            bool has_text = false;
+            for (auto& c : nte->children) if (c->node_type == DOMNode::TEXT) { has_text = true; break; }
+            probe_check("T33: has TEXT child", has_text);
+        }
+    }
+
+    // T34: tagName
+    {
+        DOMNode* d = probe_node(doc, "tn-div");
+        DOMNode* p = probe_node(doc, "tn-p");
+        probe_check("T34: tn-div tag=div", d && d->tag_name == "div");
+        probe_check("T34: tn-p tag=p", p && p->tag_name == "p");
+    }
+
+    // T35: Toggle chain
+    {
+        DOMNode* tc = probe_node(doc, "tog-chain");
+        probe_check("T35: tog-chain exists", tc != nullptr);
+        if (tc) probe_check("T35: has 'on' (toggled back on)", tc->hasClass("on"));
+    }
+
+    // T36: Rapid mutations
+    {
+        DOMNode* rm = probe_node(doc, "rapid-mut");
+        probe_check("T36: rapid-mut exists", rm != nullptr);
+        if (rm) {
+            int ec = 0; for (auto& c : rm->children) if (c->node_type == DOMNode::ELEMENT) ec++;
+            probe_check("T36: 20 children created", ec == 20);
+            if (ec >= 20) {
+                probe_check("T36: first text=item0", rm->children[0]->getTextContent() == "item0");
+                probe_check("T36: last text=item19", rm->children[ec-1]->getTextContent() == "item19");
+                probe_check("T36: child[10] data-idx=10",
+                    rm->children[10]->attributes.count("data-idx") && rm->children[10]->attributes["data-idx"] == "10");
+            }
+        }
+    }
+
+    // T37: Large NodeList
+    {
+        DOMNode* ll = probe_node(doc, "large-list");
+        probe_check("T37: large-list exists", ll != nullptr);
+        if (ll) {
+            int gen = 0;
+            for (auto& c : ll->children)
+                if (c->node_type == DOMNode::ELEMENT && c->hasClass("list-item-gen")) gen++;
+            probe_check("T37: 50 .list-item-gen children", gen == 50);
+        }
+    }
+
+    // T38: Overwrite innerHTML
+    {
+        DOMNode* ow = probe_node(doc, "overwrite-ih");
+        probe_check("T38: overwrite-ih exists", ow != nullptr);
+        if (ow) probe_check("T38: text='Final'", ow->getTextContent() == "Final");
+    }
+
+    // T39: Void elements in innerHTML
+    {
+        DOMNode* vi = probe_node(doc, "void-ih");
+        probe_check("T39: void-ih exists", vi != nullptr);
+        if (vi) {
+            int ec = 0; for (auto& c : vi->children) if (c->node_type == DOMNode::ELEMENT) ec++;
+            probe_check("T39: has >= 3 element children (br, br, hr)", ec >= 3);
+            std::string t = vi->getTextContent();
+            probe_check("T39: text contains Line1", t.find("Line1") != std::string::npos);
+            probe_check("T39: text contains End", t.find("End") != std::string::npos);
+        }
+    }
+
+    // T40: Re-parent node
+    {
+        DOMNode* src = probe_node(doc, "rp-src");
+        DOMNode* dst = probe_node(doc, "rp-dst");
+        DOMNode* child = probe_node(doc, "rp-child");
+        probe_check("T40: rp-child exists", child != nullptr);
+        if (src && dst && child) {
+            int src_ec = 0; for (auto& c : src->children) if (c->node_type == DOMNode::ELEMENT) src_ec++;
+            int dst_ec = 0; for (auto& c : dst->children) if (c->node_type == DOMNode::ELEMENT) dst_ec++;
+            probe_check("T40: src has 0 children", src_ec == 0);
+            probe_check("T40: dst has 1 child", dst_ec == 1);
+            probe_check("T40: child parent is rp-dst", child->parent && child->parent->id == "rp-dst");
+        }
+    }
+}
+
 static void run_test_probes(AppState* st) {
     fprintf(stderr, "\n\033[1;36m╔══════════════════════════════════════════╗\033[0m\n");
     fprintf(stderr, "\033[1;36m║     C++ DOM PROBE TEST SUITE             ║\033[0m\n");
@@ -2581,6 +2868,7 @@ static void run_test_probes(AppState* st) {
     run_probes_phase3(st);
     run_probes_phase4(st);
     run_probes_phase5(st);
+    run_probes_phase6(st);
 
     fprintf(stderr, "\n\033[1m═══════════════════════════════════════════\033[0m\n");
     fprintf(stderr, "  Total: %d passed, %d failed, %d total\n",

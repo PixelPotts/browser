@@ -187,6 +187,187 @@
         </div>
     </div>
 
+    <!-- Test 15: Nested innerHTML -->
+    <div class="test-section">
+        <h2>15. Nested innerHTML</h2>
+        <div id="nest-target"></div>
+        <p id="nest-result">Waiting...</p>
+    </div>
+
+    <!-- Test 16: Multiple classList ops -->
+    <div class="test-section">
+        <h2>16. classList Bulk Ops</h2>
+        <div id="multi-class" class="base-cls">Multi-class target</div>
+        <p id="multi-class-result">Waiting...</p>
+    </div>
+
+    <!-- Test 17: Deep nesting -->
+    <div class="test-section">
+        <h2>17. Deep Nesting</h2>
+        <div id="deep-root"><div id="deep-l1"><div id="deep-l2"><div id="deep-l3"><span id="deep-leaf">Leaf</span></div></div></div></div>
+        <p id="deep-result">Waiting...</p>
+    </div>
+
+    <!-- Test 18: Sibling navigation -->
+    <div class="test-section">
+        <h2>18. Sibling Navigation</h2>
+        <ul id="sib-list"><li id="sib-a">A</li><li id="sib-b">B</li><li id="sib-c">C</li></ul>
+        <p id="sib-result">Waiting...</p>
+    </div>
+
+    <!-- Test 19: Style chaining -->
+    <div class="test-section">
+        <h2>19. Multiple Style Properties</h2>
+        <div id="style-chain" style="background-color: #eee; padding: 5px;">Styled box</div>
+        <p id="style-chain-result">Waiting...</p>
+    </div>
+
+    <!-- Test 20: Empty and whitespace handling -->
+    <div class="test-section">
+        <h2>20. Edge Cases</h2>
+        <div id="empty-div"></div>
+        <div id="ws-div">   </div>
+        <div id="special-chars">Chars: &amp; &lt; &gt; "quotes"</div>
+        <p id="edge-result">Waiting...</p>
+    </div>
+
+    <!-- Test 21: NodeList forEach -->
+    <div class="test-section">
+        <h2>21. NodeList forEach</h2>
+        <div id="foreach-parent"><span class="foreach-item">A</span><span class="foreach-item">B</span><span class="foreach-item">C</span><span class="foreach-item">D</span></div>
+        <p id="foreach-result">Waiting...</p>
+    </div>
+
+    <!-- Test 22: createElement variety -->
+    <div class="test-section">
+        <h2>22. Create Various Elements</h2>
+        <div id="create-variety"></div>
+        <p id="create-variety-result">Waiting...</p>
+    </div>
+
+    <!-- Test 23: Attribute variety -->
+    <div class="test-section">
+        <h2>23. Data Attributes</h2>
+        <div id="data-div" data-x="10" data-y="20" data-label="hello" data-flag="true">Data div</div>
+        <p id="data-result">Waiting...</p>
+    </div>
+
+    <!-- Test 24: querySelector combinators -->
+    <div class="test-section">
+        <h2>24. Selector Combinators</h2>
+        <div id="sel-root"><div class="sel-a"><p class="sel-inner">P1</p></div><div class="sel-b"><p class="sel-inner">P2</p></div></div>
+        <p id="sel-result">Waiting...</p>
+    </div>
+
+    <!-- Test 25: Multiple event listeners -->
+    <div class="test-section">
+        <h2>25. Multiple Listeners</h2>
+        <button id="multi-listen-btn">Click for multi</button>
+        <p id="multi-listen-result">Waiting...</p>
+    </div>
+
+    <!-- Test 26: textContent on nested -->
+    <div class="test-section">
+        <h2>26. textContent on Nested</h2>
+        <div id="tc-nested"><b>Bold</b> and <i>italic</i> text</div>
+        <p id="tc-nested-result">Waiting...</p>
+    </div>
+
+    <!-- Test 27: className manipulation -->
+    <div class="test-section">
+        <h2>27. className Property</h2>
+        <div id="cn-target" class="alpha beta">className target</div>
+        <p id="cn-result">Waiting...</p>
+    </div>
+
+    <!-- Test 28: parentNode chain -->
+    <div class="test-section">
+        <h2>28. Parent Chain</h2>
+        <div id="pc-root"><div id="pc-mid"><span id="pc-deep">Deep</span></div></div>
+        <p id="pc-result">Waiting...</p>
+    </div>
+
+    <!-- Test 29: removeChild -->
+    <div class="test-section">
+        <h2>29. removeChild</h2>
+        <div id="rc-parent"><div id="rc-child1">C1</div><div id="rc-child2">C2</div><div id="rc-child3">C3</div></div>
+        <p id="rc-result">Waiting...</p>
+    </div>
+
+    <!-- Test 30: innerHTML with attributes -->
+    <div class="test-section">
+        <h2>30. innerHTML with Attributes</h2>
+        <div id="ih-attr"></div>
+        <p id="ih-attr-result">Waiting...</p>
+    </div>
+
+    <!-- Test 31: Style computed values -->
+    <div class="test-section">
+        <h2>31. Style Computed Values</h2>
+        <div id="sc-box" style="width: 200px; height: 100px; margin: 10px; border: 2px solid black;">Box</div>
+        <p id="sc-result">Waiting...</p>
+    </div>
+
+    <!-- Test 32: document.head / documentElement -->
+    <div class="test-section">
+        <h2>32. Document Globals</h2>
+        <p id="doc-globals-result">Waiting...</p>
+    </div>
+
+    <!-- Test 33: nodeType values -->
+    <div class="test-section">
+        <h2>33. nodeType Values</h2>
+        <div id="nt-elem">Text node inside</div>
+        <p id="nt-result">Waiting...</p>
+    </div>
+
+    <!-- Test 34: tagName / nodeName -->
+    <div class="test-section">
+        <h2>34. tagName / nodeName</h2>
+        <div id="tn-div">A div</div>
+        <p id="tn-p">A paragraph</p>
+        <p id="tn-result">Waiting...</p>
+    </div>
+
+    <!-- Test 35: Boolean toggle chain -->
+    <div class="test-section">
+        <h2>35. Toggle Chain</h2>
+        <div id="tog-chain" class="on">Toggle chain target</div>
+        <p id="tog-chain-result">Waiting...</p>
+    </div>
+
+    <!-- Test 36-64: Extra stress test containers -->
+    <div class="test-section">
+        <h2>36. Rapid DOM Mutations</h2>
+        <div id="rapid-mut"></div>
+        <p id="rapid-mut-result">Waiting...</p>
+    </div>
+
+    <div class="test-section">
+        <h2>37. Large NodeList</h2>
+        <div id="large-list"></div>
+        <p id="large-list-result">Waiting...</p>
+    </div>
+
+    <div class="test-section">
+        <h2>38. Overwrite innerHTML</h2>
+        <div id="overwrite-ih">Original content here</div>
+        <p id="overwrite-ih-result">Waiting...</p>
+    </div>
+
+    <div class="test-section">
+        <h2>39. Void Elements in innerHTML</h2>
+        <div id="void-ih"></div>
+        <p id="void-ih-result">Waiting...</p>
+    </div>
+
+    <div class="test-section">
+        <h2>40. Re-parent Node</h2>
+        <div id="rp-src"><div id="rp-child">Moveable</div></div>
+        <div id="rp-dst"></div>
+        <p id="rp-result">Waiting...</p>
+    </div>
+
     <script>
     // ===== Test 1: DOM Queries =====
     (function() {
@@ -488,8 +669,378 @@
         });
     })();
 
+    // ===== Test 15: Nested innerHTML =====
+    (function() {
+        var t = document.getElementById("nest-target");
+        t.innerHTML = "<div id='nest-outer'><p id='nest-p'>Hello <b>World</b></p><ul><li>One</li><li>Two</li></ul></div>";
+        var p = document.getElementById("nest-p");
+        var r = [];
+        r.push(p ? "nested getElementById: PASS" : "nested getElementById: FAIL");
+        r.push(p && p.textContent === "Hello World" ? "nested textContent: PASS" : "nested textContent: FAIL");
+        var outer = document.getElementById("nest-outer");
+        r.push(outer && outer.children.length === 2 ? "outer children=2: PASS" : "outer children: FAIL (" + (outer ? outer.children.length : "null") + ")");
+        document.getElementById("nest-result").textContent = r.join(" | ");
+        console.log("Test 15 (Nested innerHTML): done");
+    })();
+
+    // ===== Test 16: classList bulk ops =====
+    (function() {
+        var el = document.getElementById("multi-class");
+        el.classList.add("cls-a");
+        el.classList.add("cls-b");
+        el.classList.add("cls-c");
+        var r = [];
+        r.push(el.classList.contains("base-cls") ? "base kept: PASS" : "base kept: FAIL");
+        r.push(el.classList.contains("cls-a") ? "add cls-a: PASS" : "add cls-a: FAIL");
+        r.push(el.classList.contains("cls-b") ? "add cls-b: PASS" : "add cls-b: FAIL");
+        el.classList.remove("cls-b");
+        r.push(!el.classList.contains("cls-b") ? "remove cls-b: PASS" : "remove cls-b: FAIL");
+        el.classList.toggle("cls-d");
+        r.push(el.classList.contains("cls-d") ? "toggle on cls-d: PASS" : "toggle on cls-d: FAIL");
+        el.classList.toggle("cls-d");
+        r.push(!el.classList.contains("cls-d") ? "toggle off cls-d: PASS" : "toggle off cls-d: FAIL");
+        document.getElementById("multi-class-result").textContent = r.join(" | ");
+        console.log("Test 16 (classList bulk): done");
+    })();
+
+    // ===== Test 17: Deep nesting =====
+    (function() {
+        var leaf = document.getElementById("deep-leaf");
+        var r = [];
+        r.push(leaf ? "deep-leaf found: PASS" : "deep-leaf: FAIL");
+        r.push(leaf && leaf.parentNode ? "parentNode exists: PASS" : "parentNode: FAIL");
+        var depth = 0;
+        var cur = leaf;
+        while (cur && cur.parentNode) { cur = cur.parentNode; depth++; }
+        r.push(depth >= 4 ? "depth >= 4: PASS (" + depth + ")" : "depth: FAIL (" + depth + ")");
+        r.push(leaf && leaf.textContent === "Leaf" ? "leaf text: PASS" : "leaf text: FAIL");
+        document.getElementById("deep-result").textContent = r.join(" | ");
+        console.log("Test 17 (Deep nesting): done");
+    })();
+
+    // ===== Test 18: Sibling navigation =====
+    (function() {
+        var a = document.getElementById("sib-a");
+        var b = document.getElementById("sib-b");
+        var c = document.getElementById("sib-c");
+        var r = [];
+        r.push(a && a.nextSibling ? "a.nextSibling: PASS" : "a.nextSibling: FAIL");
+        r.push(a && a.nextSibling && a.nextSibling.textContent === "B" ? "a.next is B: PASS" : "a.next is B: FAIL");
+        var list = document.getElementById("sib-list");
+        r.push(list && list.firstChild && list.firstChild.textContent === "A" ? "firstChild=A: PASS" : "firstChild=A: FAIL");
+        r.push(list && list.lastChild && list.lastChild.textContent === "C" ? "lastChild=C: PASS" : "lastChild=C: FAIL");
+        r.push(list.children.length === 3 ? "children.length=3: PASS" : "children.length: FAIL (" + list.children.length + ")");
+        document.getElementById("sib-result").textContent = r.join(" | ");
+        console.log("Test 18 (Sibling nav): done");
+    })();
+
+    // ===== Test 19: Multiple style properties =====
+    (function() {
+        var el = document.getElementById("style-chain");
+        el.style.backgroundColor = "#2ecc71";
+        el.style.color = "#fff";
+        el.style.padding = "12px";
+        el.style.borderRadius = "8px";
+        el.style.fontSize = "16px";
+        el.style.fontWeight = "bold";
+        document.getElementById("style-chain-result").textContent = "6 style props set: PASS";
+        console.log("Test 19 (Style chaining): done");
+    })();
+
+    // ===== Test 20: Edge cases =====
+    (function() {
+        var empty = document.getElementById("empty-div");
+        var ws = document.getElementById("ws-div");
+        var special = document.getElementById("special-chars");
+        var r = [];
+        r.push(empty.textContent === "" ? "empty textContent: PASS" : "empty textContent: FAIL ('" + empty.textContent + "')");
+        r.push(ws.textContent.trim() === "" ? "whitespace trim: PASS" : "whitespace: FAIL");
+        r.push(special.textContent.length > 0 ? "special chars exist: PASS" : "special chars: FAIL");
+        empty.textContent = "now filled";
+        r.push(empty.textContent === "now filled" ? "set on empty: PASS" : "set on empty: FAIL");
+        document.getElementById("edge-result").textContent = r.join(" | ");
+        console.log("Test 20 (Edge cases): done");
+    })();
+
+    // ===== Test 21: NodeList forEach =====
+    (function() {
+        var items = document.querySelectorAll(".foreach-item");
+        var collected = [];
+        items.forEach(function(el) { collected.push(el.textContent); });
+        var r = [];
+        r.push(items.length === 4 ? "found 4 items: PASS" : "items: FAIL (" + items.length + ")");
+        r.push(collected.join(",") === "A,B,C,D" ? "forEach order: PASS" : "forEach: FAIL (" + collected.join(",") + ")");
+        document.getElementById("foreach-result").textContent = r.join(" | ");
+        console.log("Test 21 (forEach): done");
+    })();
+
+    // ===== Test 22: createElement variety =====
+    (function() {
+        var container = document.getElementById("create-variety");
+        var tags = ["div", "span", "p", "ul", "li"];
+        var r = [];
+        for (var i = 0; i < tags.length; i++) {
+            var el = document.createElement(tags[i]);
+            el.textContent = tags[i] + "-content";
+            container.appendChild(el);
+        }
+        r.push(container.children.length === 5 ? "5 elements created: PASS" : "count: FAIL (" + container.children.length + ")");
+        r.push(container.children[0].tagName === "DIV" ? "first is DIV: PASS" : "first tag: FAIL (" + container.children[0].tagName + ")");
+        r.push(container.children[4].tagName === "LI" ? "last is LI: PASS" : "last tag: FAIL");
+        document.getElementById("create-variety-result").textContent = r.join(" | ");
+        console.log("Test 22 (createElement variety): done");
+    })();
+
+    // ===== Test 23: Data attributes =====
+    (function() {
+        var el = document.getElementById("data-div");
+        var r = [];
+        r.push(el.getAttribute("data-x") === "10" ? "data-x=10: PASS" : "data-x: FAIL (" + el.getAttribute("data-x") + ")");
+        r.push(el.getAttribute("data-y") === "20" ? "data-y=20: PASS" : "data-y: FAIL");
+        r.push(el.getAttribute("data-label") === "hello" ? "data-label: PASS" : "data-label: FAIL");
+        el.setAttribute("data-new", "42");
+        r.push(el.getAttribute("data-new") === "42" ? "set data-new: PASS" : "set data-new: FAIL");
+        el.removeAttribute("data-flag");
+        r.push(el.getAttribute("data-flag") === null ? "remove data-flag: PASS" : "remove data-flag: FAIL");
+        document.getElementById("data-result").textContent = r.join(" | ");
+        console.log("Test 23 (Data attrs): done");
+    })();
+
+    // ===== Test 24: Selector combinators =====
+    (function() {
+        var r = [];
+        var inners = document.querySelectorAll(".sel-inner");
+        r.push(inners.length === 2 ? "sel-inner count=2: PASS" : "sel-inner: FAIL (" + inners.length + ")");
+        var first = document.querySelector(".sel-a .sel-inner");
+        r.push(first && first.textContent === "P1" ? ".sel-a .sel-inner: PASS" : ".sel-a .sel-inner: FAIL");
+        var byId = document.querySelector("#sel-root .sel-b");
+        r.push(byId ? "#sel-root .sel-b: PASS" : "#sel-root .sel-b: FAIL");
+        document.getElementById("sel-result").textContent = r.join(" | ");
+        console.log("Test 24 (Selectors): done");
+    })();
+
+    // ===== Test 25: Multiple event listeners =====
+    (function() {
+        var btn = document.getElementById("multi-listen-btn");
+        var calls = [];
+        btn.addEventListener("click", function() { calls.push("handler1"); });
+        btn.addEventListener("click", function() { calls.push("handler2"); });
+        btn.addEventListener("click", function() {
+            calls.push("handler3");
+            document.getElementById("multi-listen-result").textContent = calls.length + " handlers fired: " + calls.join(", ");
+        });
+        console.log("Test 25 (Multi listeners): attached");
+    })();
+
+    // ===== Test 26: textContent on nested =====
+    (function() {
+        var el = document.getElementById("tc-nested");
+        var r = [];
+        var tc = el.textContent;
+        r.push(tc === "Bold and italic text" ? "nested textContent: PASS" : "nested textContent: FAIL ('" + tc + "')");
+        el.textContent = "Replaced all";
+        r.push(el.textContent === "Replaced all" ? "overwrite: PASS" : "overwrite: FAIL");
+        r.push(el.children.length === 0 ? "children cleared: PASS" : "children: FAIL (" + el.children.length + ")");
+        document.getElementById("tc-nested-result").textContent = r.join(" | ");
+        console.log("Test 26 (textContent nested): done");
+    })();
+
+    // ===== Test 27: className property =====
+    (function() {
+        var el = document.getElementById("cn-target");
+        var r = [];
+        r.push(el.className === "alpha beta" ? "className get: PASS" : "className get: FAIL ('" + el.className + "')");
+        el.className = "gamma delta epsilon";
+        r.push(el.className === "gamma delta epsilon" ? "className set: PASS" : "className set: FAIL ('" + el.className + "')");
+        r.push(el.classList.contains("gamma") ? "classList reflects: PASS" : "classList reflects: FAIL");
+        r.push(!el.classList.contains("alpha") ? "old class gone: PASS" : "old class gone: FAIL");
+        document.getElementById("cn-result").textContent = r.join(" | ");
+        console.log("Test 27 (className): done");
+    })();
+
+    // ===== Test 28: parentNode chain =====
+    (function() {
+        var deep = document.getElementById("pc-deep");
+        var r = [];
+        r.push(deep.parentNode.id === "pc-mid" ? "parent=pc-mid: PASS" : "parent: FAIL (" + deep.parentNode.id + ")");
+        r.push(deep.parentNode.parentNode.id === "pc-root" ? "grandparent=pc-root: PASS" : "grandparent: FAIL");
+        r.push(deep.parentElement.id === "pc-mid" ? "parentElement: PASS" : "parentElement: FAIL");
+        document.getElementById("pc-result").textContent = r.join(" | ");
+        console.log("Test 28 (parentNode chain): done");
+    })();
+
+    // ===== Test 29: removeChild =====
+    (function() {
+        var parent = document.getElementById("rc-parent");
+        var c2 = document.getElementById("rc-child2");
+        var r = [];
+        r.push(parent.children.length === 3 ? "initial 3 children: PASS" : "initial: FAIL (" + parent.children.length + ")");
+        parent.removeChild(c2);
+        r.push(parent.children.length === 2 ? "after remove: 2 children: PASS" : "after remove: FAIL (" + parent.children.length + ")");
+        r.push(parent.firstChild.textContent === "C1" ? "first still C1: PASS" : "first: FAIL");
+        r.push(parent.lastChild.textContent === "C3" ? "last still C3: PASS" : "last: FAIL");
+        document.getElementById("rc-result").textContent = r.join(" | ");
+        console.log("Test 29 (removeChild): done");
+    })();
+
+    // ===== Test 30: innerHTML with attributes =====
+    (function() {
+        var el = document.getElementById("ih-attr");
+        el.innerHTML = '<div id="ih-new" class="ih-cls" data-val="99">Attributed</div>';
+        var r = [];
+        var ne = document.getElementById("ih-new");
+        r.push(ne ? "getElementById after innerHTML: PASS" : "getElementById: FAIL");
+        r.push(ne && ne.getAttribute("data-val") === "99" ? "data-val=99: PASS" : "data-val: FAIL");
+        r.push(ne && ne.classList.contains("ih-cls") ? "class parsed: PASS" : "class: FAIL");
+        r.push(ne && ne.textContent === "Attributed" ? "textContent: PASS" : "textContent: FAIL");
+        document.getElementById("ih-attr-result").textContent = r.join(" | ");
+        console.log("Test 30 (innerHTML attrs): done");
+    })();
+
+    // ===== Test 31: Inline style from HTML =====
+    (function() {
+        var el = document.getElementById("sc-box");
+        var r = [];
+        r.push(el ? "sc-box exists: PASS" : "sc-box: FAIL");
+        el.style.width = "300px";
+        r.push("style.width set: PASS");
+        el.style.backgroundColor = "#9b59b6";
+        r.push("style.bg set: PASS");
+        document.getElementById("sc-result").textContent = r.join(" | ");
+        console.log("Test 31 (Style computed): done");
+    })();
+
+    // ===== Test 32: document globals =====
+    (function() {
+        var r = [];
+        r.push(document.body ? "document.body: PASS" : "document.body: FAIL");
+        r.push(document.documentElement ? "documentElement: PASS" : "documentElement: FAIL");
+        document.getElementById("doc-globals-result").textContent = r.join(" | ");
+        console.log("Test 32 (Doc globals): done");
+    })();
+
+    // ===== Test 33: nodeType =====
+    (function() {
+        var el = document.getElementById("nt-elem");
+        var r = [];
+        r.push(el.nodeType === 1 ? "element nodeType=1: PASS" : "element nodeType: FAIL (" + el.nodeType + ")");
+        r.push(el.firstChild && el.firstChild.nodeType === 3 ? "text nodeType=3: PASS" : "text nodeType: FAIL");
+        document.getElementById("nt-result").textContent = r.join(" | ");
+        console.log("Test 33 (nodeType): done");
+    })();
+
+    // ===== Test 34: tagName / nodeName =====
+    (function() {
+        var d = document.getElementById("tn-div");
+        var p = document.getElementById("tn-p");
+        var r = [];
+        r.push(d.tagName === "DIV" ? "div tagName: PASS" : "div tagName: FAIL (" + d.tagName + ")");
+        r.push(p.tagName === "P" ? "p tagName: PASS" : "p tagName: FAIL (" + p.tagName + ")");
+        r.push(d.nodeName === "DIV" ? "div nodeName: PASS" : "div nodeName: FAIL (" + d.nodeName + ")");
+        document.getElementById("tn-result").textContent = r.join(" | ");
+        console.log("Test 34 (tagName): done");
+    })();
+
+    // ===== Test 35: Toggle chain =====
+    (function() {
+        var el = document.getElementById("tog-chain");
+        var r = [];
+        r.push(el.classList.contains("on") ? "initial on: PASS" : "initial: FAIL");
+        var res1 = el.classList.toggle("on");
+        r.push(!res1 ? "toggle off returns false: PASS" : "toggle off: FAIL");
+        r.push(!el.classList.contains("on") ? "on removed: PASS" : "on not removed: FAIL");
+        var res2 = el.classList.toggle("on");
+        r.push(res2 ? "toggle on returns true: PASS" : "toggle on: FAIL");
+        r.push(el.classList.contains("on") ? "on restored: PASS" : "on not restored: FAIL");
+        document.getElementById("tog-chain-result").textContent = r.join(" | ");
+        console.log("Test 35 (Toggle chain): done");
+    })();
+
+    // ===== Test 36: Rapid DOM mutations =====
+    (function() {
+        var el = document.getElementById("rapid-mut");
+        for (var i = 0; i < 20; i++) {
+            var child = document.createElement("span");
+            child.textContent = "item" + i;
+            child.setAttribute("data-idx", "" + i);
+            el.appendChild(child);
+        }
+        var r = [];
+        r.push(el.children.length === 20 ? "20 children: PASS" : "children: FAIL (" + el.children.length + ")");
+        r.push(el.children[0].textContent === "item0" ? "first=item0: PASS" : "first: FAIL");
+        r.push(el.children[19].textContent === "item19" ? "last=item19: PASS" : "last: FAIL");
+        r.push(el.children[10].getAttribute("data-idx") === "10" ? "mid attr: PASS" : "mid attr: FAIL");
+        document.getElementById("rapid-mut-result").textContent = r.join(" | ");
+        console.log("Test 36 (Rapid mutations): done");
+    })();
+
+    // ===== Test 37: Large NodeList =====
+    (function() {
+        var el = document.getElementById("large-list");
+        el.innerHTML = "";
+        for (var i = 0; i < 50; i++) {
+            var div = document.createElement("div");
+            div.className = "list-item-gen";
+            div.textContent = "Gen-" + i;
+            el.appendChild(div);
+        }
+        var all = el.querySelectorAll(".list-item-gen");
+        var r = [];
+        r.push(all.length === 50 ? "querySelectorAll 50: PASS" : "querySelectorAll: FAIL (" + all.length + ")");
+        var count = 0;
+        all.forEach(function() { count++; });
+        r.push(count === 50 ? "forEach 50: PASS" : "forEach: FAIL (" + count + ")");
+        document.getElementById("large-list-result").textContent = r.join(" | ");
+        console.log("Test 37 (Large NodeList): done");
+    })();
+
+    // ===== Test 38: Overwrite innerHTML =====
+    (function() {
+        var el = document.getElementById("overwrite-ih");
+        var r = [];
+        r.push(el.textContent === "Original content here" ? "original: PASS" : "original: FAIL");
+        el.innerHTML = "<p>First overwrite</p>";
+        r.push(el.textContent === "First overwrite" ? "first overwrite: PASS" : "first overwrite: FAIL ('" + el.textContent + "')");
+        el.innerHTML = "<b>Second</b> overwrite";
+        r.push(el.textContent === "Second overwrite" ? "second overwrite: PASS" : "second overwrite: FAIL ('" + el.textContent + "')");
+        el.innerHTML = "";
+        r.push(el.textContent === "" ? "clear: PASS" : "clear: FAIL");
+        el.innerHTML = "<span>Final</span>";
+        r.push(el.textContent === "Final" ? "final set: PASS" : "final: FAIL");
+        document.getElementById("overwrite-ih-result").textContent = r.join(" | ");
+        console.log("Test 38 (Overwrite innerHTML): done");
+    })();
+
+    // ===== Test 39: Void elements in innerHTML =====
+    (function() {
+        var el = document.getElementById("void-ih");
+        el.innerHTML = "Line1<br>Line2<br>Line3<hr>End";
+        var r = [];
+        r.push(el.children.length >= 3 ? "void elements parsed: PASS (" + el.children.length + " children)" : "void: FAIL (" + el.children.length + ")");
+        r.push(el.textContent.indexOf("Line1") >= 0 ? "Line1 text: PASS" : "Line1: FAIL");
+        r.push(el.textContent.indexOf("End") >= 0 ? "End text: PASS" : "End: FAIL");
+        document.getElementById("void-ih-result").textContent = r.join(" | ");
+        console.log("Test 39 (Void elements): done");
+    })();
+
+    // ===== Test 40: Re-parent node =====
+    (function() {
+        var src = document.getElementById("rp-src");
+        var dst = document.getElementById("rp-dst");
+        var child = document.getElementById("rp-child");
+        var r = [];
+        r.push(src.children.length === 1 ? "src has child: PASS" : "src: FAIL");
+        r.push(child.parentNode.id === "rp-src" ? "parent=src: PASS" : "parent: FAIL");
+        dst.appendChild(child);
+        r.push(dst.children.length === 1 ? "dst has child: PASS" : "dst: FAIL (" + dst.children.length + ")");
+        r.push(src.children.length === 0 ? "src empty: PASS" : "src not empty: FAIL (" + src.children.length + ")");
+        r.push(child.parentNode.id === "rp-dst" ? "new parent=dst: PASS" : "new parent: FAIL (" + child.parentNode.id + ")");
+        document.getElementById("rp-result").textContent = r.join(" | ");
+        console.log("Test 40 (Re-parent): done");
+    })();
+
     // ===== Initial summary =====
-    console.log("=== All 14 test sections initialized ===");
+    console.log("=== All 40 test sections initialized ===");
     console.info("Right-click > Inspect or press F12 to open inspector");
     console.warn("This is a test warning to verify Console tab");
     </script>
