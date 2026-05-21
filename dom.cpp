@@ -374,40 +374,159 @@ DOMNode* Document::getElementById(const std::string& id) const {
 
 // ---- CSS selector matching for DOM tree ----
 
+// Check a single attribute selector condition against a node
+static bool check_attr_selector(const std::string& expr, DOMNode* node) {
+    // expr is contents inside [...], e.g. "attr", "attr=val", "attr^=val", etc.
+    // Find operator position
+    size_t op_pos = std::string::npos;
+    int op_type = 0; // 0=has, 1==, 2=^=, 3=$=, 4=*=, 5=~=
+    for (size_t i = 0; i < expr.size(); ++i) {
+        if (expr[i] == '=' && i > 0 && expr[i-1] == '^') { op_pos = i-1; op_type = 2; break; }
+        if (expr[i] == '=' && i > 0 && expr[i-1] == '$') { op_pos = i-1; op_type = 3; break; }
+        if (expr[i] == '=' && i > 0 && expr[i-1] == '*') { op_pos = i-1; op_type = 4; break; }
+        if (expr[i] == '=' && i > 0 && expr[i-1] == '~') { op_pos = i-1; op_type = 5; break; }
+        if (expr[i] == '=' && (i == 0 || (expr[i-1] != '^' && expr[i-1] != '$' && expr[i-1] != '*' && expr[i-1] != '~')))
+            { op_pos = i; op_type = 1; break; }
+    }
+    if (op_pos == std::string::npos) {
+        // [attr] — has attribute
+        std::string attr = expr;
+        while (!attr.empty() && isspace((unsigned char)attr.back())) attr.pop_back();
+        while (!attr.empty() && isspace((unsigned char)attr.front())) attr.erase(attr.begin());
+        return node->attributes.count(attr) > 0;
+    }
+    std::string attr = expr.substr(0, op_pos);
+    while (!attr.empty() && isspace((unsigned char)attr.back())) attr.pop_back();
+    std::string val_part = expr.substr(op_type == 1 ? op_pos + 1 : op_pos + 2);
+    while (!val_part.empty() && isspace((unsigned char)val_part.front())) val_part.erase(val_part.begin());
+    while (!val_part.empty() && isspace((unsigned char)val_part.back())) val_part.pop_back();
+    // strip quotes
+    if (val_part.size() >= 2 && (val_part.front() == '"' || val_part.front() == '\''))
+        val_part = val_part.substr(1, val_part.size() - 2);
+
+    auto it = node->attributes.find(attr);
+    if (it == node->attributes.end()) return false;
+    const std::string& v = it->second;
+
+    switch (op_type) {
+        case 1: return v == val_part; // exact
+        case 2: return v.size() >= val_part.size() && v.substr(0, val_part.size()) == val_part; // ^=
+        case 3: return v.size() >= val_part.size() && v.substr(v.size() - val_part.size()) == val_part; // $=
+        case 4: return v.find(val_part) != std::string::npos; // *=
+        case 5: { // ~= word match
+            std::string word;
+            for (char c : v) {
+                if (isspace((unsigned char)c)) {
+                    if (word == val_part) return true;
+                    word.clear();
+                } else word += c;
+            }
+            return word == val_part;
+        }
+    }
+    return false;
+}
+
 bool dom_simple_match(const std::string& raw, DOMNode* node) {
     if (raw.empty() || raw == "*") return true;
     if (node->node_type != DOMNode::ELEMENT) return false;
 
-    // strip pseudo-class
-    std::string tok = raw;
-    size_t colon = tok.find(':');
-    if (colon != std::string::npos) tok = tok.substr(0, colon);
-    if (tok.empty()) return true;
-
-    if (tok[0] == '#') return node->id == tok.substr(1);
-
-    // parse tag.class1.class2
-    std::string tag_part;
-    std::vector<std::string> req_cls;
-    size_t i = 0;
-    if (tok[i] != '.') {
-        size_t d = tok.find('.');
-        tag_part = tok.substr(0, d);
-        if (d != std::string::npos) i = d + 1; else i = tok.size();
-    } else {
-        ++i;
+    // Extract and check attribute selectors and pseudo-classes
+    std::string base;
+    std::vector<std::string> attr_sels;
+    std::vector<std::string> pseudos;
+    size_t i = 0, n = raw.size();
+    while (i < n) {
+        if (raw[i] == '[') {
+            ++i; size_t start = i;
+            int depth = 1;
+            while (i < n && depth > 0) { if (raw[i]=='[') ++depth; else if (raw[i]==']') --depth; ++i; }
+            attr_sels.push_back(raw.substr(start, i - 1 - start));
+        } else if (raw[i] == ':') {
+            ++i;
+            size_t start = i;
+            // Collect pseudo name
+            while (i < n && raw[i] != '(' && raw[i] != '.' && raw[i] != '#' && raw[i] != '[' && raw[i] != ':')
+                ++i;
+            std::string pname = raw.substr(start, i - start);
+            std::string parg;
+            if (i < n && raw[i] == '(') {
+                ++i; int d = 1; size_t as = i;
+                while (i < n && d > 0) { if (raw[i]=='(') ++d; else if (raw[i]==')') --d; ++i; }
+                parg = raw.substr(as, i - 1 - as);
+            }
+            pseudos.push_back(pname + (parg.empty() ? "" : "(" + parg + ")"));
+        } else {
+            base += raw[i++];
+        }
     }
-    while (i <= tok.size()) {
-        size_t d = tok.find('.', i);
-        std::string c = tok.substr(i, d == std::string::npos ? std::string::npos : d - i);
-        if (!c.empty()) req_cls.push_back(c);
-        if (d == std::string::npos) break;
-        i = d + 1;
+
+    // Match base selector (tag#id.class1.class2)
+    if (!base.empty() && base != "*") {
+        if (base[0] == '#') {
+            if (node->id != base.substr(1)) return false;
+        } else {
+            std::string tag_part;
+            std::vector<std::string> req_cls;
+            size_t bi = 0;
+            // check for #id in base
+            size_t hash = base.find('#');
+            std::string base_no_id = base;
+            if (hash != std::string::npos) {
+                std::string id_part;
+                size_t end_id = hash + 1;
+                while (end_id < base.size() && base[end_id] != '.') ++end_id;
+                id_part = base.substr(hash + 1, end_id - hash - 1);
+                if (node->id != id_part) return false;
+                base_no_id = base.substr(0, hash) + base.substr(end_id);
+            }
+            if (!base_no_id.empty() && base_no_id[0] != '.') {
+                size_t d = base_no_id.find('.');
+                tag_part = base_no_id.substr(0, d);
+                if (d != std::string::npos) bi = d + 1; else bi = base_no_id.size();
+            } else if (!base_no_id.empty()) { bi = 1; }
+            while (bi <= base_no_id.size()) {
+                size_t d = base_no_id.find('.', bi);
+                std::string c = base_no_id.substr(bi, d == std::string::npos ? std::string::npos : d - bi);
+                if (!c.empty()) req_cls.push_back(c);
+                if (d == std::string::npos) break;
+                bi = d + 1;
+            }
+            if (!tag_part.empty() && node->tag_name != tag_part) return false;
+            for (const auto& c : req_cls)
+                if (!node->hasClass(c)) return false;
+        }
     }
 
-    if (!tag_part.empty() && node->tag_name != tag_part) return false;
-    for (const auto& c : req_cls)
-        if (!node->hasClass(c)) return false;
+    // Check attribute selectors
+    for (const auto& as : attr_sels)
+        if (!check_attr_selector(as, node)) return false;
+
+    // Check pseudo-classes
+    for (const auto& ps : pseudos) {
+        if (ps == "first-child") {
+            if (!node->parent) return false;
+            bool is_first = true;
+            for (auto& c : node->parent->children) {
+                if (c->node_type == DOMNode::ELEMENT) { is_first = (c.get() == node); break; }
+            }
+            if (!is_first) return false;
+        } else if (ps == "last-child") {
+            if (!node->parent) return false;
+            bool is_last = true;
+            for (int j = (int)node->parent->children.size() - 1; j >= 0; --j) {
+                if (node->parent->children[j]->node_type == DOMNode::ELEMENT) {
+                    is_last = (node->parent->children[j].get() == node); break;
+                }
+            }
+            if (!is_last) return false;
+        } else if (ps.substr(0, 4) == "not(") {
+            std::string inner = ps.substr(4, ps.size() - 5);
+            if (dom_simple_match(inner, node)) return false; // :not matches if inner doesn't
+        }
+        // other pseudo-classes: silently ignore (hover, focus, etc.)
+    }
+
     return true;
 }
 

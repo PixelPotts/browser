@@ -542,13 +542,34 @@ struct StackEntry {
     std::string href; // non-empty for <a> elements
 };
 
-// Match a single simple selector token (tag, .class, #id, tag.class, .a.b, with optional :pseudo)
+// Strip attribute selectors [attr...] and pseudo-classes from a simple selector,
+// returning the base selector part (tag.class#id)
+static std::string strip_selector_extras(const std::string& raw) {
+    std::string result;
+    size_t i = 0, n = raw.size();
+    while (i < n) {
+        if (raw[i] == '[') {
+            int depth = 1; ++i;
+            while (i < n && depth > 0) { if (raw[i]=='[') ++depth; else if (raw[i]==']') --depth; ++i; }
+        } else if (raw[i] == ':') {
+            // skip pseudo-class (including :not(...))
+            ++i;
+            if (i < n && raw[i] == ':') ++i; // ::pseudo-element
+            while (i < n && raw[i] != '.' && raw[i] != '#' && raw[i] != '[' && raw[i] != ':') {
+                if (raw[i] == '(') { int d=1; ++i; while(i<n&&d>0){if(raw[i]=='(')++d;else if(raw[i]==')')--d;++i;} }
+                else ++i;
+            }
+        } else {
+            result += raw[i++];
+        }
+    }
+    return result;
+}
+
+// Match a single simple selector token (tag, .class, #id, tag.class, .a.b, with optional :pseudo and [attr])
 static bool simple_match(const std::string& raw, const StackEntry& e) {
     if (raw.empty() || raw=="*") return true;
-    // strip pseudo-class
-    std::string tok = raw;
-    size_t colon = tok.find(':');
-    if (colon != std::string::npos) tok = tok.substr(0, colon);
+    std::string tok = strip_selector_extras(raw);
     if (tok.empty()) return true;
     if (tok[0]=='#') return e.id == tok.substr(1);
     // parse tag part and class parts from e.g. "div.foo.bar" or ".foo.bar" or "div"
