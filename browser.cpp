@@ -11,6 +11,7 @@
 #include <cstring>
 #include <memory>
 #include "dom.h"
+#include "js_engine.h"
 
 // ---- curl ----
 
@@ -1129,6 +1130,9 @@ struct AppState {
 
     // DOM tree for current page
     std::shared_ptr<Document> document;
+
+    // JS engine for current page
+    JSEngine* js_engine = nullptr;
 };
 
 // ---- block container builder (main thread only) ----
@@ -1603,11 +1607,48 @@ static void fetch_page(AppState* st, std::string url, int gen) {
 
     auto doc = parse_html_to_dom(buf.data, fetch_url);
 
-    idle_add([st, gen, url, doc]() {
+    // Fetch external scripts synchronously (blocking, matches <script src> behavior)
+    std::vector<std::string> external_scripts;
+    for (const auto& src_url : doc->script_srcs) {
+        if (gen != st->generation) return;
+        Buf sbuf;
+        if (fetch(src_url, sbuf)) {
+            external_scripts.push_back(std::move(sbuf.data));
+        } else {
+            fprintf(stderr, "[script] Failed to fetch: %s\n", src_url.c_str());
+        }
+    }
+
+    idle_add([st, gen, url, doc, external_scripts=std::move(external_scripts)]() {
         if (gen != st->generation) return;
         gtk_window_set_title(GTK_WINDOW(st->window), url.c_str());
         st->document = doc;
         render_dom_to_gtk(st, doc.get(), gen);
+
+        // Destroy previous JS engine
+        if (st->js_engine) {
+            delete st->js_engine;
+            st->js_engine = nullptr;
+        }
+
+        // Create JS engine and run scripts
+        auto* engine = new JSEngine();
+        st->js_engine = engine;
+        engine->init(st, doc.get());
+
+        // Execute external scripts first (in document order they were found)
+        for (size_t i = 0; i < external_scripts.size(); i++) {
+            std::string fname = i < doc->script_srcs.size() ? doc->script_srcs[i] : "<external>";
+            engine->eval(external_scripts[i], fname);
+        }
+
+        // Execute inline scripts
+        for (size_t i = 0; i < doc->scripts.size(); i++) {
+            engine->eval(doc->scripts[i], "<script>");
+        }
+
+        // Execute pending microtasks after all scripts
+        engine->executePendingJobs();
     });
 }
 
@@ -1624,6 +1665,13 @@ static void load_url(AppState* st, const std::string& url) {
 
     int gen;
     { std::lock_guard<std::mutex> lk(st->mu); gen = ++st->generation; }
+
+    // destroy JS engine from previous page
+    if (st->js_engine) {
+        delete st->js_engine;
+        st->js_engine = nullptr;
+    }
+    st->document.reset();
 
     // clean up previous body styles from content_box
     if (st->body_draw_signal) {
