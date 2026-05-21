@@ -1401,13 +1401,17 @@ struct AppState {
 
 // ---- block container builder (main thread only) ----
 
+static bool has_css_var(const std::string& s) {
+    return s.find("var(") != std::string::npos;
+}
+
 static GtkWidget* make_block(const BoxModel& box, GtkWidget* parent,
                               GtkOrientation orient = GTK_ORIENTATION_VERTICAL,
                               bool to_end = false) {
     GtkWidget* outer = gtk_box_new(orient, 0);
     {
         std::string props;
-        if (!box.bg_color.empty())
+        if (!box.bg_color.empty() && !has_css_var(box.bg_color))
             props += "background-color: " + box.bg_color + "; ";
         if (box.border_radius > 0)
             props += "border-radius: " + std::to_string(box.border_radius) + "px; ";
@@ -1415,19 +1419,21 @@ static GtkWidget* make_block(const BoxModel& box, GtkWidget* parent,
         if (has_border) {
             std::string bstyle = box.border_style.empty() ? "solid" : box.border_style;
             std::string bcolor = box.border_color.empty() ? "currentColor" : box.border_color;
-            bool uniform = (box.border_width[0]==box.border_width[1] &&
-                            box.border_width[1]==box.border_width[2] &&
-                            box.border_width[2]==box.border_width[3]);
-            if (uniform)
-                props += "border: " + std::to_string(box.border_width[0]) + "px " + bstyle + " " + bcolor + "; ";
-            else {
-                static const char* sides[4] = {"top","right","bottom","left"};
-                for (int i=0;i<4;++i) if (box.border_width[i]>0)
-                    props += "border-" + std::string(sides[i]) + ": "
-                           + std::to_string(box.border_width[i]) + "px " + bstyle + " " + bcolor + "; ";
+            if (!has_css_var(bcolor)) {
+                bool uniform = (box.border_width[0]==box.border_width[1] &&
+                                box.border_width[1]==box.border_width[2] &&
+                                box.border_width[2]==box.border_width[3]);
+                if (uniform)
+                    props += "border: " + std::to_string(box.border_width[0]) + "px " + bstyle + " " + bcolor + "; ";
+                else {
+                    static const char* sides[4] = {"top","right","bottom","left"};
+                    for (int i=0;i<4;++i) if (box.border_width[i]>0)
+                        props += "border-" + std::string(sides[i]) + ": "
+                               + std::to_string(box.border_width[i]) + "px " + bstyle + " " + bcolor + "; ";
+                }
             }
         }
-        if (!box.box_shadow.empty())
+        if (!box.box_shadow.empty() && !has_css_var(box.box_shadow))
             props += "box-shadow: " + box.box_shadow + "; ";
         if (!props.empty()) {
             GtkCssProvider* cp = gtk_css_provider_new();

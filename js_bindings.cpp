@@ -114,6 +114,11 @@ static JSValue js_element_get_id(JSContext* ctx, JSValueConst this_val) {
     return JS_NewString(ctx, node->id.c_str());
 }
 
+static JSValue js_noop_setter(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    (void)ctx; (void)this_val; (void)argc; (void)argv;
+    return JS_UNDEFINED;
+}
+
 static JSValue js_element_set_id(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     DOMNode* node = js_get_node(ctx, this_val);
     if (!node || argc < 1) return JS_UNDEFINED;
@@ -846,15 +851,15 @@ void js_bindings_init(JSEngine* engine) {
     JS_DefinePropertyGetSet(ctx, elem_proto,
         JS_NewAtom(ctx, "tagName"),
         JS_NewCFunction(ctx, (JSCFunction*)js_element_get_tagName, "get tagName", 0),
-        JS_UNDEFINED, JS_PROP_CONFIGURABLE);
+        JS_NewCFunction(ctx, js_noop_setter, "set tagName", 1), JS_PROP_CONFIGURABLE);
     JS_DefinePropertyGetSet(ctx, elem_proto,
         JS_NewAtom(ctx, "nodeName"),
         JS_NewCFunction(ctx, (JSCFunction*)js_element_get_nodeName, "get nodeName", 0),
-        JS_UNDEFINED, JS_PROP_CONFIGURABLE);
+        JS_NewCFunction(ctx, js_noop_setter, "set nodeName", 1), JS_PROP_CONFIGURABLE);
     JS_DefinePropertyGetSet(ctx, elem_proto,
         JS_NewAtom(ctx, "nodeType"),
         JS_NewCFunction(ctx, (JSCFunction*)js_element_get_nodeType, "get nodeType", 0),
-        JS_UNDEFINED, JS_PROP_CONFIGURABLE);
+        JS_NewCFunction(ctx, js_noop_setter, "set nodeType", 1), JS_PROP_CONFIGURABLE);
     JS_DefinePropertyGetSet(ctx, elem_proto,
         JS_NewAtom(ctx, "textContent"),
         JS_NewCFunction(ctx, (JSCFunction*)js_element_get_textContent, "get textContent", 0),
@@ -873,39 +878,39 @@ void js_bindings_init(JSEngine* engine) {
     JS_DefinePropertyGetSet(ctx, elem_proto,
         JS_NewAtom(ctx, "parentNode"),
         JS_NewCFunction(ctx, (JSCFunction*)js_element_get_parentNode, "get parentNode", 0),
-        JS_UNDEFINED, JS_PROP_CONFIGURABLE);
+        JS_NewCFunction(ctx, js_noop_setter, "set parentNode", 1), JS_PROP_CONFIGURABLE);
     JS_DefinePropertyGetSet(ctx, elem_proto,
         JS_NewAtom(ctx, "parentElement"),
         JS_NewCFunction(ctx, (JSCFunction*)js_element_get_parentNode, "get parentElement", 0),
-        JS_UNDEFINED, JS_PROP_CONFIGURABLE);
+        JS_NewCFunction(ctx, js_noop_setter, "set parentElement", 1), JS_PROP_CONFIGURABLE);
     JS_DefinePropertyGetSet(ctx, elem_proto,
         JS_NewAtom(ctx, "children"),
         JS_NewCFunction(ctx, (JSCFunction*)js_element_get_children, "get children", 0),
-        JS_UNDEFINED, JS_PROP_CONFIGURABLE);
+        JS_NewCFunction(ctx, js_noop_setter, "set children", 1), JS_PROP_CONFIGURABLE);
     JS_DefinePropertyGetSet(ctx, elem_proto,
         JS_NewAtom(ctx, "childNodes"),
         JS_NewCFunction(ctx, (JSCFunction*)js_element_get_childNodes, "get childNodes", 0),
-        JS_UNDEFINED, JS_PROP_CONFIGURABLE);
+        JS_NewCFunction(ctx, js_noop_setter, "set childNodes", 1), JS_PROP_CONFIGURABLE);
     JS_DefinePropertyGetSet(ctx, elem_proto,
         JS_NewAtom(ctx, "firstChild"),
         JS_NewCFunction(ctx, (JSCFunction*)js_element_get_firstChild, "get firstChild", 0),
-        JS_UNDEFINED, JS_PROP_CONFIGURABLE);
+        JS_NewCFunction(ctx, js_noop_setter, "set firstChild", 1), JS_PROP_CONFIGURABLE);
     JS_DefinePropertyGetSet(ctx, elem_proto,
         JS_NewAtom(ctx, "lastChild"),
         JS_NewCFunction(ctx, (JSCFunction*)js_element_get_lastChild, "get lastChild", 0),
-        JS_UNDEFINED, JS_PROP_CONFIGURABLE);
+        JS_NewCFunction(ctx, js_noop_setter, "set lastChild", 1), JS_PROP_CONFIGURABLE);
     JS_DefinePropertyGetSet(ctx, elem_proto,
         JS_NewAtom(ctx, "nextSibling"),
         JS_NewCFunction(ctx, (JSCFunction*)js_element_get_nextSibling, "get nextSibling", 0),
-        JS_UNDEFINED, JS_PROP_CONFIGURABLE);
+        JS_NewCFunction(ctx, js_noop_setter, "set nextSibling", 1), JS_PROP_CONFIGURABLE);
     JS_DefinePropertyGetSet(ctx, elem_proto,
         JS_NewAtom(ctx, "style"),
         JS_NewCFunction(ctx, (JSCFunction*)js_element_get_style, "get style", 0),
-        JS_UNDEFINED, JS_PROP_CONFIGURABLE);
+        JS_NewCFunction(ctx, js_noop_setter, "set style", 1), JS_PROP_CONFIGURABLE);
     JS_DefinePropertyGetSet(ctx, elem_proto,
         JS_NewAtom(ctx, "classList"),
         JS_NewCFunction(ctx, (JSCFunction*)js_element_get_classList, "get classList", 0),
-        JS_UNDEFINED, JS_PROP_CONFIGURABLE);
+        JS_NewCFunction(ctx, js_noop_setter, "set classList", 1), JS_PROP_CONFIGURABLE);
 
     // Form properties
     JS_DefinePropertyGetSet(ctx, elem_proto,
@@ -931,7 +936,7 @@ void js_bindings_init(JSEngine* engine) {
     JS_DefinePropertyGetSet(ctx, elem_proto,
         JS_NewAtom(ctx, "type"),
         JS_NewCFunction(ctx, (JSCFunction*)js_element_get_type, "get type", 0),
-        JS_UNDEFINED, JS_PROP_CONFIGURABLE);
+        JS_NewCFunction(ctx, js_noop_setter, "set type", 1), JS_PROP_CONFIGURABLE);
 
     // Methods
     JS_SetPropertyStr(ctx, elem_proto, "getAttribute",

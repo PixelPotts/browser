@@ -910,6 +910,21 @@ HTMLCollection.prototype = { length: 0, item: function(i) { return this[i] || nu
 globalThis.Window = function Window() {};
 Window.prototype = {};
 
+// HTML*Element constructor stubs
+['HTMLDivElement','HTMLSpanElement','HTMLIFrameElement','HTMLFormElement',
+ 'HTMLInputElement','HTMLSelectElement','HTMLOptionElement','HTMLTextAreaElement',
+ 'HTMLButtonElement','HTMLAnchorElement','HTMLImageElement','HTMLScriptElement',
+ 'HTMLLinkElement','HTMLStyleElement','HTMLTableElement','HTMLCanvasElement',
+ 'HTMLVideoElement','HTMLAudioElement','HTMLMediaElement','HTMLLabelElement',
+ 'HTMLUListElement','HTMLOListElement','HTMLLIElement','HTMLParagraphElement',
+ 'HTMLHeadingElement','HTMLBRElement','HTMLHRElement','HTMLPreElement',
+ 'HTMLBodyElement','HTMLHeadElement','HTMLMetaElement','HTMLTitleElement'
+].forEach(function(n) {
+    globalThis[n] = function() {};
+    globalThis[n].prototype = Object.create(HTMLElement.prototype);
+    globalThis[n].prototype.constructor = globalThis[n];
+});
+
 // Misc constructors that libraries check for
 globalThis.CSSStyleDeclaration = function CSSStyleDeclaration() {};
 CSSStyleDeclaration.prototype = { getPropertyValue: function() { return ''; }, setProperty: function() {}, removeProperty: function() {} };
@@ -1102,27 +1117,36 @@ bool JSEngine::eval(const std::string& code, const std::string& filename) {
     if (JS_IsException(result)) {
         JSValue exc = JS_GetException(ctx);
         std::string err_msg;
+        bool is_syntax_error = false;
         const char* str = JS_ToCString(ctx, exc);
         if (str) {
             err_msg = str;
-            fprintf(stderr, "[JS Error] %s\n", str);
+            if (strncmp(str, "SyntaxError", 11) == 0)
+                is_syntax_error = true;
+            if (is_syntax_error)
+                fprintf(stderr, "[JS SyntaxError] %s\n", str);
+            else
+                fprintf(stderr, "[JS Error] %s\n", str);
             JS_FreeCString(ctx, str);
         }
         // Print stack trace if available
-        JSValue stack = JS_GetPropertyStr(ctx, exc, "stack");
-        if (!JS_IsUndefined(stack)) {
-            const char* stack_str = JS_ToCString(ctx, stack);
-            if (stack_str) {
-                err_msg += "\n";
-                err_msg += stack_str;
-                fprintf(stderr, "%s\n", stack_str);
-                JS_FreeCString(ctx, stack_str);
+        if (!is_syntax_error) {
+            JSValue stack = JS_GetPropertyStr(ctx, exc, "stack");
+            if (!JS_IsUndefined(stack)) {
+                const char* stack_str = JS_ToCString(ctx, stack);
+                if (stack_str) {
+                    err_msg += "\n";
+                    err_msg += stack_str;
+                    fprintf(stderr, "%s\n", stack_str);
+                    JS_FreeCString(ctx, stack_str);
+                }
             }
+            JS_FreeValue(ctx, stack);
         }
-        JS_FreeValue(ctx, stack);
         JS_FreeValue(ctx, exc);
         JS_FreeValue(ctx, result);
-        addConsoleEntry(ConsoleLevel::ERROR, err_msg, filename);
+        if (!is_syntax_error)
+            addConsoleEntry(ConsoleLevel::ERROR, err_msg, filename);
         return false;
     }
     JS_FreeValue(ctx, result);
