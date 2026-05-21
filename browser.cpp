@@ -1134,6 +1134,18 @@ struct AppState {
 
     // JS engine for current page
     JSEngine* js_engine = nullptr;
+
+    // Raw page source for inspector Elements tab
+    std::string page_source;
+
+    // Inspector panel
+    GtkWidget* paned = nullptr;          // main horizontal pane
+    GtkWidget* inspector_box = nullptr;  // the right panel container
+    GtkWidget* inspector_notebook = nullptr; // tabs: Console, Elements
+    GtkWidget* console_text_view = nullptr;  // Console tab text view
+    GtkWidget* elements_text_view = nullptr; // Elements tab text view
+    bool inspector_visible = false;
+    int inspector_width = 500;
 };
 
 // ---- block container builder (main thread only) ----
@@ -1259,10 +1271,194 @@ static gboolean draw_bg(GtkWidget* w, cairo_t* cr, gpointer) {
     return FALSE;
 }
 
+// ---- Inspector panel helpers ----
+
+static void inspector_update_elements(AppState* st) {
+    if (!st->elements_text_view) return;
+    GtkTextBuffer* buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(st->elements_text_view));
+    gtk_text_buffer_set_text(buf, st->page_source.c_str(), (gint)st->page_source.size());
+}
+
+static void inspector_append_console_entry(AppState* st, const ConsoleEntry& entry) {
+    if (!st->console_text_view) return;
+    GtkTextBuffer* buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(st->console_text_view));
+    GtkTextIter end;
+    gtk_text_buffer_get_end_iter(buf, &end);
+
+    // Pick tag based on level
+    const char* tag_name = nullptr;
+    const char* prefix = "";
+    switch (entry.level) {
+        case ConsoleLevel::ERROR: tag_name = "error"; prefix = "\u2718 "; break;
+        case ConsoleLevel::WARN:  tag_name = "warn";  prefix = "\u26A0 "; break;
+        case ConsoleLevel::INFO:  tag_name = "info";  prefix = "\u2139 "; break;
+        case ConsoleLevel::LOG:   tag_name = "log";   break;
+    }
+
+    // Build the line
+    std::string line;
+    if (prefix[0]) line += prefix;
+    line += entry.message;
+    if (!entry.source.empty()) line += "  (" + entry.source + ")";
+    line += "\n";
+
+    if (tag_name) {
+        gtk_text_buffer_insert_with_tags_by_name(buf, &end, line.c_str(), -1, tag_name, nullptr);
+    } else {
+        gtk_text_buffer_insert(buf, &end, line.c_str(), -1);
+    }
+
+    // Auto-scroll to bottom
+    gtk_text_buffer_get_end_iter(buf, &end);
+    GtkTextMark* mark = gtk_text_buffer_get_mark(buf, "end_mark");
+    if (!mark) {
+        mark = gtk_text_buffer_create_mark(buf, "end_mark", &end, FALSE);
+    } else {
+        gtk_text_buffer_move_mark(buf, mark, &end);
+    }
+    gtk_text_view_scroll_mark_onscreen(GTK_TEXT_VIEW(st->console_text_view), mark);
+}
+
+static void inspector_refresh_console(AppState* st) {
+    if (!st->console_text_view) return;
+    GtkTextBuffer* buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(st->console_text_view));
+    gtk_text_buffer_set_text(buf, "", 0);
+    if (st->js_engine) {
+        for (const auto& entry : st->js_engine->console_log) {
+            inspector_append_console_entry(st, entry);
+        }
+    }
+}
+
+static void inspector_create_panel(AppState* st) {
+    // Create the inspector container
+    st->inspector_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_widget_set_size_request(st->inspector_box, 200, -1); // minimum width
+
+    // Apply dark background style
+    GtkCssProvider* css = gtk_css_provider_new();
+    gtk_css_provider_load_from_data(css,
+        "notebook, notebook tab, notebook header { background: #1e1e1e; color: #ccc; }"
+        "notebook tab:checked { background: #2d2d2d; color: #fff; }"
+        "textview, textview text { background-color: #1e1e1e; color: #d4d4d4; "
+        "  font-family: monospace; font-size: 9pt; }", -1, nullptr);
+    gtk_style_context_add_provider(gtk_widget_get_style_context(st->inspector_box),
+        GTK_STYLE_PROVIDER(css), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+
+    // Create notebook (tabs)
+    st->inspector_notebook = gtk_notebook_new();
+    gtk_notebook_set_tab_pos(GTK_NOTEBOOK(st->inspector_notebook), GTK_POS_TOP);
+    gtk_style_context_add_provider(
+        gtk_widget_get_style_context(st->inspector_notebook),
+        GTK_STYLE_PROVIDER(css), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+
+    // ---- Console tab ----
+    GtkWidget* console_scroll = gtk_scrolled_window_new(nullptr, nullptr);
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(console_scroll),
+        GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
+    st->console_text_view = gtk_text_view_new();
+    gtk_text_view_set_editable(GTK_TEXT_VIEW(st->console_text_view), FALSE);
+    gtk_text_view_set_cursor_visible(GTK_TEXT_VIEW(st->console_text_view), FALSE);
+    gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(st->console_text_view), GTK_WRAP_WORD_CHAR);
+    gtk_text_view_set_left_margin(GTK_TEXT_VIEW(st->console_text_view), 6);
+    gtk_text_view_set_top_margin(GTK_TEXT_VIEW(st->console_text_view), 4);
+
+    // Apply style to console text view
+    gtk_style_context_add_provider(gtk_widget_get_style_context(st->console_text_view),
+        GTK_STYLE_PROVIDER(css), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+
+    // Create text tags for different log levels
+    GtkTextBuffer* cbuf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(st->console_text_view));
+    gtk_text_buffer_create_tag(cbuf, "error", "foreground", "#f44747", nullptr);
+    gtk_text_buffer_create_tag(cbuf, "warn", "foreground", "#cca700", nullptr);
+    gtk_text_buffer_create_tag(cbuf, "info", "foreground", "#3794ff", nullptr);
+    gtk_text_buffer_create_tag(cbuf, "log", "foreground", "#d4d4d4", nullptr);
+
+    gtk_container_add(GTK_CONTAINER(console_scroll), st->console_text_view);
+    gtk_notebook_append_page(GTK_NOTEBOOK(st->inspector_notebook),
+        console_scroll, gtk_label_new("Console"));
+
+    // ---- Elements tab ----
+    GtkWidget* elements_scroll = gtk_scrolled_window_new(nullptr, nullptr);
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(elements_scroll),
+        GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
+    st->elements_text_view = gtk_text_view_new();
+    gtk_text_view_set_editable(GTK_TEXT_VIEW(st->elements_text_view), FALSE);
+    gtk_text_view_set_cursor_visible(GTK_TEXT_VIEW(st->elements_text_view), FALSE);
+    gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(st->elements_text_view), GTK_WRAP_WORD_CHAR);
+    gtk_text_view_set_left_margin(GTK_TEXT_VIEW(st->elements_text_view), 6);
+    gtk_text_view_set_top_margin(GTK_TEXT_VIEW(st->elements_text_view), 4);
+
+    // Apply style to elements text view
+    gtk_style_context_add_provider(gtk_widget_get_style_context(st->elements_text_view),
+        GTK_STYLE_PROVIDER(css), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+
+    gtk_container_add(GTK_CONTAINER(elements_scroll), st->elements_text_view);
+    gtk_notebook_append_page(GTK_NOTEBOOK(st->inspector_notebook),
+        elements_scroll, gtk_label_new("Elements"));
+
+    g_object_unref(css);
+
+    gtk_box_pack_start(GTK_BOX(st->inspector_box), st->inspector_notebook, TRUE, TRUE, 0);
+}
+
+static void inspector_show(AppState* st) {
+    if (st->inspector_visible) return;
+    if (!st->inspector_box) inspector_create_panel(st);
+
+    // Add inspector to right side of paned
+    gtk_paned_pack2(GTK_PANED(st->paned), st->inspector_box, FALSE, FALSE);
+
+    // Set the divider position (window width - inspector width)
+    int win_w;
+    gtk_window_get_size(GTK_WINDOW(st->window), &win_w, nullptr);
+    gtk_paned_set_position(GTK_PANED(st->paned), win_w - st->inspector_width);
+
+    gtk_widget_show_all(st->inspector_box);
+    st->inspector_visible = true;
+
+    // Populate content
+    inspector_update_elements(st);
+    inspector_refresh_console(st);
+
+    // Wire up console entry callback
+    if (st->js_engine) {
+        st->js_engine->on_console_entry = [st]() {
+            if (st->js_engine && !st->js_engine->console_log.empty()) {
+                inspector_append_console_entry(st, st->js_engine->console_log.back());
+            }
+        };
+    }
+}
+
+static void inspector_hide(AppState* st) {
+    if (!st->inspector_visible) return;
+
+    // Save current width
+    int win_w;
+    gtk_window_get_size(GTK_WINDOW(st->window), &win_w, nullptr);
+    int pos = gtk_paned_get_position(GTK_PANED(st->paned));
+    st->inspector_width = win_w - pos;
+    if (st->inspector_width < 200) st->inspector_width = 200;
+
+    // Remove from paned (but don't destroy)
+    g_object_ref(st->inspector_box);
+    gtk_container_remove(GTK_CONTAINER(st->paned), st->inspector_box);
+
+    // Disconnect console callback
+    if (st->js_engine) st->js_engine->on_console_entry = nullptr;
+
+    st->inspector_visible = false;
+}
+
+static void inspector_toggle(AppState* st) {
+    if (st->inspector_visible) inspector_hide(st);
+    else inspector_show(st);
+}
+
 static void on_inspect(GtkMenuItem*, gpointer d) {
     auto* st = static_cast<AppState*>(d);
-    if (!st->current_url.empty() && st->current_url.substr(0,12)!="view-source:")
-        navigate(st, "view-source:"+st->current_url);
+    inspector_toggle(st);
 }
 static gboolean on_content_click(GtkWidget*, GdkEventButton* ev, gpointer d) {
     if (ev->button!=3 || ev->type!=GDK_BUTTON_PRESS) return FALSE;
@@ -1672,6 +1868,7 @@ static void fetch_page(AppState* st, std::string url, int gen) {
         return;
     }
 
+    std::string raw_source = buf.data;  // save raw source for inspector
     auto doc = parse_html_to_dom(buf.data, fetch_url);
 
     // Fetch external scripts synchronously (blocking, matches <script src> behavior)
@@ -1686,10 +1883,12 @@ static void fetch_page(AppState* st, std::string url, int gen) {
         }
     }
 
-    idle_add([st, gen, url, doc, external_scripts=std::move(external_scripts)]() {
+    idle_add([st, gen, url, doc, raw_source=std::move(raw_source),
+              external_scripts=std::move(external_scripts)]() {
         if (gen != st->generation) return;
         gtk_window_set_title(GTK_WINDOW(st->window), url.c_str());
         st->document = doc;
+        st->page_source = raw_source;
         render_dom_to_gtk(st, doc.get(), gen);
 
         // Destroy previous JS engine
@@ -1702,6 +1901,17 @@ static void fetch_page(AppState* st, std::string url, int gen) {
         auto* engine = new JSEngine();
         st->js_engine = engine;
         engine->init(st, doc.get());
+
+        // Wire up inspector console callback if inspector is open
+        if (st->inspector_visible) {
+            engine->on_console_entry = [st]() {
+                if (st->js_engine && !st->js_engine->console_log.empty()) {
+                    inspector_append_console_entry(st, st->js_engine->console_log.back());
+                }
+            };
+            inspector_update_elements(st);
+            inspector_refresh_console(st);
+        }
 
         // Execute external scripts first (in document order they were found)
         for (size_t i = 0; i < external_scripts.size(); i++) {
@@ -1844,10 +2054,14 @@ int main(int argc, char** argv) {
     gtk_box_pack_start(GTK_BOX(bar), go_btn, FALSE, FALSE, 4);
     g_signal_connect(go_btn, "clicked", G_CALLBACK(on_go), st);
 
+    // Horizontal paned: left = page content, right = inspector (when open)
+    st->paned = gtk_paned_new(GTK_ORIENTATION_HORIZONTAL);
+    gtk_box_pack_start(GTK_BOX(root), st->paned, TRUE, TRUE, 0);
+
     GtkWidget* scroll = gtk_scrolled_window_new(nullptr, nullptr);
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll),
         GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
-    gtk_box_pack_start(GTK_BOX(root), scroll, TRUE, TRUE, 0);
+    gtk_paned_pack1(GTK_PANED(st->paned), scroll, TRUE, FALSE);
 
     GtkWidget* viewport = gtk_viewport_new(nullptr, nullptr);
     gtk_container_add(GTK_CONTAINER(scroll), viewport);
@@ -1859,6 +2073,16 @@ int main(int argc, char** argv) {
     gtk_widget_set_hexpand(st->content_box, TRUE);
     gtk_widget_set_vexpand(st->content_box, TRUE);
     gtk_container_add(GTK_CONTAINER(viewport), st->content_box);
+
+    // F12 to toggle inspector
+    g_signal_connect(st->window, "key-press-event",
+        G_CALLBACK(+[](GtkWidget*, GdkEventKey* ev, gpointer d) -> gboolean {
+            if (ev->keyval == GDK_KEY_F12) {
+                inspector_toggle(static_cast<AppState*>(d));
+                return TRUE;
+            }
+            return FALSE;
+        }), st);
 
     gtk_widget_show_all(st->window);
     navigate(st, "mattmontag.com");

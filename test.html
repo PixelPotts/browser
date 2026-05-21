@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>JS Engine Test Page</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+            color: #333;
+        }
+        h1 { color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 8px; }
+        h2 { color: #2980b9; margin-top: 20px; }
+        .test-section {
+            background: white;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            padding: 15px;
+            margin-bottom: 15px;
+        }
+        .pass { color: #27ae60; font-weight: bold; }
+        .fail { color: #e74c3c; font-weight: bold; }
+        button {
+            background-color: #3498db;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            margin: 4px;
+            cursor: pointer;
+        }
+        button:hover { background-color: #2980b9; }
+        .counter-display {
+            font-size: 24px;
+            font-weight: bold;
+            color: #8e44ad;
+            margin: 10px 0;
+        }
+        #todo-list { list-style: none; padding: 0; }
+        #todo-list li {
+            padding: 8px;
+            margin: 4px 0;
+            background: #ecf0f1;
+            border-radius: 4px;
+        }
+        .color-box {
+            width: 100px;
+            height: 50px;
+            display: inline-block;
+            border: 1px solid #999;
+            margin: 4px;
+            border-radius: 4px;
+        }
+        #timer-display {
+            font-size: 18px;
+            color: #e67e22;
+            font-weight: bold;
+        }
+        .hidden { display: none; }
+        #fetch-result {
+            background: #2c3e50;
+            color: #2ecc71;
+            padding: 10px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+            min-height: 40px;
+        }
+    </style>
+</head>
+<body>
+    <h1>JavaScript Engine Test Suite</h1>
+
+    <!-- Test 1: DOM Queries -->
+    <div class="test-section">
+        <h2>1. DOM Queries</h2>
+        <div id="query-target">I am the query target</div>
+        <div class="query-class">Class query A</div>
+        <div class="query-class">Class query B</div>
+        <p id="query-result">Waiting...</p>
+    </div>
+
+    <!-- Test 2: Text Content & innerHTML -->
+    <div class="test-section">
+        <h2>2. Text & HTML Manipulation</h2>
+        <div id="text-target">Original text</div>
+        <div id="html-target">Original <b>HTML</b></div>
+        <p id="text-result">Waiting...</p>
+    </div>
+
+    <!-- Test 3: Style Manipulation -->
+    <div class="test-section">
+        <h2>3. Style Manipulation</h2>
+        <div id="style-box" class="color-box" style="background-color: #ccc;">Gray</div>
+        <div id="style-box2" class="color-box">Box 2</div>
+        <div id="style-box3" class="color-box">Box 3</div>
+        <p id="style-result">Waiting...</p>
+    </div>
+
+    <!-- Test 4: classList -->
+    <div class="test-section">
+        <h2>4. classList API</h2>
+        <div id="class-target" class="original-class">Has classes</div>
+        <p id="class-result">Waiting...</p>
+    </div>
+
+    <!-- Test 5: createElement + appendChild -->
+    <div class="test-section">
+        <h2>5. DOM Creation</h2>
+        <div id="creation-container"></div>
+        <p id="creation-result">Waiting...</p>
+    </div>
+
+    <!-- Test 6: Event Handling -->
+    <div class="test-section">
+        <h2>6. Event Handling</h2>
+        <button id="click-btn">Click Me!</button>
+        <button id="click-count-btn">Count: 0</button>
+        <p id="event-result">Click the buttons above</p>
+    </div>
+
+    <!-- Test 7: Counter with setTimeout -->
+    <div class="test-section">
+        <h2>7. setTimeout / setInterval</h2>
+        <div id="timer-display">Timer: 0</div>
+        <button id="start-timer">Start Timer</button>
+        <button id="stop-timer">Stop Timer</button>
+        <p id="timer-result">Timer not started</p>
+    </div>
+
+    <!-- Test 8: Dynamic Todo List -->
+    <div class="test-section">
+        <h2>8. Dynamic Todo List</h2>
+        <button id="add-todo">Add Todo</button>
+        <button id="clear-todos">Clear All</button>
+        <ul id="todo-list"></ul>
+        <p id="todo-count">Items: 0</p>
+    </div>
+
+    <!-- Test 9: Attribute Manipulation -->
+    <div class="test-section">
+        <h2>9. Attribute Get/Set</h2>
+        <div id="attr-target" data-value="42" data-name="test">Attribute target</div>
+        <p id="attr-result">Waiting...</p>
+    </div>
+
+    <!-- Test 10: Tree Traversal -->
+    <div class="test-section">
+        <h2>10. Tree Traversal</h2>
+        <div id="tree-parent">
+            <div id="tree-child1">Child 1</div>
+            <div id="tree-child2">Child 2</div>
+            <div id="tree-child3">Child 3</div>
+        </div>
+        <p id="tree-result">Waiting...</p>
+    </div>
+
+    <!-- Test 11: Error Handling (intentional errors) -->
+    <div class="test-section">
+        <h2>11. Error Handling (check Console)</h2>
+        <button id="trigger-error">Trigger JS Error</button>
+        <button id="trigger-type-error">Trigger TypeError</button>
+        <p id="error-result">Click buttons to generate errors in Console tab</p>
+    </div>
+
+    <!-- Test 12: Console Output -->
+    <div class="test-section">
+        <h2>12. Console Output (check Console)</h2>
+        <button id="log-all">Log All Levels</button>
+        <p id="console-result">Click to test console.log/warn/error/info</p>
+    </div>
+
+    <!-- Test 13: Fetch API -->
+    <div class="test-section">
+        <h2>13. Fetch API</h2>
+        <button id="fetch-btn">Fetch example.com</button>
+        <div id="fetch-result">Click Fetch to test</div>
+    </div>
+
+    <!-- Test 14: Style Toggle -->
+    <div class="test-section">
+        <h2>14. Interactive Style Toggle</h2>
+        <button id="toggle-style">Toggle Colors</button>
+        <div id="toggle-target" style="padding: 15px; background-color: #3498db; color: white; border-radius: 6px;">
+            Click toggle to change my appearance
+        </div>
+    </div>
+
+    <script>
+    // ===== Test 1: DOM Queries =====
+    (function() {
+        var results = [];
+        var el = document.getElementById("query-target");
+        results.push(el ? "getElementById: PASS" : "getElementById: FAIL");
+
+        var byClass = document.querySelectorAll(".query-class");
+        results.push(byClass.length === 2 ? "querySelectorAll(.class): PASS (found " + byClass.length + ")" : "querySelectorAll: FAIL (found " + byClass.length + ")");
+
+        var single = document.querySelector("#query-target");
+        results.push(single ? "querySelector(#id): PASS" : "querySelector: FAIL");
+
+        var body = document.body;
+        results.push(body ? "document.body: PASS" : "document.body: FAIL");
+
+        document.getElementById("query-result").textContent = results.join(" | ");
+        console.log("Test 1 (DOM Queries): All checks done");
+    })();
+
+    // ===== Test 2: Text Content & innerHTML =====
+    (function() {
+        var results = [];
+        var textEl = document.getElementById("text-target");
+        textEl.textContent = "Modified via textContent";
+        results.push(textEl.textContent === "Modified via textContent" ? "textContent set: PASS" : "textContent set: FAIL");
+
+        var htmlEl = document.getElementById("html-target");
+        htmlEl.innerHTML = "New <b>bold</b> content";
+        results.push("innerHTML set: PASS");
+
+        document.getElementById("text-result").textContent = results.join(" | ");
+        console.log("Test 2 (Text/HTML): All checks done");
+    })();
+
+    // ===== Test 3: Style Manipulation =====
+    (function() {
+        var results = [];
+        var box = document.getElementById("style-box");
+        box.style.backgroundColor = "#e74c3c";
+        box.style.color = "white";
+        box.textContent = "Red";
+        results.push("style.backgroundColor: PASS");
+
+        var box2 = document.getElementById("style-box2");
+        box2.style.backgroundColor = "#27ae60";
+        box2.style.color = "white";
+        box2.textContent = "Green";
+
+        var box3 = document.getElementById("style-box3");
+        box3.style.backgroundColor = "#3498db";
+        box3.style.color = "white";
+        box3.textContent = "Blue";
+
+        document.getElementById("style-result").textContent = results.join(" | ") + " | Boxes should be Red/Green/Blue";
+        console.log("Test 3 (Styles): Colors applied");
+    })();
+
+    // ===== Test 4: classList =====
+    (function() {
+        var results = [];
+        var el = document.getElementById("class-target");
+
+        results.push(el.classList.contains("original-class") ? "contains: PASS" : "contains: FAIL");
+
+        el.classList.add("new-class");
+        results.push(el.classList.contains("new-class") ? "add: PASS" : "add: FAIL");
+
+        el.classList.remove("original-class");
+        results.push(!el.classList.contains("original-class") ? "remove: PASS" : "remove: FAIL");
+
+        el.classList.toggle("toggled-class");
+        results.push(el.classList.contains("toggled-class") ? "toggle on: PASS" : "toggle on: FAIL");
+
+        el.classList.toggle("toggled-class");
+        results.push(!el.classList.contains("toggled-class") ? "toggle off: PASS" : "toggle off: FAIL");
+
+        document.getElementById("class-result").textContent = results.join(" | ");
+        console.log("Test 4 (classList): All checks done");
+    })();
+
+    // ===== Test 5: createElement + appendChild =====
+    (function() {
+        var container = document.getElementById("creation-container");
+        var results = [];
+
+        // Create a div
+        var div = document.createElement("div");
+        div.textContent = "Dynamically created div";
+        div.style.padding = "8px";
+        div.style.backgroundColor = "#f39c12";
+        div.style.color = "white";
+        div.style.borderRadius = "4px";
+        div.style.marginBottom = "4px";
+        container.appendChild(div);
+        results.push("createElement+appendChild: PASS");
+
+        // Create a second element
+        var p = document.createElement("p");
+        p.textContent = "Another dynamic element";
+        p.style.color = "#8e44ad";
+        container.appendChild(p);
+
+        // Create a text node
+        var text = document.createTextNode("A raw text node");
+        container.appendChild(text);
+        results.push("createTextNode: PASS");
+
+        document.getElementById("creation-result").textContent = results.join(" | ");
+        console.log("Test 5 (DOM Creation): Elements created");
+    })();
+
+    // ===== Test 6: Event Handling =====
+    (function() {
+        var clickBtn = document.getElementById("click-btn");
+        clickBtn.addEventListener("click", function(e) {
+            document.getElementById("event-result").textContent =
+                "Button clicked! type=" + e.type;
+            console.log("Click event fired on #click-btn");
+        });
+
+        var count = 0;
+        var countBtn = document.getElementById("click-count-btn");
+        countBtn.addEventListener("click", function() {
+            count++;
+            countBtn.textContent = "Count: " + count;
+        });
+        console.log("Test 6 (Events): Listeners attached");
+    })();
+
+    // ===== Test 7: setTimeout / setInterval =====
+    (function() {
+        var timerVal = 0;
+        var intervalId = null;
+        var display = document.getElementById("timer-display");
+        var result = document.getElementById("timer-result");
+
+        document.getElementById("start-timer").addEventListener("click", function() {
+            if (intervalId !== null) return;
+            result.textContent = "Timer running...";
+            intervalId = setInterval(function() {
+                timerVal++;
+                display.textContent = "Timer: " + timerVal;
+            }, 1000);
+            console.log("Timer started with interval 1000ms");
+        });
+
+        document.getElementById("stop-timer").addEventListener("click", function() {
+            if (intervalId !== null) {
+                clearInterval(intervalId);
+                intervalId = null;
+                result.textContent = "Timer stopped at " + timerVal;
+                console.log("Timer stopped at " + timerVal);
+            }
+        });
+
+        // One-shot setTimeout test
+        setTimeout(function() {
+            console.log("setTimeout fired after 500ms");
+        }, 500);
+    })();
+
+    // ===== Test 8: Dynamic Todo List =====
+    (function() {
+        var todoId = 0;
+        var list = document.getElementById("todo-list");
+        var countEl = document.getElementById("todo-count");
+        var items = [];
+
+        function updateCount() {
+            countEl.textContent = "Items: " + items.length;
+        }
+
+        document.getElementById("add-todo").addEventListener("click", function() {
+            todoId++;
+            var li = document.createElement("li");
+            li.textContent = "Todo item #" + todoId + " (added at click)";
+            li.setAttribute("data-id", "" + todoId);
+            list.appendChild(li);
+            items.push(todoId);
+            updateCount();
+            console.log("Added todo #" + todoId);
+        });
+
+        document.getElementById("clear-todos").addEventListener("click", function() {
+            // Remove all children
+            var children = list.children;
+            while (children.length > 0) {
+                list.removeChild(children[0]);
+            }
+            items = [];
+            updateCount();
+            console.log("Cleared all todos");
+        });
+    })();
+
+    // ===== Test 9: Attribute Manipulation =====
+    (function() {
+        var el = document.getElementById("attr-target");
+        var results = [];
+
+        var val = el.getAttribute("data-value");
+        results.push(val === "42" ? "getAttribute: PASS (" + val + ")" : "getAttribute: FAIL (" + val + ")");
+
+        el.setAttribute("data-custom", "hello-world");
+        var custom = el.getAttribute("data-custom");
+        results.push(custom === "hello-world" ? "setAttribute: PASS" : "setAttribute: FAIL (" + custom + ")");
+
+        el.removeAttribute("data-name");
+        var removed = el.getAttribute("data-name");
+        results.push(!removed ? "removeAttribute: PASS" : "removeAttribute: FAIL");
+
+        document.getElementById("attr-result").textContent = results.join(" | ");
+        console.log("Test 9 (Attributes): All checks done");
+    })();
+
+    // ===== Test 10: Tree Traversal =====
+    (function() {
+        var parent = document.getElementById("tree-parent");
+        var results = [];
+
+        var children = parent.children;
+        results.push(children.length === 3 ? "children.length=3: PASS" : "children.length: FAIL (" + children.length + ")");
+
+        var first = parent.firstChild;
+        results.push(first ? "firstChild: PASS" : "firstChild: FAIL");
+
+        var last = parent.lastChild;
+        results.push(last ? "lastChild: PASS" : "lastChild: FAIL");
+
+        // Check parentNode
+        var child1 = document.getElementById("tree-child1");
+        if (child1) {
+            var p = child1.parentNode;
+            results.push(p && p.id === "tree-parent" ? "parentNode: PASS" : "parentNode: FAIL");
+
+            var next = child1.nextSibling;
+            results.push(next ? "nextSibling: PASS" : "nextSibling: FAIL");
+        }
+
+        document.getElementById("tree-result").textContent = results.join(" | ");
+        console.log("Test 10 (Tree Traversal): All checks done");
+    })();
+
+    // ===== Test 11: Error Handling =====
+    (function() {
+        document.getElementById("trigger-error").addEventListener("click", function() {
+            // This will throw a ReferenceError
+            undefinedVariable.doSomething();
+        });
+
+        document.getElementById("trigger-type-error").addEventListener("click", function() {
+            // This will throw a TypeError
+            var x = null;
+            x.toString();
+        });
+    })();
+
+    // ===== Test 12: Console Output =====
+    (function() {
+        document.getElementById("log-all").addEventListener("click", function() {
+            console.log("This is a console.log message");
+            console.info("This is a console.info message");
+            console.warn("This is a console.warn message");
+            console.error("This is a console.error message");
+            document.getElementById("console-result").textContent = "4 messages logged - check Console tab";
+        });
+    })();
+
+    // ===== Test 13: Fetch API =====
+    (function() {
+        document.getElementById("fetch-btn").addEventListener("click", function() {
+            var resultEl = document.getElementById("fetch-result");
+            resultEl.textContent = "Fetching...";
+            fetch("http://example.com").then(function(response) {
+                console.log("Fetch response: status=" + response.status + " ok=" + response.ok);
+                return response.text();
+            }).then(function(text) {
+                resultEl.textContent = "Got " + text.length + " bytes:\n" + text.substring(0, 300) + "...";
+                console.log("Fetch complete: " + text.length + " bytes");
+            });
+        });
+    })();
+
+    // ===== Test 14: Style Toggle =====
+    (function() {
+        var toggled = false;
+        var target = document.getElementById("toggle-target");
+
+        document.getElementById("toggle-style").addEventListener("click", function() {
+            toggled = !toggled;
+            if (toggled) {
+                target.style.backgroundColor = "#e74c3c";
+                target.style.color = "#fff";
+                target.style.fontSize = "18px";
+                target.style.padding = "20px";
+                target.textContent = "Style toggled ON - red theme";
+            } else {
+                target.style.backgroundColor = "#3498db";
+                target.style.color = "white";
+                target.style.fontSize = "14px";
+                target.style.padding = "15px";
+                target.textContent = "Style toggled OFF - blue theme";
+            }
+            console.log("Style toggled: " + (toggled ? "ON" : "OFF"));
+        });
+    })();
+
+    // ===== Initial summary =====
+    console.log("=== All 14 test sections initialized ===");
+    console.info("Right-click > Inspect or press F12 to open inspector");
+    console.warn("This is a test warning to verify Console tab");
+    </script>
+</body>
+</html>

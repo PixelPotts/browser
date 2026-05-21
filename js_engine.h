@@ -13,6 +13,15 @@ extern "C" {
 class Document;
 struct AppState;
 
+// ---- Console log entry (for inspector Console tab) ----
+enum class ConsoleLevel { LOG, INFO, WARN, ERROR };
+
+struct ConsoleEntry {
+    ConsoleLevel level;
+    std::string message;
+    std::string source;  // filename:line if available
+};
+
 class JSEngine {
 public:
     JSEngine();
@@ -37,6 +46,13 @@ public:
 
     // Schedule re-render after DOM mutation
     void scheduleRerender();
+
+    // Console log capture
+    void addConsoleEntry(ConsoleLevel level, const std::string& msg, const std::string& source = "");
+    std::vector<ConsoleEntry> console_log;
+
+    // Callback to notify inspector panel of new entries
+    std::function<void()> on_console_entry;
 
     JSRuntime* rt = nullptr;
     JSContext* ctx = nullptr;

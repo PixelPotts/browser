@@ -119,6 +119,7 @@ void js_dispatch_event(JSEngine* engine, uint32_t node_id,
                     const char* s = JS_ToCString(engine->ctx, exc);
                     if (s) {
                         fprintf(stderr, "[JS Event Error] %s\n", s);
+                        engine->addConsoleEntry(ConsoleLevel::ERROR, std::string(s), "event:" + type);
                         JS_FreeCString(engine->ctx, s);
                     }
                     JS_FreeValue(engine->ctx, exc);

@@ -184,40 +184,49 @@ static JSValue js_fetch(JSContext* ctx, JSValueConst this_val,
 
 JSEngine* g_js_engine = nullptr;
 
-// ---- console.log / console.warn / console.error ----
+// ---- Helper: build message string from JS args ----
+
+static std::string js_args_to_string(JSContext* ctx, int argc, JSValueConst* argv) {
+    std::string msg;
+    for (int i = 0; i < argc; i++) {
+        if (i > 0) msg += ' ';
+        const char* str = JS_ToCString(ctx, argv[i]);
+        if (str) { msg += str; JS_FreeCString(ctx, str); }
+    }
+    return msg;
+}
+
+// ---- console.log / console.warn / console.error / console.info ----
 
 static JSValue js_console_log(JSContext* ctx, JSValueConst this_val,
                                int argc, JSValueConst* argv) {
-    for (int i = 0; i < argc; i++) {
-        if (i > 0) printf(" ");
-        const char* str = JS_ToCString(ctx, argv[i]);
-        if (str) { printf("%s", str); JS_FreeCString(ctx, str); }
-    }
-    printf("\n");
+    std::string msg = js_args_to_string(ctx, argc, argv);
+    printf("%s\n", msg.c_str());
+    if (g_js_engine) g_js_engine->addConsoleEntry(ConsoleLevel::LOG, msg);
     return JS_UNDEFINED;
 }
 
 static JSValue js_console_warn(JSContext* ctx, JSValueConst this_val,
                                 int argc, JSValueConst* argv) {
-    fprintf(stderr, "[WARN] ");
-    for (int i = 0; i < argc; i++) {
-        if (i > 0) fprintf(stderr, " ");
-        const char* str = JS_ToCString(ctx, argv[i]);
-        if (str) { fprintf(stderr, "%s", str); JS_FreeCString(ctx, str); }
-    }
-    fprintf(stderr, "\n");
+    std::string msg = js_args_to_string(ctx, argc, argv);
+    fprintf(stderr, "[WARN] %s\n", msg.c_str());
+    if (g_js_engine) g_js_engine->addConsoleEntry(ConsoleLevel::WARN, msg);
     return JS_UNDEFINED;
 }
 
 static JSValue js_console_error(JSContext* ctx, JSValueConst this_val,
                                  int argc, JSValueConst* argv) {
-    fprintf(stderr, "[ERROR] ");
-    for (int i = 0; i < argc; i++) {
-        if (i > 0) fprintf(stderr, " ");
-        const char* str = JS_ToCString(ctx, argv[i]);
-        if (str) { fprintf(stderr, "%s", str); JS_FreeCString(ctx, str); }
-    }
-    fprintf(stderr, "\n");
+    std::string msg = js_args_to_string(ctx, argc, argv);
+    fprintf(stderr, "[ERROR] %s\n", msg.c_str());
+    if (g_js_engine) g_js_engine->addConsoleEntry(ConsoleLevel::ERROR, msg);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_console_info(JSContext* ctx, JSValueConst this_val,
+                                int argc, JSValueConst* argv) {
+    std::string msg = js_args_to_string(ctx, argc, argv);
+    printf("[INFO] %s\n", msg.c_str());
+    if (g_js_engine) g_js_engine->addConsoleEntry(ConsoleLevel::INFO, msg);
     return JS_UNDEFINED;
 }
 
@@ -363,7 +372,7 @@ void JSEngine::setupGlobals() {
     JS_SetPropertyStr(ctx, console, "error",
         JS_NewCFunction(ctx, js_console_error, "error", 1));
     JS_SetPropertyStr(ctx, console, "info",
-        JS_NewCFunction(ctx, js_console_log, "info", 1));
+        JS_NewCFunction(ctx, js_console_info, "info", 1));
     JS_SetPropertyStr(ctx, global, "console", console);
 
     // alert
@@ -388,8 +397,10 @@ bool JSEngine::eval(const std::string& code, const std::string& filename) {
                               filename.c_str(), JS_EVAL_TYPE_GLOBAL);
     if (JS_IsException(result)) {
         JSValue exc = JS_GetException(ctx);
+        std::string err_msg;
         const char* str = JS_ToCString(ctx, exc);
         if (str) {
+            err_msg = str;
             fprintf(stderr, "[JS Error] %s\n", str);
             JS_FreeCString(ctx, str);
         }
@@ -398,6 +409,8 @@ bool JSEngine::eval(const std::string& code, const std::string& filename) {
         if (!JS_IsUndefined(stack)) {
             const char* stack_str = JS_ToCString(ctx, stack);
             if (stack_str) {
+                err_msg += "\n";
+                err_msg += stack_str;
                 fprintf(stderr, "%s\n", stack_str);
                 JS_FreeCString(ctx, stack_str);
             }
@@ -405,6 +418,7 @@ bool JSEngine::eval(const std::string& code, const std::string& filename) {
         JS_FreeValue(ctx, stack);
         JS_FreeValue(ctx, exc);
         JS_FreeValue(ctx, result);
+        addConsoleEntry(ConsoleLevel::ERROR, err_msg, filename);
         return false;
     }
     JS_FreeValue(ctx, result);
@@ -435,7 +449,11 @@ uint32_t JSEngine::setTimeout(JSValue func, int delay_ms) {
             if (JS_IsException(ret)) {
                 JSValue exc = JS_GetException(td->engine->ctx);
                 const char* s = JS_ToCString(td->engine->ctx, exc);
-                if (s) { fprintf(stderr, "[JS Timer Error] %s\n", s); JS_FreeCString(td->engine->ctx, s); }
+                if (s) {
+                    fprintf(stderr, "[JS Timer Error] %s\n", s);
+                    td->engine->addConsoleEntry(ConsoleLevel::ERROR, std::string(s), "setTimeout");
+                    JS_FreeCString(td->engine->ctx, s);
+                }
                 JS_FreeValue(td->engine->ctx, exc);
             }
             JS_FreeValue(td->engine->ctx, ret);
@@ -470,7 +488,11 @@ uint32_t JSEngine::setInterval(JSValue func, int interval_ms) {
             if (JS_IsException(ret)) {
                 JSValue exc = JS_GetException(td->engine->ctx);
                 const char* s = JS_ToCString(td->engine->ctx, exc);
-                if (s) { fprintf(stderr, "[JS Interval Error] %s\n", s); JS_FreeCString(td->engine->ctx, s); }
+                if (s) {
+                    fprintf(stderr, "[JS Interval Error] %s\n", s);
+                    td->engine->addConsoleEntry(ConsoleLevel::ERROR, std::string(s), "setInterval");
+                    JS_FreeCString(td->engine->ctx, s);
+                }
                 JS_FreeValue(td->engine->ctx, exc);
             }
             JS_FreeValue(td->engine->ctx, ret);
@@ -520,4 +542,9 @@ gboolean JSEngine::rerender_callback(gpointer data) {
 void JSEngine::dispatchEvent(uint32_t node_id, const std::string& type,
                               int clientX, int clientY) {
     js_dispatch_event(this, node_id, type, clientX, clientY);
+}
+
+void JSEngine::addConsoleEntry(ConsoleLevel level, const std::string& msg, const std::string& source) {
+    console_log.push_back({level, msg, source});
+    if (on_console_entry) on_console_entry();
 }
