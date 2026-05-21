@@ -202,6 +202,7 @@ static JSValue js_console_log(JSContext* ctx, JSValueConst this_val,
                                int argc, JSValueConst* argv) {
     std::string msg = js_args_to_string(ctx, argc, argv);
     printf("%s\n", msg.c_str());
+    fflush(stdout);
     if (g_js_engine) g_js_engine->addConsoleEntry(ConsoleLevel::LOG, msg);
     return JS_UNDEFINED;
 }
@@ -226,6 +227,7 @@ static JSValue js_console_info(JSContext* ctx, JSValueConst this_val,
                                 int argc, JSValueConst* argv) {
     std::string msg = js_args_to_string(ctx, argc, argv);
     printf("[INFO] %s\n", msg.c_str());
+    fflush(stdout);
     if (g_js_engine) g_js_engine->addConsoleEntry(ConsoleLevel::INFO, msg);
     return JS_UNDEFINED;
 }

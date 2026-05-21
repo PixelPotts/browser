@@ -114,10 +114,10 @@ static JSValue js_element_get_id(JSContext* ctx, JSValueConst this_val) {
     return JS_NewString(ctx, node->id.c_str());
 }
 
-static JSValue js_element_set_id(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+static JSValue js_element_set_id(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     DOMNode* node = js_get_node(ctx, this_val);
-    if (!node) return JS_UNDEFINED;
-    const char* s = JS_ToCString(ctx, val);
+    if (!node || argc < 1) return JS_UNDEFINED;
+    const char* s = JS_ToCString(ctx, argv[0]);
     if (s) {
         if (!node->id.empty() && g_js_engine && g_js_engine->document)
             g_js_engine->document->id_map.erase(node->id);
@@ -160,10 +160,10 @@ static JSValue js_element_get_textContent(JSContext* ctx, JSValueConst this_val)
     return JS_NewString(ctx, node->getTextContent().c_str());
 }
 
-static JSValue js_element_set_textContent(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+static JSValue js_element_set_textContent(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     DOMNode* node = js_get_node(ctx, this_val);
-    if (!node || !g_js_engine || !g_js_engine->document) return JS_UNDEFINED;
-    const char* s = JS_ToCString(ctx, val);
+    if (!node || !g_js_engine || !g_js_engine->document || argc < 1) return JS_UNDEFINED;
+    const char* s = JS_ToCString(ctx, argv[0]);
     if (s) {
         node->setTextContent(s, g_js_engine->document->next_id);
         JS_FreeCString(ctx, s);
@@ -178,10 +178,10 @@ static JSValue js_element_get_innerHTML(JSContext* ctx, JSValueConst this_val) {
     return JS_NewString(ctx, node->getInnerHTML().c_str());
 }
 
-static JSValue js_element_set_innerHTML(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+static JSValue js_element_set_innerHTML(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     DOMNode* node = js_get_node(ctx, this_val);
-    if (!node || !g_js_engine || !g_js_engine->document) return JS_UNDEFINED;
-    const char* s = JS_ToCString(ctx, val);
+    if (!node || !g_js_engine || !g_js_engine->document || argc < 1) return JS_UNDEFINED;
+    const char* s = JS_ToCString(ctx, argv[0]);
     if (s) {
         // Simple innerHTML: clear children, add as text
         // Full HTML parsing would require re-invoking the parser
@@ -204,10 +204,10 @@ static JSValue js_element_get_className(JSContext* ctx, JSValueConst this_val) {
     return JS_NewString(ctx, result.c_str());
 }
 
-static JSValue js_element_set_className(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+static JSValue js_element_set_className(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     DOMNode* node = js_get_node(ctx, this_val);
-    if (!node) return JS_UNDEFINED;
-    const char* s = JS_ToCString(ctx, val);
+    if (!node || argc < 1) return JS_UNDEFINED;
+    const char* s = JS_ToCString(ctx, argv[0]);
     if (s) {
         node->class_list.clear();
         std::string cls;
@@ -358,23 +358,15 @@ static JSValue js_element_appendChild(JSContext* ctx, JSValueConst this_val,
             if (sp.get() == child) { child_ptr = sp; break; }
         }
     }
-    // If not found (newly created element), search node_map
+    // If not found, search in orphans list (newly created elements)
     if (!child_ptr) {
-        // Create a new shared_ptr wrapping the raw pointer
-        // This is safe because createElement returns shared_ptr that's tracked
-        for (auto& [id, n] : doc->node_map) {
-            if (n == child) {
-                // We need the shared_ptr - walk all trees
-                break;
-            }
+        for (auto& sp : doc->orphans) {
+            if (sp.get() == child) { child_ptr = sp; break; }
         }
     }
 
     if (child_ptr) {
         doc->appendChild(parent, child_ptr);
-    } else {
-        // Fallback: create a shared_ptr (element was created by JS)
-        // This should not normally happen if createElement works correctly
     }
 
     return JS_DupValue(ctx, argv[0]);
@@ -745,7 +737,7 @@ void js_bindings_init(JSEngine* engine) {
     JS_DefinePropertyGetSet(ctx, elem_proto,
         JS_NewAtom(ctx, "id"),
         JS_NewCFunction(ctx, (JSCFunction*)js_element_get_id, "get id", 0),
-        JS_NewCFunction(ctx, (JSCFunction*)js_element_set_id, "set id", 1),
+        JS_NewCFunction(ctx, js_element_set_id, "set id", 1),
         JS_PROP_CONFIGURABLE);
     JS_DefinePropertyGetSet(ctx, elem_proto,
         JS_NewAtom(ctx, "tagName"),
@@ -762,17 +754,17 @@ void js_bindings_init(JSEngine* engine) {
     JS_DefinePropertyGetSet(ctx, elem_proto,
         JS_NewAtom(ctx, "textContent"),
         JS_NewCFunction(ctx, (JSCFunction*)js_element_get_textContent, "get textContent", 0),
-        JS_NewCFunction(ctx, (JSCFunction*)js_element_set_textContent, "set textContent", 1),
+        JS_NewCFunction(ctx, js_element_set_textContent, "set textContent", 1),
         JS_PROP_CONFIGURABLE);
     JS_DefinePropertyGetSet(ctx, elem_proto,
         JS_NewAtom(ctx, "innerHTML"),
         JS_NewCFunction(ctx, (JSCFunction*)js_element_get_innerHTML, "get innerHTML", 0),
-        JS_NewCFunction(ctx, (JSCFunction*)js_element_set_innerHTML, "set innerHTML", 1),
+        JS_NewCFunction(ctx, js_element_set_innerHTML, "set innerHTML", 1),
         JS_PROP_CONFIGURABLE);
     JS_DefinePropertyGetSet(ctx, elem_proto,
         JS_NewAtom(ctx, "className"),
         JS_NewCFunction(ctx, (JSCFunction*)js_element_get_className, "get className", 0),
-        JS_NewCFunction(ctx, (JSCFunction*)js_element_set_className, "set className", 1),
+        JS_NewCFunction(ctx, js_element_set_className, "set className", 1),
         JS_PROP_CONFIGURABLE);
     JS_DefinePropertyGetSet(ctx, elem_proto,
         JS_NewAtom(ctx, "parentNode"),

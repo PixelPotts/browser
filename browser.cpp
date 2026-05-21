@@ -37,6 +37,7 @@ static bool fetch(const std::string& url, Buf& out) {
 
 static std::string normalize_url(const std::string& r) {
     if (r.size()>=12 && r.substr(0,12)=="view-source:") return r;
+    if (r.size()>=7  && r.substr(0,7)=="file://")  return r;
     if (r.size()>=7  && r.substr(0,7)=="http://")  return r;
     if (r.size()>=8  && r.substr(0,8)=="https://") return r;
     return "https://" + r;
@@ -122,6 +123,46 @@ static std::string extract_attr(const std::string& tag, const char* name) {
     size_t end=p;
     while (end<tag.size() && !std::isspace((unsigned char)tag[end]) && tag[end]!='>') ++end;
     return tag.substr(p, end-p);
+}
+
+static std::unordered_map<std::string, std::string> extract_all_attrs(const std::string& tag) {
+    std::unordered_map<std::string, std::string> attrs;
+    size_t i = 0;
+    // skip tag name: <tagname ...
+    while (i < tag.size() && tag[i] != ' ' && tag[i] != '\t' && tag[i] != '>' && tag[i] != '/') i++;
+    while (i < tag.size()) {
+        // skip whitespace
+        while (i < tag.size() && (tag[i] == ' ' || tag[i] == '\t' || tag[i] == '\n' || tag[i] == '\r')) i++;
+        if (i >= tag.size() || tag[i] == '>' || tag[i] == '/') break;
+        // read attribute name
+        size_t name_start = i;
+        while (i < tag.size() && tag[i] != '=' && tag[i] != ' ' && tag[i] != '>' && tag[i] != '/') i++;
+        std::string name = tag.substr(name_start, i - name_start);
+        for (auto& c : name) c = (char)tolower((unsigned char)c);
+        // skip whitespace around =
+        while (i < tag.size() && tag[i] == ' ') i++;
+        if (i >= tag.size() || tag[i] != '=') {
+            if (!name.empty()) attrs[name] = "";
+            continue;
+        }
+        i++; // skip '='
+        while (i < tag.size() && tag[i] == ' ') i++;
+        if (i >= tag.size()) break;
+        std::string value;
+        char q = tag[i];
+        if (q == '"' || q == '\'') {
+            i++;
+            size_t end = tag.find(q, i);
+            if (end == std::string::npos) { value = tag.substr(i); i = tag.size(); }
+            else { value = tag.substr(i, end - i); i = end + 1; }
+        } else {
+            size_t start = i;
+            while (i < tag.size() && !std::isspace((unsigned char)tag[i]) && tag[i] != '>') i++;
+            value = tag.substr(start, i - start);
+        }
+        if (!name.empty()) attrs[name] = value;
+    }
+    return attrs;
 }
 
 // ---- CSS ----
@@ -943,8 +984,12 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
         if (!closing && !is_void(tname)) {
             int parent_fs = cur_parent ? cur_parent->fs_computed : 16;
             auto elem = doc->createElement(tname);
-            elem->class_list = split_classes(extract_attr(tag, "class"));
-            elem->id = tolower_s(extract_attr(tag, "id"));
+            elem->attributes = extract_all_attrs(tag);
+            // Use properly parsed attributes for class/id
+            auto cls_it = elem->attributes.find("class");
+            elem->class_list = cls_it != elem->attributes.end() ? split_classes(cls_it->second) : std::vector<std::string>{};
+            auto id_it = elem->attributes.find("id");
+            elem->id = id_it != elem->attributes.end() ? tolower_s(id_it->second) : "";
             elem->fs_computed = parent_fs;
 
             // UA defaults for bold tags
@@ -993,12 +1038,14 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
 
             // anchor href
             if (tname == "a") {
-                std::string h = extract_attr(tag, "href");
-                if (!h.empty()) elem->href = resolve(base, h);
+                auto href_it = elem->attributes.find("href");
+                if (href_it != elem->attributes.end() && !href_it->second.empty())
+                    elem->href = resolve(base, href_it->second);
             }
 
             // inline style
-            std::string ist = extract_attr(tag, "style");
+            auto style_it = elem->attributes.find("style");
+            std::string ist = style_it != elem->attributes.end() ? style_it->second : "";
             elem->inline_style_raw = ist;
             { int v = fw_value(prop_val(ist, "font-weight")); if (v != -1) elem->fw_computed = v; }
             { int px = parse_fs(prop_val(ist, "font-size"), parent_fs); if (px > 0) elem->fs_computed = px; }
@@ -2085,7 +2132,15 @@ int main(int argc, char** argv) {
         }), st);
 
     gtk_widget_show_all(st->window);
-    navigate(st, "mattmontag.com");
+
+    // Accept URL from command line, default to mattmontag.com
+    std::string start_url = "mattmontag.com";
+    for (int i = 1; i < argc; i++) {
+        std::string arg = argv[i];
+        if (!arg.empty() && arg[0] != '-') { start_url = arg; break; }
+    }
+    gtk_entry_set_text(GTK_ENTRY(st->address_bar), start_url.c_str());
+    navigate(st, start_url);
 
     gtk_main();
     curl_global_cleanup();

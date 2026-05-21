@@ -126,6 +126,7 @@ std::shared_ptr<DOMNode> Document::createElement(const std::string& tag) {
     for (auto& c : node->tag_name)
         c = (char)std::tolower((unsigned char)c);
     registerNode(node.get());
+    orphans.push_back(node);  // keep alive until appendChild
     return node;
 }
 
@@ -135,6 +136,7 @@ std::shared_ptr<DOMNode> Document::createTextNode(const std::string& text) {
     node->node_type = DOMNode::TEXT;
     node->text_content = text;
     registerNode(node.get());
+    orphans.push_back(node);  // keep alive until appendChild
     return node;
 }
 
@@ -257,6 +259,11 @@ void Document::appendChild(DOMNode* parent, std::shared_ptr<DOMNode> child) {
                 [&](const std::shared_ptr<DOMNode>& n) { return n.get() == child.get(); }),
             siblings.end());
     }
+    // Remove from orphans list (now owned by parent's children vector)
+    orphans.erase(
+        std::remove_if(orphans.begin(), orphans.end(),
+            [&](const std::shared_ptr<DOMNode>& n) { return n.get() == child.get(); }),
+        orphans.end());
     child->parent = parent;
     parent->children.push_back(child);
     registerNode(child.get());

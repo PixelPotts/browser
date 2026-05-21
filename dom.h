@@ -126,6 +126,10 @@ public:
     // Mutation callback (triggers re-render)
     std::function<void()> on_mutated;
 
+    // Orphan nodes: created but not yet appended to tree
+    // Keeps shared_ptr alive until appendChild or discard
+    std::vector<std::shared_ptr<DOMNode>> orphans;
+
     // Script collection
     std::vector<std::string> scripts; // inline script contents
     std::vector<std::string> script_srcs; // external script URLs
