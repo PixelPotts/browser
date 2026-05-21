@@ -3,9 +3,11 @@
 #include "js_event.h"
 #include "dom.h"
 #include <cstdio>
+#include <cstring>
 #include <thread>
 #include <curl/curl.h>
 #include <gtk/gtk.h>
+#include <time.h>
 
 extern "C" {
 #include "quickjs.h"
@@ -352,6 +354,118 @@ void JSEngine::shutdown() {
     document = nullptr;
 }
 
+// ---- URL parsing helper ----
+struct ParsedURL {
+    std::string protocol, hostname, port, pathname, search, hash, host, origin, href;
+};
+
+static ParsedURL parse_url(const std::string& url) {
+    ParsedURL u;
+    u.href = url;
+    size_t pos = 0;
+    // protocol
+    size_t colon = url.find("://");
+    if (colon != std::string::npos) {
+        u.protocol = url.substr(0, colon + 1); // "https:"
+        pos = colon + 3;
+    } else {
+        u.protocol = "https:";
+    }
+    // hostname[:port]
+    size_t slash = url.find('/', pos);
+    std::string hostport = (slash != std::string::npos) ? url.substr(pos, slash - pos) : url.substr(pos);
+    size_t cpos = hostport.rfind(':');
+    if (cpos != std::string::npos && cpos > 0) {
+        u.hostname = hostport.substr(0, cpos);
+        u.port = hostport.substr(cpos + 1);
+    } else {
+        u.hostname = hostport;
+    }
+    u.host = u.port.empty() ? u.hostname : (u.hostname + ":" + u.port);
+    u.origin = u.protocol + "//" + u.host;
+    // pathname + search + hash
+    if (slash != std::string::npos) {
+        std::string rest = url.substr(slash);
+        size_t hpos = rest.find('#');
+        if (hpos != std::string::npos) { u.hash = rest.substr(hpos); rest = rest.substr(0, hpos); }
+        size_t qpos = rest.find('?');
+        if (qpos != std::string::npos) { u.search = rest.substr(qpos); u.pathname = rest.substr(0, qpos); }
+        else u.pathname = rest;
+    } else {
+        u.pathname = "/";
+    }
+    return u;
+}
+
+// ---- performance.now() ----
+static JSValue js_performance_now(JSContext* ctx, JSValueConst this_val,
+                                   int argc, JSValueConst* argv) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    double ms = ts.tv_sec * 1000.0 + ts.tv_nsec / 1000000.0;
+    return JS_NewFloat64(ctx, ms);
+}
+
+// ---- requestAnimationFrame / cancelAnimationFrame ----
+static JSValue js_request_animation_frame(JSContext* ctx, JSValueConst this_val,
+                                           int argc, JSValueConst* argv) {
+    if (argc < 1 || !g_js_engine || !JS_IsFunction(ctx, argv[0])) return JS_NewInt32(ctx, 0);
+    // Use setTimeout(fn, 16) as a simple approximation (~60fps)
+    uint32_t id = g_js_engine->setTimeout(JS_DupValue(ctx, argv[0]), 16);
+    return JS_NewInt32(ctx, (int32_t)id);
+}
+
+static JSValue js_cancel_animation_frame(JSContext* ctx, JSValueConst this_val,
+                                          int argc, JSValueConst* argv) {
+    if (argc < 1 || !g_js_engine) return JS_UNDEFINED;
+    int32_t id = 0;
+    JS_ToInt32(ctx, &id, argv[0]);
+    g_js_engine->clearTimer((uint32_t)id);
+    return JS_UNDEFINED;
+}
+
+// ---- window.addEventListener / removeEventListener (store DOMContentLoaded/load handlers) ----
+static JSValue js_window_addEventListener(JSContext* ctx, JSValueConst this_val,
+                                           int argc, JSValueConst* argv) {
+    // No-op stub - DOMContentLoaded/load already fired by the time scripts run
+    return JS_UNDEFINED;
+}
+
+static JSValue js_window_removeEventListener(JSContext* ctx, JSValueConst this_val,
+                                              int argc, JSValueConst* argv) {
+    return JS_UNDEFINED;
+}
+
+// ---- getComputedStyle stub ----
+static JSValue js_getComputedStyle(JSContext* ctx, JSValueConst this_val,
+                                    int argc, JSValueConst* argv) {
+    // Return the element's style object as a simple proxy
+    if (argc < 1) return JS_NewObject(ctx);
+    // Try to get the element's style
+    JSValue style = JS_GetPropertyStr(ctx, argv[0], "style");
+    if (JS_IsUndefined(style) || JS_IsNull(style)) {
+        JS_FreeValue(ctx, style);
+        return JS_NewObject(ctx);
+    }
+    return style;
+}
+
+// ---- matchMedia stub ----
+static JSValue js_matchMedia(JSContext* ctx, JSValueConst this_val,
+                              int argc, JSValueConst* argv) {
+    JSValue result = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, result, "matches", JS_FALSE);
+    const char* media = argc > 0 ? JS_ToCString(ctx, argv[0]) : nullptr;
+    JS_SetPropertyStr(ctx, result, "media", JS_NewString(ctx, media ? media : ""));
+    if (media) JS_FreeCString(ctx, media);
+    JS_SetPropertyStr(ctx, result, "addEventListener", JS_NewCFunction(ctx, js_window_addEventListener, "addEventListener", 2));
+    JS_SetPropertyStr(ctx, result, "removeEventListener", JS_NewCFunction(ctx, js_window_removeEventListener, "removeEventListener", 2));
+    // addListener/removeListener (deprecated but still used)
+    JS_SetPropertyStr(ctx, result, "addListener", JS_NewCFunction(ctx, js_window_addEventListener, "addListener", 1));
+    JS_SetPropertyStr(ctx, result, "removeListener", JS_NewCFunction(ctx, js_window_removeEventListener, "removeListener", 1));
+    return result;
+}
+
 void JSEngine::setupGlobals() {
     // Register Response class for fetch()
     JS_NewClassID(&js_response_class_id);
@@ -366,16 +480,16 @@ void JSEngine::setupGlobals() {
         JS_NewCFunction(ctx, js_fetch, "fetch", 1));
 
     // console object
-    JSValue console = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, console, "log",
+    JSValue console_obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, console_obj, "log",
         JS_NewCFunction(ctx, js_console_log, "log", 1));
-    JS_SetPropertyStr(ctx, console, "warn",
+    JS_SetPropertyStr(ctx, console_obj, "warn",
         JS_NewCFunction(ctx, js_console_warn, "warn", 1));
-    JS_SetPropertyStr(ctx, console, "error",
+    JS_SetPropertyStr(ctx, console_obj, "error",
         JS_NewCFunction(ctx, js_console_error, "error", 1));
-    JS_SetPropertyStr(ctx, console, "info",
+    JS_SetPropertyStr(ctx, console_obj, "info",
         JS_NewCFunction(ctx, js_console_info, "info", 1));
-    JS_SetPropertyStr(ctx, global, "console", console);
+    JS_SetPropertyStr(ctx, global, "console", console_obj);
 
     // alert
     JS_SetPropertyStr(ctx, global, "alert",
@@ -391,7 +505,340 @@ void JSEngine::setupGlobals() {
     JS_SetPropertyStr(ctx, global, "clearInterval",
         JS_NewCFunction(ctx, js_clear_timeout, "clearInterval", 1));
 
+    // requestAnimationFrame / cancelAnimationFrame
+    JS_SetPropertyStr(ctx, global, "requestAnimationFrame",
+        JS_NewCFunction(ctx, js_request_animation_frame, "requestAnimationFrame", 1));
+    JS_SetPropertyStr(ctx, global, "cancelAnimationFrame",
+        JS_NewCFunction(ctx, js_cancel_animation_frame, "cancelAnimationFrame", 1));
+
+    // window.addEventListener / removeEventListener
+    JS_SetPropertyStr(ctx, global, "addEventListener",
+        JS_NewCFunction(ctx, js_window_addEventListener, "addEventListener", 2));
+    JS_SetPropertyStr(ctx, global, "removeEventListener",
+        JS_NewCFunction(ctx, js_window_removeEventListener, "removeEventListener", 2));
+
+    // getComputedStyle
+    JS_SetPropertyStr(ctx, global, "getComputedStyle",
+        JS_NewCFunction(ctx, js_getComputedStyle, "getComputedStyle", 1));
+
+    // matchMedia
+    JS_SetPropertyStr(ctx, global, "matchMedia",
+        JS_NewCFunction(ctx, js_matchMedia, "matchMedia", 1));
+
+    // ---- navigator object ----
+    JSValue nav = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, nav, "userAgent",
+        JS_NewString(ctx, "Mozilla/5.0 (X11; Linux x86_64) MiniBrowser/1.0"));
+    JS_SetPropertyStr(ctx, nav, "language", JS_NewString(ctx, "en-US"));
+    JSValue langs = JS_NewArray(ctx);
+    JS_SetPropertyUint32(ctx, langs, 0, JS_NewString(ctx, "en-US"));
+    JS_SetPropertyUint32(ctx, langs, 1, JS_NewString(ctx, "en"));
+    JS_SetPropertyStr(ctx, nav, "languages", langs);
+    JS_SetPropertyStr(ctx, nav, "platform", JS_NewString(ctx, "Linux x86_64"));
+    JS_SetPropertyStr(ctx, nav, "vendor", JS_NewString(ctx, ""));
+    JS_SetPropertyStr(ctx, nav, "appName", JS_NewString(ctx, "Netscape"));
+    JS_SetPropertyStr(ctx, nav, "appVersion", JS_NewString(ctx, "5.0 (X11; Linux x86_64) MiniBrowser/1.0"));
+    JS_SetPropertyStr(ctx, nav, "product", JS_NewString(ctx, "Gecko"));
+    JS_SetPropertyStr(ctx, nav, "cookieEnabled", JS_FALSE);
+    JS_SetPropertyStr(ctx, nav, "onLine", JS_TRUE);
+    JS_SetPropertyStr(ctx, nav, "doNotTrack", JS_NewString(ctx, "1"));
+    JS_SetPropertyStr(ctx, nav, "maxTouchPoints", JS_NewInt32(ctx, 0));
+    JS_SetPropertyStr(ctx, nav, "hardwareConcurrency", JS_NewInt32(ctx, 4));
+    // navigator.mediaDevices stub
+    JSValue mediaDevices = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, nav, "mediaDevices", mediaDevices);
+    // navigator.serviceWorker stub
+    JSValue sw = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, nav, "serviceWorker", sw);
+    // navigator.geolocation stub
+    JSValue geo = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, nav, "geolocation", geo);
+    JS_SetPropertyStr(ctx, global, "navigator", nav);
+
+    // ---- location object ----
+    ParsedURL pu = parse_url(page_url);
+    JSValue loc = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, loc, "href", JS_NewString(ctx, pu.href.c_str()));
+    JS_SetPropertyStr(ctx, loc, "protocol", JS_NewString(ctx, pu.protocol.c_str()));
+    JS_SetPropertyStr(ctx, loc, "host", JS_NewString(ctx, pu.host.c_str()));
+    JS_SetPropertyStr(ctx, loc, "hostname", JS_NewString(ctx, pu.hostname.c_str()));
+    JS_SetPropertyStr(ctx, loc, "port", JS_NewString(ctx, pu.port.c_str()));
+    JS_SetPropertyStr(ctx, loc, "pathname", JS_NewString(ctx, pu.pathname.c_str()));
+    JS_SetPropertyStr(ctx, loc, "search", JS_NewString(ctx, pu.search.c_str()));
+    JS_SetPropertyStr(ctx, loc, "hash", JS_NewString(ctx, pu.hash.c_str()));
+    JS_SetPropertyStr(ctx, loc, "origin", JS_NewString(ctx, pu.origin.c_str()));
+    JS_SetPropertyStr(ctx, loc, "assign", JS_NewCFunction(ctx, js_window_addEventListener, "assign", 1)); // no-op
+    JS_SetPropertyStr(ctx, loc, "replace", JS_NewCFunction(ctx, js_window_addEventListener, "replace", 1)); // no-op
+    JS_SetPropertyStr(ctx, loc, "reload", JS_NewCFunction(ctx, js_window_addEventListener, "reload", 0)); // no-op
+    JS_SetPropertyStr(ctx, loc, "toString",
+        JS_NewCFunction(ctx, [](JSContext* cx, JSValueConst tv, int ac, JSValueConst* av) -> JSValue {
+            JSValue h = JS_GetPropertyStr(cx, tv, "href");
+            return h;
+        }, "toString", 0));
+    JS_SetPropertyStr(ctx, global, "location", loc);
+
+    // ---- history object ----
+    JSValue history = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, history, "length", JS_NewInt32(ctx, 1));
+    JS_SetPropertyStr(ctx, history, "state", JS_NULL);
+    JS_SetPropertyStr(ctx, history, "pushState", JS_NewCFunction(ctx, js_window_addEventListener, "pushState", 3));
+    JS_SetPropertyStr(ctx, history, "replaceState", JS_NewCFunction(ctx, js_window_addEventListener, "replaceState", 3));
+    JS_SetPropertyStr(ctx, history, "back", JS_NewCFunction(ctx, js_window_addEventListener, "back", 0));
+    JS_SetPropertyStr(ctx, history, "forward", JS_NewCFunction(ctx, js_window_addEventListener, "forward", 0));
+    JS_SetPropertyStr(ctx, history, "go", JS_NewCFunction(ctx, js_window_addEventListener, "go", 1));
+    JS_SetPropertyStr(ctx, global, "history", history);
+
+    // ---- screen object ----
+    JSValue screen = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, screen, "width", JS_NewInt32(ctx, 1920));
+    JS_SetPropertyStr(ctx, screen, "height", JS_NewInt32(ctx, 1080));
+    JS_SetPropertyStr(ctx, screen, "availWidth", JS_NewInt32(ctx, 1920));
+    JS_SetPropertyStr(ctx, screen, "availHeight", JS_NewInt32(ctx, 1040));
+    JS_SetPropertyStr(ctx, screen, "colorDepth", JS_NewInt32(ctx, 24));
+    JS_SetPropertyStr(ctx, screen, "pixelDepth", JS_NewInt32(ctx, 24));
+    JS_SetPropertyStr(ctx, screen, "orientation", JS_NewObject(ctx));
+    JS_SetPropertyStr(ctx, global, "screen", screen);
+
+    // ---- performance object ----
+    JSValue perf = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, perf, "now",
+        JS_NewCFunction(ctx, js_performance_now, "now", 0));
+    JSValue timing = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, timing, "navigationStart", JS_NewFloat64(ctx, 0));
+    JS_SetPropertyStr(ctx, perf, "timing", timing);
+    JS_SetPropertyStr(ctx, perf, "getEntries", JS_NewCFunction(ctx,
+        [](JSContext* cx, JSValueConst, int, JSValueConst*) -> JSValue { return JS_NewArray(cx); }, "getEntries", 0));
+    JS_SetPropertyStr(ctx, perf, "getEntriesByType", JS_NewCFunction(ctx,
+        [](JSContext* cx, JSValueConst, int, JSValueConst*) -> JSValue { return JS_NewArray(cx); }, "getEntriesByType", 1));
+    JS_SetPropertyStr(ctx, perf, "getEntriesByName", JS_NewCFunction(ctx,
+        [](JSContext* cx, JSValueConst, int, JSValueConst*) -> JSValue { return JS_NewArray(cx); }, "getEntriesByName", 1));
+    JS_SetPropertyStr(ctx, perf, "mark", JS_NewCFunction(ctx, js_window_addEventListener, "mark", 1));
+    JS_SetPropertyStr(ctx, perf, "measure", JS_NewCFunction(ctx, js_window_addEventListener, "measure", 1));
+    JS_SetPropertyStr(ctx, global, "performance", perf);
+
+    // ---- window properties ----
+    JS_SetPropertyStr(ctx, global, "innerWidth", JS_NewInt32(ctx, 1200));
+    JS_SetPropertyStr(ctx, global, "innerHeight", JS_NewInt32(ctx, 800));
+    JS_SetPropertyStr(ctx, global, "outerWidth", JS_NewInt32(ctx, 1200));
+    JS_SetPropertyStr(ctx, global, "outerHeight", JS_NewInt32(ctx, 900));
+    JS_SetPropertyStr(ctx, global, "scrollX", JS_NewInt32(ctx, 0));
+    JS_SetPropertyStr(ctx, global, "scrollY", JS_NewInt32(ctx, 0));
+    JS_SetPropertyStr(ctx, global, "pageXOffset", JS_NewInt32(ctx, 0));
+    JS_SetPropertyStr(ctx, global, "pageYOffset", JS_NewInt32(ctx, 0));
+    JS_SetPropertyStr(ctx, global, "devicePixelRatio", JS_NewFloat64(ctx, 1.0));
+    JS_SetPropertyStr(ctx, global, "self", JS_DupValue(ctx, global));
+    JS_SetPropertyStr(ctx, global, "top", JS_DupValue(ctx, global));
+    JS_SetPropertyStr(ctx, global, "parent", JS_DupValue(ctx, global));
+    JS_SetPropertyStr(ctx, global, "frames", JS_DupValue(ctx, global));
+    JS_SetPropertyStr(ctx, global, "name", JS_NewString(ctx, ""));
+    JS_SetPropertyStr(ctx, global, "status", JS_NewString(ctx, ""));
+    JS_SetPropertyStr(ctx, global, "closed", JS_FALSE);
+    JS_SetPropertyStr(ctx, global, "length", JS_NewInt32(ctx, 0));
+    JS_SetPropertyStr(ctx, global, "opener", JS_NULL);
+    JS_SetPropertyStr(ctx, global, "frameElement", JS_NULL);
+
+    // scrollTo / scrollBy / scroll (no-op stubs)
+    JS_SetPropertyStr(ctx, global, "scrollTo", JS_NewCFunction(ctx, js_window_addEventListener, "scrollTo", 2));
+    JS_SetPropertyStr(ctx, global, "scrollBy", JS_NewCFunction(ctx, js_window_addEventListener, "scrollBy", 2));
+    JS_SetPropertyStr(ctx, global, "scroll", JS_NewCFunction(ctx, js_window_addEventListener, "scroll", 2));
+    JS_SetPropertyStr(ctx, global, "focus", JS_NewCFunction(ctx, js_window_addEventListener, "focus", 0));
+    JS_SetPropertyStr(ctx, global, "blur", JS_NewCFunction(ctx, js_window_addEventListener, "blur", 0));
+    JS_SetPropertyStr(ctx, global, "print", JS_NewCFunction(ctx, js_window_addEventListener, "print", 0));
+    JS_SetPropertyStr(ctx, global, "stop", JS_NewCFunction(ctx, js_window_addEventListener, "stop", 0));
+    JS_SetPropertyStr(ctx, global, "open", JS_NewCFunction(ctx, js_window_addEventListener, "open", 1));
+    JS_SetPropertyStr(ctx, global, "close", JS_NewCFunction(ctx, js_window_addEventListener, "close", 0));
+    JS_SetPropertyStr(ctx, global, "postMessage", JS_NewCFunction(ctx, js_window_addEventListener, "postMessage", 1));
+    JS_SetPropertyStr(ctx, global, "dispatchEvent",
+        JS_NewCFunction(ctx, [](JSContext* cx, JSValueConst, int, JSValueConst*) -> JSValue {
+            return JS_TRUE;
+        }, "dispatchEvent", 1));
+
     JS_FreeValue(ctx, global);
+
+    // ---- JS polyfills (localStorage, sessionStorage, constructors, etc.) ----
+    const char* polyfills = R"JS(
+// localStorage / sessionStorage (in-memory)
+(function() {
+    function makeStorage() {
+        var _data = {};
+        return {
+            getItem: function(k) { return _data.hasOwnProperty(k) ? _data[k] : null; },
+            setItem: function(k, v) { _data[k] = String(v); },
+            removeItem: function(k) { delete _data[k]; },
+            clear: function() { _data = {}; },
+            key: function(i) { var keys = Object.keys(_data); return i < keys.length ? keys[i] : null; },
+            get length() { return Object.keys(_data).length; }
+        };
+    }
+    globalThis.localStorage = makeStorage();
+    globalThis.sessionStorage = makeStorage();
+})();
+
+// Event / CustomEvent constructors
+globalThis.Event = function Event(type, opts) {
+    this.type = type || '';
+    this.bubbles = (opts && opts.bubbles) || false;
+    this.cancelable = (opts && opts.cancelable) || false;
+    this.composed = (opts && opts.composed) || false;
+    this.defaultPrevented = false;
+    this.target = null;
+    this.currentTarget = null;
+    this.timeStamp = performance.now();
+    this.preventDefault = function() { this.defaultPrevented = true; };
+    this.stopPropagation = function() {};
+    this.stopImmediatePropagation = function() {};
+};
+
+globalThis.CustomEvent = function CustomEvent(type, opts) {
+    Event.call(this, type, opts);
+    this.detail = (opts && opts.detail) || null;
+};
+
+// MutationObserver stub
+globalThis.MutationObserver = function MutationObserver(cb) {
+    this.observe = function() {};
+    this.disconnect = function() {};
+    this.takeRecords = function() { return []; };
+};
+
+// ResizeObserver stub
+globalThis.ResizeObserver = function ResizeObserver(cb) {
+    this.observe = function() {};
+    this.unobserve = function() {};
+    this.disconnect = function() {};
+};
+
+// IntersectionObserver stub
+globalThis.IntersectionObserver = function IntersectionObserver(cb, opts) {
+    this.observe = function() {};
+    this.unobserve = function() {};
+    this.disconnect = function() {};
+    this.root = (opts && opts.root) || null;
+    this.rootMargin = (opts && opts.rootMargin) || '0px';
+    this.thresholds = (opts && opts.threshold) ? [].concat(opts.threshold) : [0];
+};
+
+// Image constructor stub
+globalThis.Image = function Image(w, h) {
+    this.src = '';
+    this.width = w || 0;
+    this.height = h || 0;
+    this.onload = null;
+    this.onerror = null;
+    this.addEventListener = function() {};
+    this.removeEventListener = function() {};
+};
+
+// btoa / atob
+if (typeof globalThis.btoa === 'undefined') {
+    var _chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
+    globalThis.btoa = function(s) {
+        var r = '', i = 0;
+        while (i < s.length) {
+            var a = s.charCodeAt(i++), b = i < s.length ? s.charCodeAt(i++) : NaN, c = i < s.length ? s.charCodeAt(i++) : NaN;
+            var e1 = a >> 2, e2 = ((a & 3) << 4) | (isNaN(b) ? 0 : b >> 4);
+            var e3 = isNaN(b) ? 64 : ((b & 15) << 2) | (isNaN(c) ? 0 : c >> 6);
+            var e4 = isNaN(c) ? 64 : c & 63;
+            r += _chars[e1] + _chars[e2] + _chars[e3] + _chars[e4];
+        }
+        return r;
+    };
+    globalThis.atob = function(s) {
+        var r = '', i = 0;
+        s = s.replace(/[^A-Za-z0-9+/=]/g, '');
+        while (i < s.length) {
+            var e1 = _chars.indexOf(s[i++]), e2 = _chars.indexOf(s[i++]);
+            var e3 = _chars.indexOf(s[i++]), e4 = _chars.indexOf(s[i++]);
+            r += String.fromCharCode((e1 << 2) | (e2 >> 4));
+            if (e3 !== 64) r += String.fromCharCode(((e2 & 15) << 4) | (e3 >> 2));
+            if (e4 !== 64) r += String.fromCharCode(((e3 & 3) << 6) | e4);
+        }
+        return r;
+    };
+}
+
+// URLSearchParams basic stub
+globalThis.URLSearchParams = function URLSearchParams(init) {
+    this._params = {};
+    if (typeof init === 'string') {
+        var s = init.startsWith('?') ? init.slice(1) : init;
+        s.split('&').forEach(function(pair) {
+            var kv = pair.split('=');
+            if (kv[0]) this._params[decodeURIComponent(kv[0])] = decodeURIComponent(kv[1] || '');
+        }.bind(this));
+    }
+    this.get = function(k) { return this._params.hasOwnProperty(k) ? this._params[k] : null; };
+    this.set = function(k, v) { this._params[k] = String(v); };
+    this.has = function(k) { return this._params.hasOwnProperty(k); };
+    this.delete = function(k) { delete this._params[k]; };
+    this.toString = function() {
+        return Object.keys(this._params).map(function(k) {
+            return encodeURIComponent(k) + '=' + encodeURIComponent(this._params[k]);
+        }.bind(this)).join('&');
+    };
+    this.forEach = function(cb) {
+        for (var k in this._params) if (this._params.hasOwnProperty(k)) cb(this._params[k], k, this);
+    };
+};
+
+// URL constructor basic stub
+globalThis.URL = function URL(url, base) {
+    if (base && !url.match(/^https?:\/\//)) {
+        url = base.replace(/\/[^/]*$/, '/') + url;
+    }
+    this.href = url;
+    var m = url.match(/^(https?:)\/\/([^/:]+)(?::(\d+))?(\/[^?#]*)?(\?[^#]*)?(#.*)?$/);
+    if (m) {
+        this.protocol = m[1]; this.hostname = m[2]; this.port = m[3] || '';
+        this.pathname = m[4] || '/'; this.search = m[5] || ''; this.hash = m[6] || '';
+        this.host = this.port ? this.hostname + ':' + this.port : this.hostname;
+        this.origin = this.protocol + '//' + this.host;
+    } else {
+        this.protocol = ''; this.hostname = ''; this.port = ''; this.pathname = url;
+        this.search = ''; this.hash = ''; this.host = ''; this.origin = '';
+    }
+    this.searchParams = new URLSearchParams(this.search);
+    this.toString = function() { return this.href; };
+};
+
+// DOMParser stub
+globalThis.DOMParser = function DOMParser() {
+    this.parseFromString = function(str, type) { return { documentElement: null }; };
+};
+
+// XMLHttpRequest stub
+globalThis.XMLHttpRequest = function XMLHttpRequest() {
+    this.readyState = 0; this.status = 0; this.statusText = '';
+    this.responseText = ''; this.responseXML = null; this.response = '';
+    this.onreadystatechange = null; this.onload = null; this.onerror = null;
+    this.open = function() { this.readyState = 1; };
+    this.send = function() {};
+    this.setRequestHeader = function() {};
+    this.getResponseHeader = function() { return null; };
+    this.getAllResponseHeaders = function() { return ''; };
+    this.abort = function() {};
+    this.addEventListener = function() {};
+    this.removeEventListener = function() {};
+};
+
+// document additions
+document.addEventListener = function() {};
+document.removeEventListener = function() {};
+document.createEvent = function(type) { return new Event(type); };
+document.createDocumentFragment = function() {
+    return { appendChild: function(c) { return c; }, childNodes: [], children: [] };
+};
+document.cookie = '';
+document.readyState = 'complete';
+document.title = '';
+document.domain = location.hostname;
+document.referrer = '';
+document.compatMode = 'CSS1Compat';
+document.characterSet = 'UTF-8';
+document.contentType = 'text/html';
+)JS";
+
+    eval(polyfills, "<browser-polyfills>");
 }
 
 bool JSEngine::eval(const std::string& code, const std::string& filename) {

@@ -58,6 +58,7 @@ public:
     JSContext* ctx = nullptr;
     AppState* app_state = nullptr;
     Document* document = nullptr;
+    std::string page_url; // current page URL for location object
 
 private:
     void setupGlobals();

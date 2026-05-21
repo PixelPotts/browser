@@ -2047,6 +2047,7 @@ static void fetch_page(AppState* st, std::string url, int gen) {
         // Create JS engine and run scripts
         auto* engine = new JSEngine();
         st->js_engine = engine;
+        engine->page_url = st->current_url;
         engine->init(st, doc.get());
 
         // Wire up inspector console callback if inspector is open
