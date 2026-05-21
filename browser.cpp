@@ -1197,7 +1197,7 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
             auto elem = doc->createElement("input");
             elem->attributes = extract_all_attrs(tag);
             auto id_it = elem->attributes.find("id");
-            elem->id = id_it != elem->attributes.end() ? tolower_s(id_it->second) : "";
+            elem->id = id_it != elem->attributes.end() ? id_it->second : "";
             auto cls_it = elem->attributes.find("class");
             elem->class_list = cls_it != elem->attributes.end() ? split_classes(cls_it->second) : std::vector<std::string>{};
             cur_parent->children.push_back(elem);
@@ -1215,7 +1215,7 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
             auto cls_it = elem->attributes.find("class");
             elem->class_list = cls_it != elem->attributes.end() ? split_classes(cls_it->second) : std::vector<std::string>{};
             auto id_it = elem->attributes.find("id");
-            elem->id = id_it != elem->attributes.end() ? tolower_s(id_it->second) : "";
+            elem->id = id_it != elem->attributes.end() ? id_it->second : "";
             elem->fs_computed = parent_fs;
 
             // UA defaults for bold tags
