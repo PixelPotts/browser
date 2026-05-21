@@ -280,6 +280,107 @@ static JSValue js_element_get_classList(JSContext* ctx, JSValueConst this_val) {
     return js_wrap_classlist(ctx, node);
 }
 
+// ---- Form element properties ----
+
+static JSValue js_element_get_value(JSContext* ctx, JSValueConst this_val) {
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node) return JS_NewString(ctx, "");
+    auto it = node->attributes.find("value");
+    return JS_NewString(ctx, it != node->attributes.end() ? it->second.c_str() : "");
+}
+
+static JSValue js_element_set_value(JSContext* ctx, JSValueConst this_val,
+                                     int argc, JSValueConst* argv) {
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node || argc < 1) return JS_UNDEFINED;
+    const char* s = JS_ToCString(ctx, argv[0]);
+    if (s) { node->attributes["value"] = s; JS_FreeCString(ctx, s); }
+    node->markDirty();
+    if (g_js_engine) g_js_engine->scheduleRerender();
+    return JS_UNDEFINED;
+}
+
+static JSValue js_element_get_checked(JSContext* ctx, JSValueConst this_val) {
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node) return JS_FALSE;
+    return JS_NewBool(ctx, node->attributes.count("checked") > 0);
+}
+
+static JSValue js_element_set_checked(JSContext* ctx, JSValueConst this_val,
+                                       int argc, JSValueConst* argv) {
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node || argc < 1) return JS_UNDEFINED;
+    int val = JS_ToBool(ctx, argv[0]);
+    if (val) node->attributes["checked"] = "checked";
+    else node->attributes.erase("checked");
+    node->markDirty();
+    if (g_js_engine) g_js_engine->scheduleRerender();
+    return JS_UNDEFINED;
+}
+
+static JSValue js_element_get_disabled(JSContext* ctx, JSValueConst this_val) {
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node) return JS_FALSE;
+    return JS_NewBool(ctx, node->attributes.count("disabled") > 0);
+}
+
+static JSValue js_element_set_disabled(JSContext* ctx, JSValueConst this_val,
+                                        int argc, JSValueConst* argv) {
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node || argc < 1) return JS_UNDEFINED;
+    int val = JS_ToBool(ctx, argv[0]);
+    if (val) node->attributes["disabled"] = "disabled";
+    else node->attributes.erase("disabled");
+    node->markDirty();
+    if (g_js_engine) g_js_engine->scheduleRerender();
+    return JS_UNDEFINED;
+}
+
+static JSValue js_element_get_selectedIndex(JSContext* ctx, JSValueConst this_val) {
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node) return JS_NewInt32(ctx, -1);
+    auto it = node->attributes.find("selectedindex");
+    if (it != node->attributes.end()) {
+        try { return JS_NewInt32(ctx, std::stoi(it->second)); } catch(...) {}
+    }
+    return JS_NewInt32(ctx, 0);
+}
+
+static JSValue js_element_set_selectedIndex(JSContext* ctx, JSValueConst this_val,
+                                             int argc, JSValueConst* argv) {
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node || argc < 1) return JS_UNDEFINED;
+    int32_t idx;
+    JS_ToInt32(ctx, &idx, argv[0]);
+    node->attributes["selectedindex"] = std::to_string(idx);
+    // Update value to match selected option
+    int i = 0;
+    for (auto& c : node->children) {
+        if (c->tag_name == "option") {
+            if (i == idx) {
+                auto vit = c->attributes.find("value");
+                node->attributes["value"] = vit != c->attributes.end() ? vit->second : c->getTextContent();
+                break;
+            }
+            ++i;
+        }
+    }
+    node->markDirty();
+    if (g_js_engine) g_js_engine->scheduleRerender();
+    return JS_UNDEFINED;
+}
+
+static JSValue js_element_get_type(JSContext* ctx, JSValueConst this_val) {
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node) return JS_NewString(ctx, "");
+    auto it = node->attributes.find("type");
+    if (it != node->attributes.end()) return JS_NewString(ctx, it->second.c_str());
+    if (node->tag_name == "input") return JS_NewString(ctx, "text");
+    if (node->tag_name == "textarea") return JS_NewString(ctx, "textarea");
+    if (node->tag_name == "select") return JS_NewString(ctx, "select-one");
+    return JS_NewString(ctx, "");
+}
+
 // ---- Element methods ----
 
 static JSValue js_element_getAttribute(JSContext* ctx, JSValueConst this_val,
@@ -804,6 +905,32 @@ void js_bindings_init(JSEngine* engine) {
     JS_DefinePropertyGetSet(ctx, elem_proto,
         JS_NewAtom(ctx, "classList"),
         JS_NewCFunction(ctx, (JSCFunction*)js_element_get_classList, "get classList", 0),
+        JS_UNDEFINED, JS_PROP_CONFIGURABLE);
+
+    // Form properties
+    JS_DefinePropertyGetSet(ctx, elem_proto,
+        JS_NewAtom(ctx, "value"),
+        JS_NewCFunction(ctx, (JSCFunction*)js_element_get_value, "get value", 0),
+        JS_NewCFunction(ctx, js_element_set_value, "set value", 1),
+        JS_PROP_CONFIGURABLE);
+    JS_DefinePropertyGetSet(ctx, elem_proto,
+        JS_NewAtom(ctx, "checked"),
+        JS_NewCFunction(ctx, (JSCFunction*)js_element_get_checked, "get checked", 0),
+        JS_NewCFunction(ctx, js_element_set_checked, "set checked", 1),
+        JS_PROP_CONFIGURABLE);
+    JS_DefinePropertyGetSet(ctx, elem_proto,
+        JS_NewAtom(ctx, "disabled"),
+        JS_NewCFunction(ctx, (JSCFunction*)js_element_get_disabled, "get disabled", 0),
+        JS_NewCFunction(ctx, js_element_set_disabled, "set disabled", 1),
+        JS_PROP_CONFIGURABLE);
+    JS_DefinePropertyGetSet(ctx, elem_proto,
+        JS_NewAtom(ctx, "selectedIndex"),
+        JS_NewCFunction(ctx, (JSCFunction*)js_element_get_selectedIndex, "get selectedIndex", 0),
+        JS_NewCFunction(ctx, js_element_set_selectedIndex, "set selectedIndex", 1),
+        JS_PROP_CONFIGURABLE);
+    JS_DefinePropertyGetSet(ctx, elem_proto,
+        JS_NewAtom(ctx, "type"),
+        JS_NewCFunction(ctx, (JSCFunction*)js_element_get_type, "get type", 0),
         JS_UNDEFINED, JS_PROP_CONFIGURABLE);
 
     // Methods
