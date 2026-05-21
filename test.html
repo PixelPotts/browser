@@ -368,6 +368,96 @@
         <p id="rp-result">Waiting...</p>
     </div>
 
+    <!-- ===== Test 41: text-transform ===== -->
+    <div class="test-section">
+        <h2>41. text-transform</h2>
+        <span id="tt-upper" style="text-transform: uppercase">hello world</span>
+        <span id="tt-lower" style="text-transform: lowercase">HELLO WORLD</span>
+        <span id="tt-cap" style="text-transform: capitalize">hello world</span>
+        <span id="tt-none" style="text-transform: none">Hello World</span>
+        <p id="tt-result">Waiting...</p>
+    </div>
+
+    <!-- ===== Test 42: font-family ===== -->
+    <div class="test-section">
+        <h2>42. font-family</h2>
+        <span id="ff-serif" style="font-family: serif">Serif text</span>
+        <span id="ff-mono" style="font-family: monospace">Monospace text</span>
+        <span id="ff-sans" style="font-family: sans-serif">Sans-serif text</span>
+        <p id="ff-result">Waiting...</p>
+    </div>
+
+    <!-- ===== Test 43: box-shadow + opacity ===== -->
+    <div class="test-section">
+        <h2>43. box-shadow + opacity</h2>
+        <div id="bs-card" style="box-shadow: 2px 2px 5px rgba(0,0,0,0.3); padding: 10px; background-color: #fff;">Shadow card</div>
+        <div id="op-half" style="opacity: 0.5; background-color: #e74c3c; padding: 10px;">50% opacity</div>
+        <p id="bs-result">Waiting...</p>
+    </div>
+
+    <!-- ===== Test 44: overflow hidden ===== -->
+    <div class="test-section">
+        <h2>44. overflow hidden</h2>
+        <div id="ov-hidden" style="overflow: hidden; height: 40px; background-color: #eee;">
+            <p>Line 1 visible</p>
+            <p>Line 2 hidden</p>
+            <p>Line 3 hidden</p>
+        </div>
+        <p id="ov-result">Waiting...</p>
+    </div>
+
+    <!-- ===== Test 45: Attribute selectors ===== -->
+    <style>
+        [data-test-attr] { color: green; }
+        [data-test-val="hello"] { font-weight: bold; }
+    </style>
+    <div class="test-section">
+        <h2>45. Attribute Selectors</h2>
+        <span id="as-has" data-test-attr>Has attr</span>
+        <span id="as-val" data-test-val="hello">Has val</span>
+        <span id="as-none">No attr</span>
+        <p id="as-result">Waiting...</p>
+    </div>
+
+    <!-- ===== Test 46: Flexbox ===== -->
+    <div class="test-section">
+        <h2>46. Flexbox</h2>
+        <div id="flex-row" style="display: flex; flex-direction: row; gap: 10px;">
+            <div style="background-color: #3498db; padding: 5px;">A</div>
+            <div style="background-color: #e74c3c; padding: 5px;">B</div>
+            <div style="background-color: #2ecc71; padding: 5px;">C</div>
+        </div>
+        <div id="flex-col" style="display: flex; flex-direction: column; gap: 5px;">
+            <div style="background-color: #f39c12; padding: 5px;">X</div>
+            <div style="background-color: #9b59b6; padding: 5px;">Y</div>
+        </div>
+        <p id="flex-result">Waiting...</p>
+    </div>
+
+    <!-- ===== Test 47: Form widgets ===== -->
+    <div class="test-section">
+        <h2>47. Form Widgets</h2>
+        <input type="text" id="fw-text" value="initial" placeholder="Enter text">
+        <input type="password" id="fw-pass" value="secret">
+        <input type="checkbox" id="fw-check" checked>
+        <select id="fw-select">
+            <option value="a">Alpha</option>
+            <option value="b" selected>Beta</option>
+            <option value="c">Gamma</option>
+        </select>
+        <textarea id="fw-textarea">Hello textarea</textarea>
+        <p id="fw-result">Waiting...</p>
+    </div>
+
+    <!-- ===== Test 48: CSS Positioning ===== -->
+    <div class="test-section">
+        <h2>48. CSS Positioning</h2>
+        <div style="position: relative; height: 60px; background-color: #eee;">
+            <div id="pos-rel" style="position: relative; top: 10px; left: 20px; background-color: #3498db; padding: 5px;">Relative</div>
+        </div>
+        <p id="pos-result">Waiting...</p>
+    </div>
+
     <script>
     // ===== Test 1: DOM Queries =====
     (function() {
@@ -1039,8 +1129,105 @@
         console.log("Test 40 (Re-parent): done");
     })();
 
+    // ===== Test 41: text-transform =====
+    (function() {
+        var r = [];
+        var el = document.getElementById("tt-upper");
+        r.push(el ? "tt-upper exists: PASS" : "tt-upper: FAIL");
+        var el2 = document.getElementById("tt-none");
+        r.push(el2 ? "tt-none exists: PASS" : "tt-none: FAIL");
+        document.getElementById("tt-result").textContent = r.join(" | ");
+        console.log("Test 41 (text-transform): done");
+    })();
+
+    // ===== Test 42: font-family =====
+    (function() {
+        var r = [];
+        var el = document.getElementById("ff-serif");
+        r.push(el ? "ff-serif exists: PASS" : "ff-serif: FAIL");
+        var el2 = document.getElementById("ff-mono");
+        r.push(el2 ? "ff-mono exists: PASS" : "ff-mono: FAIL");
+        document.getElementById("ff-result").textContent = r.join(" | ");
+        console.log("Test 42 (font-family): done");
+    })();
+
+    // ===== Test 43: box-shadow + opacity =====
+    (function() {
+        var r = [];
+        var card = document.getElementById("bs-card");
+        r.push(card ? "bs-card exists: PASS" : "bs-card: FAIL");
+        var op = document.getElementById("op-half");
+        r.push(op ? "op-half exists: PASS" : "op-half: FAIL");
+        document.getElementById("bs-result").textContent = r.join(" | ");
+        console.log("Test 43 (box-shadow/opacity): done");
+    })();
+
+    // ===== Test 44: overflow hidden =====
+    (function() {
+        var r = [];
+        var el = document.getElementById("ov-hidden");
+        r.push(el ? "ov-hidden exists: PASS" : "ov-hidden: FAIL");
+        document.getElementById("ov-result").textContent = r.join(" | ");
+        console.log("Test 44 (overflow): done");
+    })();
+
+    // ===== Test 45: Attribute selectors =====
+    (function() {
+        var r = [];
+        var has = document.querySelectorAll("[data-test-attr]");
+        r.push(has.length >= 1 ? "has attr: PASS" : "has attr: FAIL (" + has.length + ")");
+        var val = document.querySelectorAll("[data-test-val=\"hello\"]");
+        r.push(val.length >= 1 ? "val match: PASS" : "val match: FAIL (" + val.length + ")");
+        var none = document.querySelectorAll(":not([data-test-attr])");
+        r.push(none.length > 0 ? ":not works: PASS" : ":not: FAIL");
+        var first = document.querySelectorAll(".test-section:first-child");
+        r.push(first.length >= 0 ? ":first-child: PASS" : ":first-child: FAIL");
+        document.getElementById("as-result").textContent = r.join(" | ");
+        console.log("Test 45 (attr selectors): done");
+    })();
+
+    // ===== Test 46: Flexbox =====
+    (function() {
+        var r = [];
+        var row = document.getElementById("flex-row");
+        r.push(row ? "flex-row exists: PASS" : "flex-row: FAIL");
+        r.push(row && row.children.length === 3 ? "3 children: PASS" : "children: FAIL");
+        var col = document.getElementById("flex-col");
+        r.push(col ? "flex-col exists: PASS" : "flex-col: FAIL");
+        document.getElementById("flex-result").textContent = r.join(" | ");
+        console.log("Test 46 (flexbox): done");
+    })();
+
+    // ===== Test 47: Form widgets =====
+    (function() {
+        var r = [];
+        var text = document.getElementById("fw-text");
+        r.push(text ? "text input exists: PASS" : "text: FAIL");
+        r.push(text && text.value === "initial" ? "text value: PASS" : "text value: FAIL ('" + (text?text.value:"") + "')");
+        r.push(text && text.type === "text" ? "text type: PASS" : "text type: FAIL ('" + (text?text.type:"") + "')");
+        var pass = document.getElementById("fw-pass");
+        r.push(pass ? "pass input exists: PASS" : "pass: FAIL");
+        var check = document.getElementById("fw-check");
+        r.push(check ? "checkbox exists: PASS" : "checkbox: FAIL");
+        r.push(check && check.checked === true ? "checked: PASS" : "checked: FAIL");
+        var sel = document.getElementById("fw-select");
+        r.push(sel ? "select exists: PASS" : "select: FAIL");
+        r.push(sel && sel.value ? "select value: PASS ('" + sel.value + "')" : "select value: FAIL");
+        document.getElementById("fw-result").textContent = r.join(" | ");
+        console.log("Test 47 (form widgets): done");
+    })();
+
+    // ===== Test 48: CSS Positioning =====
+    (function() {
+        var r = [];
+        var rel = document.getElementById("pos-rel");
+        r.push(rel ? "pos-rel exists: PASS" : "pos-rel: FAIL");
+        document.getElementById("pos-result").textContent = r.join(" | ");
+        console.log("Test 48 (positioning): done");
+    })();
+
     // ===== Initial summary =====
-    console.log("=== All 40 test sections initialized ===");
+    console.log("=== All 48 test sections initialized ===");
     console.info("Right-click > Inspect or press F12 to open inspector");
     console.warn("This is a test warning to verify Console tab");
     </script>

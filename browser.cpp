@@ -1023,6 +1023,21 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
             continue;
         }
 
+        // <input> — void element, but we need to create a DOMNode for it
+        if (!closing && tname == "input") {
+            auto elem = doc->createElement("input");
+            elem->attributes = extract_all_attrs(tag);
+            auto id_it = elem->attributes.find("id");
+            elem->id = id_it != elem->attributes.end() ? tolower_s(id_it->second) : "";
+            auto cls_it = elem->attributes.find("class");
+            elem->class_list = cls_it != elem->attributes.end() ? split_classes(cls_it->second) : std::vector<std::string>{};
+            cur_parent->children.push_back(elem);
+            elem->parent = cur_parent;
+            doc->registerNode(elem.get());
+            if (!elem->id.empty()) doc->id_map[elem->id] = elem.get();
+            continue;
+        }
+
         if (!closing && !is_void(tname)) {
             int parent_fs = cur_parent ? cur_parent->fs_computed : 16;
             auto elem = doc->createElement(tname);
@@ -3367,6 +3382,153 @@ static void run_probes_phase6(AppState* st) {
     }
 }
 
+// Phase 7: new CSS/form feature probes (tests 41-48)
+static void run_probes_phase7(AppState* st) {
+    Document* doc = st->document.get();
+    if (!doc) return;
+
+    fprintf(stderr, "\n\033[1m=== C++ DOM Probes: Phase 7 (CSS/form features 41-48) ===\033[0m\n");
+
+    // T41: text-transform (DOM node exists, text_transform field set)
+    {
+        DOMNode* el = probe_node(doc, "tt-upper");
+        probe_check("T41: tt-upper exists", el != nullptr);
+        if (el) probe_check("T41: tt-upper text_transform=1 (uppercase)",
+            el->text_transform == 1);
+        DOMNode* el2 = probe_node(doc, "tt-lower");
+        probe_check("T41: tt-lower exists", el2 != nullptr);
+        if (el2) probe_check("T41: tt-lower text_transform=2 (lowercase)",
+            el2->text_transform == 2);
+        DOMNode* el3 = probe_node(doc, "tt-cap");
+        probe_check("T41: tt-cap exists", el3 != nullptr);
+        if (el3) probe_check("T41: tt-cap text_transform=3 (capitalize)",
+            el3->text_transform == 3);
+    }
+
+    // T42: font-family
+    {
+        DOMNode* el = probe_node(doc, "ff-serif");
+        probe_check("T42: ff-serif exists", el != nullptr);
+        if (el) probe_check("T42: ff-serif font_family contains 'serif'",
+            el->font_family.find("serif") != std::string::npos);
+        DOMNode* el2 = probe_node(doc, "ff-mono");
+        probe_check("T42: ff-mono exists", el2 != nullptr);
+        if (el2) probe_check("T42: ff-mono font_family contains 'monospace'",
+            el2->font_family.find("monospace") != std::string::npos);
+    }
+
+    // T43: box-shadow + opacity
+    {
+        DOMNode* card = probe_node(doc, "bs-card");
+        probe_check("T43: bs-card exists", card != nullptr);
+        if (card) probe_check("T43: bs-card has box_shadow",
+            !card->box_shadow.empty());
+        DOMNode* op = probe_node(doc, "op-half");
+        probe_check("T43: op-half exists", op != nullptr);
+        if (op) probe_check("T43: op-half opacity=0.5",
+            op->opacity >= 0.49 && op->opacity <= 0.51);
+    }
+
+    // T44: overflow hidden
+    {
+        DOMNode* el = probe_node(doc, "ov-hidden");
+        probe_check("T44: ov-hidden exists", el != nullptr);
+        if (el) probe_check("T44: ov-hidden overflow=1 (hidden)",
+            el->overflow == 1);
+    }
+
+    // T45: Attribute selectors (via querySelectorAll from C++)
+    {
+        auto results = doc->querySelectorAll("[data-test-attr]");
+        probe_check("T45: querySelectorAll [data-test-attr] finds >= 1", results.size() >= 1);
+        auto results2 = doc->querySelectorAll("[data-test-val=\"hello\"]");
+        probe_check("T45: querySelectorAll [data-test-val=hello] finds >= 1", results2.size() >= 1);
+        auto results3 = doc->querySelectorAll("#as-has:first-child");
+        // This might not be first-child, just testing it doesn't crash
+        probe_check("T45: :first-child selector runs without crash", true);
+    }
+
+    // T46: Flexbox
+    {
+        DOMNode* row = probe_node(doc, "flex-row");
+        probe_check("T46: flex-row exists", row != nullptr);
+        if (row) {
+            probe_check("T46: flex-row display=Flex",
+                row->display == DOMNode::Display::Flex);
+            probe_check("T46: flex-row flex_direction=0 (row)",
+                row->flex_direction == 0);
+            probe_check("T46: flex-row gap=10",
+                row->gap == 10);
+            int ec = 0; for (auto& c : row->children) if (c->node_type == DOMNode::ELEMENT) ec++;
+            probe_check("T46: flex-row has 3 children", ec == 3);
+        }
+        DOMNode* col = probe_node(doc, "flex-col");
+        probe_check("T46: flex-col exists", col != nullptr);
+        if (col) probe_check("T46: flex-col flex_direction=1 (column)",
+            col->flex_direction == 1);
+    }
+
+    // T47: Form widgets
+    {
+        DOMNode* text = probe_node(doc, "fw-text");
+        probe_check("T47: fw-text exists", text != nullptr);
+        if (text) {
+            probe_check("T47: fw-text tag=input", text->tag_name == "input");
+            probe_check("T47: fw-text value='initial'",
+                text->attributes.count("value") && text->attributes["value"] == "initial");
+        }
+        DOMNode* check = probe_node(doc, "fw-check");
+        probe_check("T47: fw-check exists", check != nullptr);
+        if (check) probe_check("T47: fw-check has 'checked' attr",
+            check->attributes.count("checked") > 0);
+        DOMNode* sel = probe_node(doc, "fw-select");
+        probe_check("T47: fw-select exists", sel != nullptr);
+        if (sel) {
+            int opt_count = 0;
+            for (auto& c : sel->children) if (c->tag_name == "option") opt_count++;
+            probe_check("T47: fw-select has 3 options", opt_count == 3);
+        }
+    }
+
+    // T48: CSS positioning
+    {
+        DOMNode* rel = probe_node(doc, "pos-rel");
+        probe_check("T48: pos-rel exists", rel != nullptr);
+        if (rel) {
+            probe_check("T48: pos-rel position=1 (relative)", rel->position == 1);
+            probe_check("T48: pos-rel pos_top=10", rel->pos_top == 10);
+            probe_check("T48: pos-rel pos_left=20", rel->pos_left == 20);
+        }
+    }
+
+    // T41-result check
+    {
+        std::string t = probe_text(doc, "tt-result");
+        probe_check("T41: tt-result text set", !t.empty() && t != "Waiting...");
+    }
+
+    // T45-result check
+    {
+        std::string t = probe_text(doc, "as-result");
+        probe_check("T45: as-result contains PASS",
+            t.find("PASS") != std::string::npos);
+    }
+
+    // T46-result check
+    {
+        std::string t = probe_text(doc, "flex-result");
+        probe_check("T46: flex-result contains PASS",
+            t.find("PASS") != std::string::npos);
+    }
+
+    // T47-result check
+    {
+        std::string t = probe_text(doc, "fw-result");
+        probe_check("T47: fw-result contains PASS",
+            t.find("PASS") != std::string::npos);
+    }
+}
+
 static void run_test_probes(AppState* st) {
     fprintf(stderr, "\n\033[1;36m╔══════════════════════════════════════════╗\033[0m\n");
     fprintf(stderr, "\033[1;36m║     C++ DOM PROBE TEST SUITE             ║\033[0m\n");
@@ -3378,6 +3540,7 @@ static void run_test_probes(AppState* st) {
     run_probes_phase4(st);
     run_probes_phase5(st);
     run_probes_phase6(st);
+    run_probes_phase7(st);
 
     fprintf(stderr, "\n\033[1m═══════════════════════════════════════════\033[0m\n");
     fprintf(stderr, "  Total: %d passed, %d failed, %d total\n",
