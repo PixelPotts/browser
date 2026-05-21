@@ -903,7 +903,8 @@ static std::vector<Element> parse_elements(const std::string& html, const std::s
 
         // handle display:none skip region
         if (skip_depth > 0) {
-            if (!closing && !is_void(tname)) skip_depth++;
+            bool self_closing = (!tag.empty() && tag.back() == '/');
+            if (!closing && !self_closing && !is_void(tname)) skip_depth++;
             else if (closing) { if (--skip_depth == 0) acc.clear(); }
             continue;
         }
@@ -1165,7 +1166,8 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
 
         // handle display:none skip region
         if (skip_depth > 0) {
-            if (!closing && !is_void(tname)) skip_depth++;
+            bool self_closing = (!tag.empty() && tag.back() == '/');
+            if (!closing && !self_closing && !is_void(tname)) skip_depth++;
             else if (closing) { if (--skip_depth == 0) acc.clear(); }
             continue;
         }
