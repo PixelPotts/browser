@@ -50,6 +50,160 @@ void DOMNode::setTextContent(const std::string& text, uint32_t& next_id) {
     markDirty();
 }
 
+// Helper: lowercase a string
+static std::string str_lower(const std::string& s) {
+    std::string r = s;
+    for (auto& c : r) c = tolower((unsigned char)c);
+    return r;
+}
+
+// Helper: parse attributes from an opening tag string like `div id="x" class="y"`
+static void parse_tag_attrs(const std::string& tag_body, DOMNode* node) {
+    size_t i = 0;
+    // skip tag name
+    while (i < tag_body.size() && !isspace((unsigned char)tag_body[i])) i++;
+    while (i < tag_body.size()) {
+        while (i < tag_body.size() && isspace((unsigned char)tag_body[i])) i++;
+        if (i >= tag_body.size()) break;
+        // attribute name
+        size_t name_start = i;
+        while (i < tag_body.size() && tag_body[i] != '=' && !isspace((unsigned char)tag_body[i])) i++;
+        std::string name = str_lower(tag_body.substr(name_start, i - name_start));
+        while (i < tag_body.size() && isspace((unsigned char)tag_body[i])) i++;
+        std::string value;
+        if (i < tag_body.size() && tag_body[i] == '=') {
+            i++; // skip =
+            while (i < tag_body.size() && isspace((unsigned char)tag_body[i])) i++;
+            if (i < tag_body.size() && (tag_body[i] == '"' || tag_body[i] == '\'')) {
+                char q = tag_body[i++];
+                size_t vs = i;
+                while (i < tag_body.size() && tag_body[i] != q) i++;
+                value = tag_body.substr(vs, i - vs);
+                if (i < tag_body.size()) i++;
+            } else {
+                size_t vs = i;
+                while (i < tag_body.size() && !isspace((unsigned char)tag_body[i])) i++;
+                value = tag_body.substr(vs, i - vs);
+            }
+        }
+        if (!name.empty()) {
+            node->attributes[name] = value;
+            if (name == "id") node->id = value;
+            else if (name == "class") {
+                node->class_list.clear();
+                std::string cls;
+                for (char c : value) {
+                    if (isspace((unsigned char)c)) {
+                        if (!cls.empty()) { node->class_list.push_back(cls); cls.clear(); }
+                    } else cls += c;
+                }
+                if (!cls.empty()) node->class_list.push_back(cls);
+            }
+        }
+    }
+}
+
+// Void/self-closing elements
+static bool is_void_element(const std::string& tag) {
+    static const char* voids[] = {
+        "area","base","br","col","embed","hr","img","input",
+        "link","meta","param","source","track","wbr", nullptr
+    };
+    for (const char** p = voids; *p; ++p)
+        if (tag == *p) return true;
+    return false;
+}
+
+void DOMNode::setInnerHTML(const std::string& html, uint32_t& next_id,
+                           std::unordered_map<uint32_t, DOMNode*>& node_map,
+                           std::unordered_map<std::string, DOMNode*>& id_map) {
+    // Unregister old children from maps
+    std::function<void(DOMNode*)> unreg = [&](DOMNode* n) {
+        node_map.erase(n->node_id);
+        if (!n->id.empty()) id_map.erase(n->id);
+        for (auto& c : n->children) unreg(c.get());
+    };
+    for (auto& c : children) unreg(c.get());
+    children.clear();
+
+    if (html.empty()) { markDirty(); return; }
+
+    // Simple HTML fragment parser
+    DOMNode* cur = this;
+    size_t i = 0;
+    size_t len = html.size();
+
+    while (i < len) {
+        if (html[i] == '<') {
+            size_t tag_start = i;
+            i++;
+            if (i >= len) break;
+
+            // Closing tag
+            if (html[i] == '/') {
+                i++;
+                size_t ns = i;
+                while (i < len && html[i] != '>') i++;
+                std::string close_tag = str_lower(html.substr(ns, i - ns));
+                // Trim whitespace
+                while (!close_tag.empty() && isspace((unsigned char)close_tag.back()))
+                    close_tag.pop_back();
+                if (i < len) i++; // skip >
+                // Walk up to find matching open tag
+                DOMNode* p = cur;
+                while (p && p != this && p->tag_name != close_tag)
+                    p = p->parent;
+                if (p && p != this)
+                    cur = p->parent ? p->parent : this;
+                continue;
+            }
+
+            // Opening tag
+            size_t ts = i;
+            while (i < len && html[i] != '>' && !isspace((unsigned char)html[i])) i++;
+            std::string tag_name = str_lower(html.substr(ts, i - ts));
+
+            // Collect full tag body until >
+            while (i < len && html[i] != '>') i++;
+            std::string tag_body = html.substr(ts, i - ts);
+            bool self_close = (!tag_body.empty() && tag_body.back() == '/');
+            if (self_close) tag_body.pop_back();
+            if (i < len) i++; // skip >
+
+            auto elem = std::make_shared<DOMNode>();
+            elem->node_id = next_id++;
+            elem->node_type = ELEMENT;
+            elem->tag_name = tag_name;
+            elem->parent = cur;
+            parse_tag_attrs(tag_body, elem.get());
+
+            node_map[elem->node_id] = elem.get();
+            if (!elem->id.empty()) id_map[elem->id] = elem.get();
+
+            cur->children.push_back(elem);
+
+            if (!self_close && !is_void_element(tag_name)) {
+                cur = elem.get();
+            }
+        } else {
+            // Text content
+            size_t ts = i;
+            while (i < len && html[i] != '<') i++;
+            std::string text = html.substr(ts, i - ts);
+            if (!text.empty()) {
+                auto tn = std::make_shared<DOMNode>();
+                tn->node_id = next_id++;
+                tn->node_type = TEXT;
+                tn->text_content = text;
+                tn->parent = cur;
+                node_map[tn->node_id] = tn.get();
+                cur->children.push_back(tn);
+            }
+        }
+    }
+    markDirty();
+}
+
 std::string DOMNode::getInnerHTML() const {
     std::string result;
     for (auto& child : children) {

@@ -80,6 +80,11 @@ struct DOMNode {
     // Get innerHTML as string
     std::string getInnerHTML() const;
 
+    // Set innerHTML (parses basic HTML fragment)
+    void setInnerHTML(const std::string& html, uint32_t& next_id,
+                      std::unordered_map<uint32_t, DOMNode*>& node_map,
+                      std::unordered_map<std::string, DOMNode*>& id_map);
+
     // Add/remove class
     void addClass(const std::string& cls);
     void removeClass(const std::string& cls);

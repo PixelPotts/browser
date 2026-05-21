@@ -183,14 +183,8 @@ static JSValue js_element_set_innerHTML(JSContext* ctx, JSValueConst this_val, i
     if (!node || !g_js_engine || !g_js_engine->document || argc < 1) return JS_UNDEFINED;
     const char* s = JS_ToCString(ctx, argv[0]);
     if (s) {
-        // Simple innerHTML: clear children, add as text
-        // Full HTML parsing would require re-invoking the parser
-        node->children.clear();
-        if (s[0] != '\0') {
-            node->setTextContent(s, g_js_engine->document->next_id);
-        } else {
-            node->markDirty();
-        }
+        Document* doc = g_js_engine->document;
+        node->setInnerHTML(s, doc->next_id, doc->node_map, doc->id_map);
         JS_FreeCString(ctx, s);
         g_js_engine->scheduleRerender();
     }
