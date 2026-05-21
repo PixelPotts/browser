@@ -1745,6 +1745,46 @@ static void render_node(AppState* st, DOMNode* node, int gen,
         return;
     }
 
+    // <button> element — render as a GTK button
+    if (node->tag_name == "button") {
+        float_rows.back() = nullptr;
+        GtkWidget* cur = cstack.back();
+        std::string label = node->getTextContent();
+        GtkWidget* btn = gtk_button_new_with_label(label.c_str());
+        gtk_widget_set_can_focus(btn, FALSE);
+
+        // Apply test page CSS styling via CSS provider
+        BoxModel bm = dom_node_to_boxmodel(node);
+        std::string css;
+        if (!bm.bg_color.empty())
+            css += "background-color: " + bm.bg_color + "; background-image: none; ";
+        css += "padding: 6px 14px; border-radius: 4px; color: white; border: none; ";
+        if (!css.empty()) {
+            GtkCssProvider* cp = gtk_css_provider_new();
+            gtk_css_provider_load_from_data(cp, ("button { " + css + "}").c_str(), -1, nullptr);
+            gtk_style_context_add_provider(gtk_widget_get_style_context(btn),
+                GTK_STYLE_PROVIDER(cp), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+            g_object_unref(cp);
+        }
+
+        // Wire click event to JS dispatcher
+        uint32_t nid = node->node_id;
+        g_object_set_data(G_OBJECT(btn), "dom_node_id", GUINT_TO_POINTER(nid));
+        g_signal_connect(btn, "clicked",
+            G_CALLBACK(+[](GtkWidget* w, gpointer d) {
+                auto* st = static_cast<AppState*>(d);
+                if (!st->js_engine) return;
+                uint32_t nid = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(w), "dom_node_id"));
+                st->js_engine->dispatchEvent(nid, "click", 0, 0);
+            }), st);
+
+        gtk_box_pack_start(GTK_BOX(cur), btn, FALSE, FALSE, 2);
+        gtk_widget_show(btn);
+        fprintf(stderr, "[DEBUG render_node] <button id='%s'> label='%s' node_id=%u\n",
+                node->id.c_str(), label.c_str(), node->node_id);
+        return;
+    }
+
     // Block/container element
     bool floated = node->floatdir != DOMNode::Float::None;
     bool is_ib = node->display == DOMNode::Display::InlineBlock;
