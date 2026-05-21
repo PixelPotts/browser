@@ -2200,7 +2200,8 @@ static void render_node(AppState* st, DOMNode* node, int gen,
     bool floated = node->floatdir != DOMNode::Float::None;
     bool is_ib = node->display == DOMNode::Display::InlineBlock;
     bool is_flex = node->display == DOMNode::Display::Flex;
-    bool emits_block = floated || is_flex || is_ib
+    bool is_positioned = node->position == 2 || node->position == 3; // absolute or fixed
+    bool emits_block = floated || is_flex || is_ib || is_positioned
         || node->display == DOMNode::Display::Block
         || (node->isBlock() && node->display != DOMNode::Display::Inline);
 
@@ -2322,6 +2323,43 @@ static void render_node(AppState* st, DOMNode* node, int gen,
                 });
             }).detach();
         }
+        // Apply CSS positioning
+        if (node->position == 1) { // relative
+            // Adjust margins to offset from normal position
+            int cur_mt = gtk_widget_get_margin_top(new_blk);
+            int cur_ms = gtk_widget_get_margin_start(new_blk);
+            if (node->pos_top != INT_MIN) gtk_widget_set_margin_top(new_blk, cur_mt + node->pos_top);
+            if (node->pos_left != INT_MIN) gtk_widget_set_margin_start(new_blk, cur_ms + node->pos_left);
+            if (node->pos_bottom != INT_MIN && node->pos_top == INT_MIN)
+                gtk_widget_set_margin_bottom(new_blk, gtk_widget_get_margin_bottom(new_blk) - node->pos_bottom);
+            if (node->pos_right != INT_MIN && node->pos_left == INT_MIN)
+                gtk_widget_set_margin_end(new_blk, gtk_widget_get_margin_end(new_blk) - node->pos_right);
+        } else if (node->position == 2 || node->position == 3) { // absolute or fixed
+            // For absolute/fixed: use GtkOverlay on the parent container
+            // Remove from normal flow and position with GtkFixed
+            GtkWidget* parent_container = (node->position == 3) ? st->viewport : cstack.back();
+
+            // Find the outer widget (make_block may return inner)
+            GtkWidget* outer = new_blk;
+            GtkWidget* p = gtk_widget_get_parent(new_blk);
+            while (p && p != parent_container && p != cstack.back()) {
+                outer = p;
+                p = gtk_widget_get_parent(p);
+            }
+
+            // Reparent into a GtkFixed overlay
+            // We'll use margin-based positioning on the widget instead
+            // since GtkOverlay requires more complex setup
+            int top = (node->pos_top != INT_MIN) ? node->pos_top : 0;
+            int left = (node->pos_left != INT_MIN) ? node->pos_left : 0;
+            gtk_widget_set_margin_top(new_blk, top);
+            gtk_widget_set_margin_start(new_blk, left);
+            if (node->pos_right != INT_MIN && node->pos_left == INT_MIN)
+                gtk_widget_set_halign(new_blk, GTK_ALIGN_END);
+            if (node->pos_bottom != INT_MIN && node->pos_top == INT_MIN)
+                gtk_widget_set_valign(new_blk, GTK_ALIGN_END);
+        }
+
         // Store node_id on widget for click dispatch
         g_object_set_data(G_OBJECT(new_blk), "dom_node_id",
             GUINT_TO_POINTER(node->node_id));
