@@ -355,7 +355,9 @@ static std::vector<CSSRule> parse_css(const std::string& css) {
                     || !prop_val(decls,"position").empty()
                     || !prop_val(decls,"top").empty() || !prop_val(decls,"left").empty()
                     || !prop_val(decls,"right").empty() || !prop_val(decls,"bottom").empty()
-                    || !prop_val(decls,"z-index").empty();
+                    || !prop_val(decls,"z-index").empty()
+                    || !prop_val(decls,"background-repeat").empty()
+                    || !prop_val(decls,"background-size").empty();
         if (fw==-1 && fs_raw.empty() && lh_raw.empty() && !has_box) continue;
         // split comma-separated selectors
         size_t j=0;
@@ -411,6 +413,8 @@ struct BoxModel {
     std::string box_shadow; // raw CSS box-shadow value
     double opacity = 1.0;   // CSS opacity
     int overflow = -1;      // -1=inherit, 0=visible, 1=hidden, 2=scroll, 3=auto
+    std::string bg_repeat;  // background-repeat (default "repeat")
+    std::string bg_size;    // background-size (e.g. "contain", "cover", "100px 50px")
 };
 
 static bool is_block_element(const std::string& t) {
@@ -508,6 +512,10 @@ static void apply_box(const std::string& decls, BoxModel& bm) {
       else if (s=="hidden")  bm.overflow=1;
       else if (s=="scroll")  bm.overflow=2;
       else if (s=="auto")    bm.overflow=3; }
+    { auto s=tolower_s(prop_val(decls,"background-repeat"));
+      if (!s.empty()) bm.bg_repeat=s; }
+    { auto s=tolower_s(prop_val(decls,"background-size"));
+      if (!s.empty()) bm.bg_size=s; }
 }
 
 // ---- Element stack ----
@@ -1250,6 +1258,8 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
             elem->floatdir = static_cast<DOMNode::Float>(static_cast<int>(bm.floatdir));
             elem->bg_image = bm.bg_image;
             elem->bg_color = bm.bg_color;
+            if (!bm.bg_repeat.empty()) elem->style_props["background-repeat"] = bm.bg_repeat;
+            if (!bm.bg_size.empty()) elem->style_props["background-size"] = bm.bg_size;
             if (!bm.box_shadow.empty()) elem->box_shadow = bm.box_shadow;
             if (bm.opacity < 1.0) elem->opacity = bm.opacity;
             if (bm.overflow >= 0) elem->overflow = bm.overflow;
@@ -1282,6 +1292,10 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
                 doc->body->floatdir = elem->floatdir;
                 doc->body->bg_image = elem->bg_image;
                 doc->body->bg_color = elem->bg_color;
+                { auto it = elem->style_props.find("background-repeat");
+                  if (it != elem->style_props.end()) doc->body->style_props["background-repeat"] = it->second; }
+                { auto it = elem->style_props.find("background-size");
+                  if (it != elem->style_props.end()) doc->body->style_props["background-size"] = it->second; }
                 doc->body->text_transform = elem->text_transform;
                 doc->body->font_family = elem->font_family;
                 doc->body->box_shadow = elem->box_shadow;
@@ -1506,9 +1520,12 @@ static void navigate(AppState* st, const std::string& raw); // forward decl
 static gboolean draw_bg(GtkWidget* w, cairo_t* cr, gpointer) {
     GdkPixbuf* pb    = (GdkPixbuf*)g_object_get_data(G_OBJECT(w), "bg_pb");
     const char* bgc  = (const char*)g_object_get_data(G_OBJECT(w), "bg_color_str");
+    const char* rep  = (const char*)g_object_get_data(G_OBJECT(w), "bg_repeat");
+    const char* bsz  = (const char*)g_object_get_data(G_OBJECT(w), "bg_size");
     {
         FILE* f = fopen("/tmp/browser_debug.log","a");
-        if (f) { fprintf(f,"draw_bg called: pb=%s bgc=%s\n", pb?"ok":"null", bgc?bgc:"none"); fclose(f); }
+        if (f) { fprintf(f,"draw_bg called: pb=%s bgc=%s rep=%s bsz=%s\n",
+                 pb?"ok":"null", bgc?bgc:"none", rep?rep:"(default)", bsz?bsz:"(default)"); fclose(f); }
     }
     // fill background color first (so it shows through transparent parts of image)
     if (bgc && bgc[0]) {
@@ -1521,19 +1538,51 @@ static gboolean draw_bg(GtkWidget* w, cairo_t* cr, gpointer) {
     int pw = gdk_pixbuf_get_width(pb);
     int ph = gdk_pixbuf_get_height(pb);
     if (pw<=0||ph<=0) return FALSE;
-    // tile the image (background-repeat: repeat is the default)
+
+    bool no_repeat = rep && (strstr(rep, "no-repeat") != nullptr);
+    bool is_contain = bsz && (strcmp(bsz, "contain") == 0);
+    bool is_cover   = bsz && (strcmp(bsz, "cover") == 0);
+
     cairo_save(cr);
-    cairo_surface_t* surf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, pw, ph);
-    cairo_t* tc = cairo_create(surf);
-    gdk_cairo_set_source_pixbuf(tc, pb, 0, 0);
-    cairo_paint(tc);
-    cairo_destroy(tc);
-    cairo_pattern_t* pat = cairo_pattern_create_for_surface(surf);
-    cairo_pattern_set_extend(pat, CAIRO_EXTEND_REPEAT);
-    cairo_set_source(cr, pat);
-    cairo_paint(cr);
-    cairo_pattern_destroy(pat);
-    cairo_surface_destroy(surf);
+
+    if (is_contain || is_cover) {
+        // Scale image to fit (contain) or fill (cover) the widget
+        int ww = gtk_widget_get_allocated_width(w);
+        int wh = gtk_widget_get_allocated_height(w);
+        if (ww <= 0 || wh <= 0) { cairo_restore(cr); return FALSE; }
+        double sx = (double)ww / pw;
+        double sy = (double)wh / ph;
+        double scale = is_contain ? std::min(sx, sy) : std::max(sx, sy);
+        double dw = pw * scale;
+        double dh = ph * scale;
+        // Center the image
+        double dx = (ww - dw) / 2.0;
+        double dy = (wh - dh) / 2.0;
+        GdkPixbuf* scaled = gdk_pixbuf_scale_simple(pb, (int)dw, (int)dh, GDK_INTERP_BILINEAR);
+        if (scaled) {
+            gdk_cairo_set_source_pixbuf(cr, scaled, dx, dy);
+            cairo_paint(cr);
+            g_object_unref(scaled);
+        }
+    } else if (no_repeat) {
+        // Draw once at top-left, no tiling
+        gdk_cairo_set_source_pixbuf(cr, pb, 0, 0);
+        cairo_paint(cr);
+    } else {
+        // Default: tile the image (background-repeat: repeat)
+        cairo_surface_t* surf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, pw, ph);
+        cairo_t* tc = cairo_create(surf);
+        gdk_cairo_set_source_pixbuf(tc, pb, 0, 0);
+        cairo_paint(tc);
+        cairo_destroy(tc);
+        cairo_pattern_t* pat = cairo_pattern_create_for_surface(surf);
+        cairo_pattern_set_extend(pat, CAIRO_EXTEND_REPEAT);
+        cairo_set_source(cr, pat);
+        cairo_paint(cr);
+        cairo_pattern_destroy(pat);
+        cairo_surface_destroy(surf);
+    }
+
     cairo_restore(cr);
     return FALSE;
 }
@@ -1770,6 +1819,10 @@ static BoxModel dom_node_to_boxmodel(DOMNode* node) {
     bm.box_shadow = node->box_shadow;
     bm.opacity = node->opacity;
     bm.overflow = node->overflow;
+    { auto it = node->style_props.find("background-repeat");
+      if (it != node->style_props.end()) bm.bg_repeat = it->second; }
+    { auto it = node->style_props.find("background-size");
+      if (it != node->style_props.end()) bm.bg_size = it->second; }
 
     // Overlay JS-set style_props on top of parsed values
     if (!node->style_props.empty()) {
@@ -2235,6 +2288,10 @@ static void render_node(AppState* st, DOMNode* node, int gen,
             st->body_draw_signal = g_signal_connect(st->content_box, "draw", G_CALLBACK(draw_bg), nullptr);
         }
         if (!bm.bg_image.empty()) {
+            if (!bm.bg_repeat.empty())
+                g_object_set_data_full(G_OBJECT(st->content_box), "bg_repeat", g_strdup(bm.bg_repeat.c_str()), g_free);
+            if (!bm.bg_size.empty())
+                g_object_set_data_full(G_OBJECT(st->content_box), "bg_size", g_strdup(bm.bg_size.c_str()), g_free);
             std::string bg_url = bm.bg_image;
             std::thread([st, bg_url, gen]() {
                 Buf ibuf;
@@ -2313,6 +2370,10 @@ static void render_node(AppState* st, DOMNode* node, int gen,
         if (!bm.bg_image.empty()) {
             gtk_widget_set_app_paintable(new_blk, TRUE);
             g_signal_connect(new_blk, "draw", G_CALLBACK(draw_bg), nullptr);
+            if (!bm.bg_repeat.empty())
+                g_object_set_data_full(G_OBJECT(new_blk), "bg_repeat", g_strdup(bm.bg_repeat.c_str()), g_free);
+            if (!bm.bg_size.empty())
+                g_object_set_data_full(G_OBJECT(new_blk), "bg_size", g_strdup(bm.bg_size.c_str()), g_free);
             g_object_ref(new_blk);
             std::string bg_url = bm.bg_image;
             std::thread([st, new_blk, bg_url, gen]() {
