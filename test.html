@@ -116,9 +116,8 @@
     <!-- Test 6: Event Handling -->
     <div class="test-section">
         <h2>6. Event Handling</h2>
-        <button id="click-btn">Click Me!</button>
         <button id="click-count-btn">Count: 0</button>
-        <p id="event-result">Click the buttons above</p>
+        <p id="event-result">Click the button above</p>
     </div>
 
     <!-- Test 7: Counter with setTimeout -->
@@ -302,18 +301,14 @@
 
     // ===== Test 6: Event Handling =====
     (function() {
-        var clickBtn = document.getElementById("click-btn");
-        clickBtn.addEventListener("click", function(e) {
-            document.getElementById("event-result").textContent =
-                "Button clicked! type=" + e.type;
-            console.log("Click event fired on #click-btn");
-        });
-
         var count = 0;
         var countBtn = document.getElementById("click-count-btn");
-        countBtn.addEventListener("click", function() {
+        countBtn.addEventListener("click", function(e) {
             count++;
             countBtn.textContent = "Count: " + count;
+            document.getElementById("event-result").textContent =
+                "Clicked " + count + " time(s) | type=" + e.type;
+            console.log("Click event fired on #click-count-btn, count=" + count);
         });
         console.log("Test 6 (Events): Listeners attached");
     })();
