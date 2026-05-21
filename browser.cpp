@@ -408,6 +408,9 @@ struct BoxModel {
     enum class Float   : uint8_t { None, Left, Right }                               floatdir = Float::None;
     std::string bg_image; // resolved URL
     std::string bg_color; // raw CSS color value
+    std::string box_shadow; // raw CSS box-shadow value
+    double opacity = 1.0;   // CSS opacity
+    int overflow = -1;      // -1=inherit, 0=visible, 1=hidden, 2=scroll, 3=auto
 };
 
 static bool is_block_element(const std::string& t) {
@@ -497,6 +500,14 @@ static void apply_box(const std::string& decls, BoxModel& bm) {
           size_t sl=s.find('/');
           bm.border_radius=parse_px_val(sl==std::string::npos ? s : s.substr(0,sl));
     }}
+    { auto s=prop_val(decls,"box-shadow"); if (!s.empty()) bm.box_shadow=s; }
+    { auto s=prop_val(decls,"opacity"); if (!s.empty()) {
+          try { bm.opacity=std::stod(s); } catch(...){} } }
+    { auto s=tolower_s(prop_val(decls,"overflow"));
+      if      (s=="visible") bm.overflow=0;
+      else if (s=="hidden")  bm.overflow=1;
+      else if (s=="scroll")  bm.overflow=2;
+      else if (s=="auto")    bm.overflow=3; }
 }
 
 // ---- Element stack ----
@@ -1203,6 +1214,9 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
             elem->floatdir = static_cast<DOMNode::Float>(static_cast<int>(bm.floatdir));
             elem->bg_image = bm.bg_image;
             elem->bg_color = bm.bg_color;
+            if (!bm.box_shadow.empty()) elem->box_shadow = bm.box_shadow;
+            if (bm.opacity < 1.0) elem->opacity = bm.opacity;
+            if (bm.overflow >= 0) elem->overflow = bm.overflow;
 
             // display:none - skip subtree
             if (elem->display == DOMNode::Display::None) {
@@ -1363,6 +1377,8 @@ static GtkWidget* make_block(const BoxModel& box, GtkWidget* parent,
                            + std::to_string(box.border_width[i]) + "px " + bstyle + " " + bcolor + "; ";
             }
         }
+        if (!box.box_shadow.empty())
+            props += "box-shadow: " + box.box_shadow + "; ";
         if (!props.empty()) {
             GtkCssProvider* cp = gtk_css_provider_new();
             gtk_css_provider_load_from_data(cp, ("box { " + props + "}").c_str(), -1, nullptr);
@@ -1371,6 +1387,8 @@ static GtkWidget* make_block(const BoxModel& box, GtkWidget* parent,
             g_object_unref(cp);
         }
     }
+    if (box.opacity < 1.0)
+        gtk_widget_set_opacity(outer, box.opacity);
     gtk_widget_set_margin_top(outer,    std::max(0, box.margin[0]));
     gtk_widget_set_margin_end(outer,    std::max(0, box.margin[1]));
     gtk_widget_set_margin_bottom(outer, std::max(0, box.margin[2]));
@@ -1402,6 +1420,32 @@ static GtkWidget* make_block(const BoxModel& box, GtkWidget* parent,
     if (to_end) gtk_box_pack_end(GTK_BOX(parent), outer, FALSE, FALSE, 0);
     else        gtk_box_pack_start(GTK_BOX(parent), outer, FALSE, FALSE, 0);
     gtk_widget_show(outer);
+
+    // overflow handling: wrap content in scroll window
+    if (box.overflow == 1 || box.overflow == 2 || box.overflow == 3) {
+        GtkWidget* scroll = gtk_scrolled_window_new(nullptr, nullptr);
+        if (box.overflow == 1) // hidden: clip, no scrollbars
+            gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll),
+                GTK_POLICY_NEVER, GTK_POLICY_NEVER);
+        else // scroll/auto: show scrollbars as needed
+            gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll),
+                GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
+        GtkWidget* content = gtk_box_new(orient, 0);
+        gtk_widget_set_hexpand(content, TRUE);
+        gtk_container_add(GTK_CONTAINER(scroll), content);
+        gtk_box_pack_start(GTK_BOX(outer), scroll, TRUE, TRUE, 0);
+        gtk_widget_show(scroll);
+        gtk_widget_show(content);
+        // inner padding inside overflow container
+        bool has_pad = box.padding[0]||box.padding[1]||box.padding[2]||box.padding[3];
+        if (has_pad) {
+            gtk_widget_set_margin_top(content,    box.padding[0]);
+            gtk_widget_set_margin_end(content,    box.padding[1]);
+            gtk_widget_set_margin_bottom(content, box.padding[2]);
+            gtk_widget_set_margin_start(content,  box.padding[3]);
+        }
+        return content;
+    }
 
     // inner box simulates padding
     bool has_pad = box.padding[0]||box.padding[1]||box.padding[2]||box.padding[3];
@@ -1687,6 +1731,9 @@ static BoxModel dom_node_to_boxmodel(DOMNode* node) {
     bm.floatdir = static_cast<BoxModel::Float>(static_cast<int>(node->floatdir));
     bm.bg_image = node->bg_image;
     bm.bg_color = node->bg_color;
+    bm.box_shadow = node->box_shadow;
+    bm.opacity = node->opacity;
+    bm.overflow = node->overflow;
 
     // Overlay JS-set style_props on top of parsed values
     if (!node->style_props.empty()) {
