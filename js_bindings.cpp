@@ -386,6 +386,66 @@ static JSValue js_element_get_type(JSContext* ctx, JSValueConst this_val) {
     return JS_NewString(ctx, "");
 }
 
+// ---- src / href property getters (IDL reflected attributes) ----
+
+static JSValue js_element_get_src(JSContext* ctx, JSValueConst this_val) {
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node) return JS_NewString(ctx, "");
+    auto it = node->attributes.find("src");
+    return JS_NewString(ctx, it != node->attributes.end() ? it->second.c_str() : "");
+}
+
+static JSValue js_element_set_src(JSContext* ctx, JSValueConst this_val,
+                                   int argc, JSValueConst* argv) {
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node || argc < 1) return JS_UNDEFINED;
+    const char* s = JS_ToCString(ctx, argv[0]);
+    if (s) { node->attributes["src"] = s; JS_FreeCString(ctx, s); }
+    node->markDirty();
+    if (g_js_engine) g_js_engine->scheduleRerender();
+    return JS_UNDEFINED;
+}
+
+static JSValue js_element_get_href(JSContext* ctx, JSValueConst this_val) {
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node) return JS_NewString(ctx, "");
+    auto it = node->attributes.find("href");
+    return JS_NewString(ctx, it != node->attributes.end() ? it->second.c_str() : "");
+}
+
+static JSValue js_element_set_href(JSContext* ctx, JSValueConst this_val,
+                                    int argc, JSValueConst* argv) {
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node || argc < 1) return JS_UNDEFINED;
+    const char* s = JS_ToCString(ctx, argv[0]);
+    if (s) { node->attributes["href"] = s; JS_FreeCString(ctx, s); }
+    node->markDirty();
+    if (g_js_engine) g_js_engine->scheduleRerender();
+    return JS_UNDEFINED;
+}
+
+// ---- dataset property (DOMStringMap for data-* attributes) ----
+
+static JSValue js_element_get_dataset(JSContext* ctx, JSValueConst this_val) {
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node) return JS_NewObject(ctx);
+    JSValue obj = JS_NewObject(ctx);
+    for (const auto& kv : node->attributes) {
+        if (kv.first.size() > 5 && kv.first.substr(0, 5) == "data-") {
+            // Convert data-foo-bar to fooBar (camelCase)
+            std::string camel;
+            bool cap_next = false;
+            for (size_t i = 5; i < kv.first.size(); i++) {
+                if (kv.first[i] == '-') { cap_next = true; }
+                else if (cap_next) { camel += (char)toupper((unsigned char)kv.first[i]); cap_next = false; }
+                else { camel += kv.first[i]; }
+            }
+            JS_SetPropertyStr(ctx, obj, camel.c_str(), JS_NewString(ctx, kv.second.c_str()));
+        }
+    }
+    return obj;
+}
+
 // ---- Element methods ----
 
 static JSValue js_element_getAttribute(JSContext* ctx, JSValueConst this_val,
@@ -1037,6 +1097,18 @@ void js_bindings_init(JSEngine* engine) {
         JS_NewAtom(ctx, "type"),
         JS_NewCFunction(ctx, (JSCFunction*)js_element_get_type, "get type", 0),
         JS_NewCFunction(ctx, js_noop_setter, "set type", 1), JS_PROP_CONFIGURABLE);
+    JS_DefinePropertyGetSet(ctx, elem_proto,
+        JS_NewAtom(ctx, "src"),
+        JS_NewCFunction(ctx, (JSCFunction*)js_element_get_src, "get src", 0),
+        JS_NewCFunction(ctx, js_element_set_src, "set src", 1), JS_PROP_CONFIGURABLE);
+    JS_DefinePropertyGetSet(ctx, elem_proto,
+        JS_NewAtom(ctx, "href"),
+        JS_NewCFunction(ctx, (JSCFunction*)js_element_get_href, "get href", 0),
+        JS_NewCFunction(ctx, js_element_set_href, "set href", 1), JS_PROP_CONFIGURABLE);
+    JS_DefinePropertyGetSet(ctx, elem_proto,
+        JS_NewAtom(ctx, "dataset"),
+        JS_NewCFunction(ctx, (JSCFunction*)js_element_get_dataset, "get dataset", 0),
+        JS_UNDEFINED, JS_PROP_CONFIGURABLE);
 
     // Methods
     JS_SetPropertyStr(ctx, elem_proto, "getAttribute",

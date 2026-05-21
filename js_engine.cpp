@@ -695,6 +695,39 @@ globalThis.CustomEvent = function CustomEvent(type, opts) {
     this.detail = (opts && opts.detail) || null;
 };
 
+// PointerEvent constructor stub
+globalThis.PointerEvent = function PointerEvent(type, opts) {
+    Event.call(this, type, opts);
+    this.pointerId = (opts && opts.pointerId) || 0;
+    this.width = (opts && opts.width) || 1;
+    this.height = (opts && opts.height) || 1;
+    this.pressure = (opts && opts.pressure) || 0;
+    this.pointerType = (opts && opts.pointerType) || 'mouse';
+    this.isPrimary = (opts && opts.isPrimary !== undefined) ? opts.isPrimary : true;
+};
+
+// MouseEvent constructor stub
+globalThis.MouseEvent = function MouseEvent(type, opts) {
+    Event.call(this, type, opts);
+    this.clientX = (opts && opts.clientX) || 0;
+    this.clientY = (opts && opts.clientY) || 0;
+    this.button = (opts && opts.button) || 0;
+};
+
+// KeyboardEvent constructor stub
+globalThis.KeyboardEvent = function KeyboardEvent(type, opts) {
+    Event.call(this, type, opts);
+    this.key = (opts && opts.key) || '';
+    this.code = (opts && opts.code) || '';
+    this.keyCode = (opts && opts.keyCode) || 0;
+};
+
+// FocusEvent constructor stub
+globalThis.FocusEvent = function FocusEvent(type, opts) {
+    Event.call(this, type, opts);
+    this.relatedTarget = (opts && opts.relatedTarget) || null;
+};
+
 // MutationObserver stub
 globalThis.MutationObserver = function MutationObserver(cb) {
     this.observe = function() {};
@@ -1077,6 +1110,13 @@ document.getElementsByName = function(name) {
         if (el.clientWidth === undefined) el.clientWidth = 0;
         if (el.clientHeight === undefined) el.clientHeight = 0;
         if (el.ownerDocument === undefined) el.ownerDocument = document;
+        if (!el.setPointerCapture) el.setPointerCapture = function() {};
+        if (!el.releasePointerCapture) el.releasePointerCapture = function() {};
+        if (!el.getAnimations) el.getAnimations = function() { return []; };
+        if (!el.animate) el.animate = function() { return { finished: Promise.resolve(), cancel: function(){}, onfinish: null }; };
+        if (!el.remove) el.remove = function() { if (this.parentNode) this.parentNode.removeChild(this); };
+        if (el.nodeType === undefined) el.nodeType = 1;
+        if (el.nodeName === undefined) el.nodeName = (el.tagName || 'DIV').toUpperCase();
         return el;
     }
 
