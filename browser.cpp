@@ -2083,8 +2083,36 @@ static void render_node(AppState* st, DOMNode* node, int gen,
             new_blk = make_block(bm, fr, GTK_ORIENTATION_VERTICAL, to_end);
         } else {
             float_rows.back() = nullptr;
-            GtkOrientation orient = is_flex ? GTK_ORIENTATION_HORIZONTAL : GTK_ORIENTATION_VERTICAL;
-            new_blk = make_block(bm, cstack.back(), orient);
+            GtkOrientation orient = GTK_ORIENTATION_VERTICAL;
+            if (is_flex) {
+                // flex-direction: 0=row, 1=column, 2=row-reverse, 3=column-reverse
+                if (node->flex_direction == 0 || node->flex_direction == 2)
+                    orient = GTK_ORIENTATION_HORIZONTAL;
+                else
+                    orient = GTK_ORIENTATION_VERTICAL;
+            }
+            bool to_end_flex = is_flex && (node->flex_direction == 2 || node->flex_direction == 3);
+            new_blk = make_block(bm, cstack.back(), orient, to_end_flex);
+            if (is_flex) {
+                // gap
+                if (node->gap > 0)
+                    gtk_box_set_spacing(GTK_BOX(new_blk), node->gap);
+                // justify-content: center
+                if (node->justify_content == 2) {
+                    gtk_widget_set_halign(new_blk, orient == GTK_ORIENTATION_HORIZONTAL ? GTK_ALIGN_CENTER : GTK_ALIGN_FILL);
+                    gtk_widget_set_valign(new_blk, orient == GTK_ORIENTATION_VERTICAL ? GTK_ALIGN_CENTER : GTK_ALIGN_FILL);
+                }
+                // justify-content: space-between → homogeneous
+                if (node->justify_content == 3)
+                    gtk_box_set_homogeneous(GTK_BOX(new_blk), TRUE);
+                // justify-content: end
+                if (node->justify_content == 1) {
+                    if (orient == GTK_ORIENTATION_HORIZONTAL)
+                        gtk_widget_set_halign(new_blk, GTK_ALIGN_END);
+                    else
+                        gtk_widget_set_valign(new_blk, GTK_ALIGN_END);
+                }
+            }
         }
         if (!bm.bg_image.empty()) {
             gtk_widget_set_app_paintable(new_blk, TRUE);
@@ -2150,6 +2178,37 @@ static void render_node(AppState* st, DOMNode* node, int gen,
         float_rows.push_back(nullptr);
         for (auto& child : node->children)
             render_node(st, child.get(), gen, cstack, float_rows);
+        // Apply flex align-items to children
+        if (is_flex && node->align_items != 0) {
+            GtkOrientation orient = (node->flex_direction == 0 || node->flex_direction == 2)
+                ? GTK_ORIENTATION_HORIZONTAL : GTK_ORIENTATION_VERTICAL;
+            GList* ch = gtk_container_get_children(GTK_CONTAINER(new_blk));
+            for (GList* l = ch; l; l = l->next) {
+                GtkWidget* cw = GTK_WIDGET(l->data);
+                if (orient == GTK_ORIENTATION_HORIZONTAL) {
+                    // Cross axis is vertical
+                    if (node->align_items == 1) gtk_widget_set_valign(cw, GTK_ALIGN_START);
+                    else if (node->align_items == 2) gtk_widget_set_valign(cw, GTK_ALIGN_END);
+                    else if (node->align_items == 3) gtk_widget_set_valign(cw, GTK_ALIGN_CENTER);
+                } else {
+                    // Cross axis is horizontal
+                    if (node->align_items == 1) gtk_widget_set_halign(cw, GTK_ALIGN_START);
+                    else if (node->align_items == 2) gtk_widget_set_halign(cw, GTK_ALIGN_END);
+                    else if (node->align_items == 3) gtk_widget_set_halign(cw, GTK_ALIGN_CENTER);
+                }
+            }
+            g_list_free(ch);
+        }
+        // For justify-content: space-between, expand children
+        if (is_flex && node->justify_content == 3) {
+            GList* ch = gtk_container_get_children(GTK_CONTAINER(new_blk));
+            for (GList* l = ch; l; l = l->next) {
+                GtkWidget* cw = GTK_WIDGET(l->data);
+                gtk_widget_set_hexpand(cw, TRUE);
+                gtk_widget_set_vexpand(cw, TRUE);
+            }
+            g_list_free(ch);
+        }
         cstack.pop_back();
         float_rows.pop_back();
     } else {
