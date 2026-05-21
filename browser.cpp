@@ -12,6 +12,7 @@
 #include <memory>
 #include "dom.h"
 #include "js_engine.h"
+#include "js_event.h"
 
 // ---- curl ----
 
@@ -1545,6 +1546,38 @@ static void render_node(AppState* st, DOMNode* node, int gen,
                 });
             }).detach();
         }
+        // Store node_id on widget for click dispatch
+        g_object_set_data(G_OBJECT(new_blk), "dom_node_id",
+            GUINT_TO_POINTER(node->node_id));
+
+        // Add click event handling if node has listeners
+        if (!node->listeners.empty()) {
+            GtkWidget* eb = gtk_event_box_new();
+            gtk_event_box_set_above_child(GTK_EVENT_BOX(eb), FALSE);
+            gtk_widget_add_events(eb, GDK_BUTTON_PRESS_MASK);
+            uint32_t nid = node->node_id;
+            g_object_set_data(G_OBJECT(eb), "dom_node_id", GUINT_TO_POINTER(nid));
+            g_signal_connect(eb, "button-press-event",
+                G_CALLBACK(+[](GtkWidget* w, GdkEventButton* ev, gpointer d) -> gboolean {
+                    if (ev->button != 1 || ev->type != GDK_BUTTON_PRESS) return FALSE;
+                    auto* st = static_cast<AppState*>(d);
+                    if (!st->js_engine) return FALSE;
+                    uint32_t nid = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(w), "dom_node_id"));
+                    st->js_engine->dispatchEvent(nid, "click", (int)ev->x, (int)ev->y);
+                    return FALSE;
+                }), st);
+            // Wrap the block widget - reparent
+            GtkWidget* parent_w = gtk_widget_get_parent(new_blk);
+            if (parent_w) {
+                g_object_ref(new_blk);
+                gtk_container_remove(GTK_CONTAINER(parent_w), new_blk);
+                gtk_container_add(GTK_CONTAINER(eb), new_blk);
+                g_object_unref(new_blk);
+                gtk_box_pack_start(GTK_BOX(parent_w), eb, FALSE, FALSE, 0);
+                gtk_widget_show(eb);
+            }
+        }
+
         cstack.push_back(new_blk);
         float_rows.push_back(nullptr);
         for (auto& child : node->children)
@@ -1566,6 +1599,40 @@ static void render_dom_to_gtk(AppState* st, Document* doc, int gen) {
         for (auto& child : doc->root->children)
             render_node(st, child.get(), gen, cstack, float_rows);
     }
+}
+
+// Called by JSEngine::rerender_callback when DOM is dirty
+void do_rerender(AppState* st) {
+    if (!st->document) return;
+    int gen = st->generation;
+
+    // Clean up previous body styles
+    if (st->body_draw_signal) {
+        g_signal_handler_disconnect(st->content_box, st->body_draw_signal);
+        st->body_draw_signal = 0;
+        gtk_widget_set_app_paintable(st->content_box, FALSE);
+        g_object_set_data(G_OBJECT(st->content_box), "bg_pb", nullptr);
+        g_object_set_data(G_OBJECT(st->content_box), "bg_color_str", nullptr);
+    }
+    gtk_widget_set_margin_top(st->content_box, 0);
+    gtk_widget_set_margin_end(st->content_box, 0);
+    gtk_widget_set_margin_bottom(st->content_box, 0);
+    gtk_widget_set_margin_start(st->content_box, 0);
+
+    // Remove all children
+    GList* ch = gtk_container_get_children(GTK_CONTAINER(st->content_box));
+    for (GList* l = ch; l; l = l->next) gtk_widget_destroy(GTK_WIDGET(l->data));
+    g_list_free(ch);
+
+    // Re-render
+    render_dom_to_gtk(st, st->document.get(), gen);
+
+    // Clear dirty flags
+    std::function<void(DOMNode*)> clear_dirty = [&](DOMNode* n) {
+        n->dirty = false;
+        for (auto& c : n->children) clear_dirty(c.get());
+    };
+    clear_dirty(st->document->root.get());
 }
 
 // ---- page fetch ----

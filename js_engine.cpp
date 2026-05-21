@@ -1,5 +1,6 @@
 #include "js_engine.h"
 #include "js_bindings.h"
+#include "js_event.h"
 #include "dom.h"
 #include <cstdio>
 
@@ -135,6 +136,7 @@ void JSEngine::init(AppState* as, Document* doc) {
 
     setupGlobals();
     js_bindings_init(this);
+    js_event_init(this);
 
     // Start the job pump (16ms interval for microtask execution)
     job_pump_id = g_timeout_add(16, job_pump_callback, this);
@@ -322,16 +324,19 @@ void JSEngine::scheduleRerender() {
     rerender_idle_id = g_idle_add(rerender_callback, this);
 }
 
+// Defined in browser.cpp
+extern void do_rerender(AppState* st);
+
 gboolean JSEngine::rerender_callback(gpointer data) {
     auto* engine = static_cast<JSEngine*>(data);
     engine->rerender_idle_id = 0;
-    // The actual re-render will be triggered from browser.cpp
-    // via the document's on_mutated callback
+    if (engine->app_state && engine->document) {
+        do_rerender(engine->app_state);
+    }
     return G_SOURCE_REMOVE;
 }
 
 void JSEngine::dispatchEvent(uint32_t node_id, const std::string& type,
                               int clientX, int clientY) {
-    // Will be implemented in Phase 7 (js_event.cpp)
-    (void)node_id; (void)type; (void)clientX; (void)clientY;
+    js_dispatch_event(this, node_id, type, clientX, clientY);
 }
