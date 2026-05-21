@@ -1,4 +1,5 @@
 #include "js_engine.h"
+#include "js_bindings.h"
 #include "dom.h"
 #include <cstdio>
 
@@ -133,6 +134,7 @@ void JSEngine::init(AppState* as, Document* doc) {
     JS_SetMemoryLimit(rt, 64 * 1024 * 1024);
 
     setupGlobals();
+    js_bindings_init(this);
 
     // Start the job pump (16ms interval for microtask execution)
     job_pump_id = g_timeout_add(16, job_pump_callback, this);
