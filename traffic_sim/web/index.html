@@ -1,0 +1,659 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>7th &amp; Camelback · Traffic Control Inputs</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0d1117;color:#c9d1d9;font-family:'Courier New',monospace;font-size:12px;overflow:hidden;height:100vh;display:flex;flex-direction:column}
+#header{background:#161b22;border-bottom:1px solid #30363d;padding:6px 12px;display:flex;align-items:center;gap:16px;flex-shrink:0}
+#header h1{font-size:13px;font-weight:bold;color:#e6edf3;letter-spacing:.5px}
+#conn{width:8px;height:8px;border-radius:50%;background:#f85149;flex-shrink:0}
+#conn.ok{background:#3fb950}
+#clock{margin-left:auto;color:#8b949e;font-size:11px}
+#body{display:flex;flex:1;overflow:hidden}
+#canvas-wrap{flex:1;position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center}
+canvas{display:block;image-rendering:pixelated}
+#side{width:340px;flex-shrink:0;display:flex;flex-direction:column;border-left:1px solid #30363d;overflow:hidden}
+#stats{background:#161b22;padding:8px 10px;border-bottom:1px solid #30363d;display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;flex-shrink:0}
+.stat{text-align:center}
+.stat .val{font-size:16px;font-weight:bold;color:#e6edf3}
+.stat .lbl{font-size:10px;color:#8b949e;margin-top:1px}
+.val.fault{color:#f85149}
+#log-hdr{padding:5px 10px;background:#161b22;border-bottom:1px solid #30363d;color:#8b949e;font-size:10px;flex-shrink:0}
+#log{flex:1 1 0;overflow-y:auto;padding:4px 0;min-height:60px;max-height:180px}
+#log::-webkit-scrollbar{width:4px}
+#log::-webkit-scrollbar-track{background:#0d1117}
+#log::-webkit-scrollbar-thumb{background:#30363d;border-radius:2px}
+.ev{padding:1px 8px;line-height:1.5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#8b949e;font-size:11px}
+.ev.fault{color:#f85149}.ev.emrg{color:#f0883e}.ev.ped{color:#3fb950}
+.ev.transit{color:#a371f7}.ev.warn{color:#d29922}.ev.packet{color:#58a6ff}
+.ev.safety{color:#f85149;font-weight:bold}
+/* ── Fault injection panel ── */
+#fault-hdr{padding:5px 10px;background:#161b22;border-top:1px solid #30363d;border-bottom:1px solid #30363d;color:#f0883e;font-size:10px;flex-shrink:0;letter-spacing:.5px}
+#fault-panel{flex-shrink:0;overflow-y:auto;padding:6px 8px;background:#0d1117;border-bottom:1px solid #30363d}
+#fault-panel::-webkit-scrollbar{width:4px}
+#fault-panel::-webkit-scrollbar-thumb{background:#30363d}
+.fg{font-size:9px;color:#4a5568;letter-spacing:.8px;margin:5px 0 3px;text-transform:uppercase}
+.fb-row{display:flex;flex-wrap:wrap;gap:3px;margin-bottom:2px}
+.fb{background:#161b22;border:1px solid #30363d;color:#8b949e;font-family:'Courier New',monospace;font-size:10px;padding:2px 6px;cursor:pointer;border-radius:2px;white-space:nowrap}
+.fb:hover{background:#21262d;color:#e6edf3;border-color:#58a6ff}
+.fb.warn{border-color:#d29922;color:#d29922}.fb.warn:hover{background:#2d2200;color:#f0e040}
+.fb.danger{border-color:#f85149;color:#f85149}.fb.danger:hover{background:#2d0a09;color:#ff7b72}
+.fb.clear{border-color:#3fb950;color:#3fb950}.fb.clear:hover{background:#0a1f0a;color:#56d364}
+#legend{background:#161b22;border-top:1px solid #30363d;padding:7px 10px;display:grid;grid-template-columns:1fr 1fr;gap:3px 16px;flex-shrink:0}
+.lg{display:flex;align-items:center;gap:5px;font-size:10px;color:#8b949e}
+.lgd{width:10px;height:10px;flex-shrink:0;border-radius:1px}
+#tip{display:none;position:fixed;background:#161b22;border:1px solid #30363d;border-radius:4px;padding:6px 10px;font-size:11px;pointer-events:none;z-index:100;max-width:220px;line-height:1.6}
+#tip .ti{font-weight:bold;color:#e6edf3;font-size:12px}
+#tip .ts{color:#3fb950}.#tip .tf{color:#f85149}
+#mode-badge{font-size:10px;color:#8b949e;border:1px solid #30363d;border-radius:3px;padding:1px 6px;letter-spacing:.5px;text-transform:uppercase}
+</style>
+</head>
+<body>
+<div id="header">
+  <div id="conn"></div>
+  <h1>7TH ST &amp; CAMELBACK RD &nbsp;·&nbsp; PHOENIX, AZ &nbsp;·&nbsp; Traffic Control Input Simulator</h1>
+  <span id="mode-badge">__SIM_MODE__</span>
+  <span id="clock">--:--:--</span>
+</div>
+<div id="body">
+  <div id="canvas-wrap"><canvas id="c"></canvas></div>
+  <div id="side">
+    <div id="stats">
+      <div class="stat"><div class="val" id="sActive">--</div><div class="lbl">ACTIVE</div></div>
+      <div class="stat"><div class="val fault" id="sFaults">--</div><div class="lbl">FAULTS</div></div>
+      <div class="stat"><div class="val" id="sEvents">--</div><div class="lbl">EVENTS</div></div>
+    </div>
+    <div id="log-hdr">REAL-TIME EVENTS</div>
+    <div id="log"></div>
+    <div id="fault-hdr">FAULT INJECTION</div>
+    <div id="fault-panel">
+      <div class="fg">Vehicle Detection</div>
+      <div class="fb-row">
+        <button class="fb warn" onclick="sendFault('NB_T1','OPEN')">NB_T1 open</button>
+        <button class="fb warn" onclick="sendFault('NB_T2','SHORT')">NB_T2 short</button>
+        <button class="fb warn" onclick="sendFault('SB_T1','STUCK')">SB_T1 stuck</button>
+        <button class="fb warn" onclick="sendFault('EB_T1','OPEN')">EB_T1 open</button>
+        <button class="fb warn" onclick="sendFault('WB_T1','SHORT')">WB_T1 short</button>
+        <button class="fb warn" onclick="sendFault('NB_LT1','OPEN')">NB_LT1 open</button>
+      </div>
+      <div class="fg">Sensors</div>
+      <div class="fb-row">
+        <button class="fb warn" onclick="sendFault('RADAR_NB','LOSS')">Radar NB loss</button>
+        <button class="fb warn" onclick="sendFault('RADAR_EB','LOSS')">Radar EB loss</button>
+        <button class="fb warn" onclick="sendFault('CAM_NB','DEGRAD')">Cam NB degrad</button>
+        <button class="fb warn" onclick="sendFault('CAM_WB','DEGRAD')">Cam WB degrad</button>
+      </div>
+      <div class="fg">Pedestrian</div>
+      <div class="fb-row">
+        <button class="fb" onclick="sendFault('PED_NE_NS','STUCK')">PED NE stuck</button>
+        <button class="fb" onclick="sendFault('PED_SW_EW','STUCK')">PED SW stuck</button>
+        <button class="fb" onclick="sendFault('PED_NW_EW','STUCK')">PED NW stuck</button>
+      </div>
+      <div class="fg">System / Power</div>
+      <div class="fb-row">
+        <button class="fb warn" onclick="sendFault('AC_MAIN','BROWN')">AC brownout</button>
+        <button class="fb danger" onclick="sendFault('AC_MAIN','OUTAGE')">AC outage</button>
+        <button class="fb" onclick="sendFault('GPS','LOSS')">GPS loss</button>
+        <button class="fb" onclick="sendFault('DOOR','OPEN')">Door open</button>
+      </div>
+      <div class="fg">Emergency / Priority</div>
+      <div class="fb-row">
+        <button class="fb danger" onclick="sendFault('EMRG_N','ACTIVE')">Emrg NB</button>
+        <button class="fb danger" onclick="sendFault('EMRG_S','ACTIVE')">Emrg SB</button>
+        <button class="fb danger" onclick="sendFault('EMRG_E','ACTIVE')">Emrg EB</button>
+        <button class="fb danger" onclick="sendFault('EMRG_W','ACTIVE')">Emrg WB</button>
+      </div>
+      <div class="fg">Safety / Critical</div>
+      <div class="fb-row">
+        <button class="fb danger" onclick="sendFault('MMU','TRIP')">MMU trip</button>
+        <button class="fb danger" onclick="sendFault('CMU','TRIP')">CMU trip</button>
+        <button class="fb danger" style="letter-spacing:.5px" onclick="sendFault('CPU','CRASH')">CPU CRASH</button>
+      </div>
+      <div class="fb-row" style="margin-top:6px">
+        <button class="fb clear" onclick="sendFault('ALL','CLEAR')">Clear all faults</button>
+      </div>
+    </div>
+    <div id="legend">
+      <div class="lg"><div class="lgd" style="background:#3fb950"></div>Vehicle Detected</div>
+      <div class="lg"><div class="lgd" style="background:#f0e040;transform:rotate(45deg)"></div>Advance Pulse</div>
+      <div class="lg"><div class="lgd" style="background:#ff9500;border-radius:50%"></div>Ped Latched</div>
+      <div class="lg"><div class="lgd" style="background:#ff4422;clip-path:polygon(50% 0%,100% 100%,0% 100%)"></div>Emergency</div>
+      <div class="lg"><div class="lgd" style="background:#58a6ff;border-radius:2px"></div>Radar/Camera</div>
+      <div class="lg"><div class="lgd" style="background:#a371f7"></div>Transit Priority</div>
+      <div class="lg"><div class="lgd" style="background:#f85149;border-radius:50%"></div>Safety TRIP</div>
+      <div class="lg"><div class="lgd" style="background:#3d4555"></div>Inactive</div>
+    </div>
+  </div>
+</div>
+<div id="tip"></div>
+
+<script>
+// ── Canvas & geometry ─────────────────────────────────────────────────────────
+const W=760, H=760;
+const CX=380, CY=380;
+const LW=14, DIV=6;
+// Intersection box corners
+const IX1=290, IX2=470, IY1=304, IY2=456;
+// Lane centers
+const NBX={LT2:393,LT1:407,T1:421,T2:435,T3:449,RT1:463};
+const SBX={LT2:297,LT1:311,T1:325,T2:339,T3:353,RT1:367};
+const EBY={LT1:393,T1:407,T2:421,T3:435,RT1:449};
+const WBY={LT1:367,T1:353,T2:339,T3:325,RT1:311};
+const NB_SY=IY2, SB_SY=IY1, EB_SX=IX1, WB_SX=IX2;
+
+// t = shape type: lv=loop-vert, lh=loop-horiz, av/ah=advance, bk=bike,
+//                 ped, em=emergency, rad=radar, cam=camera, tsp=transit,
+//                 sys=system, tmp=temp, saf=safety, syn=sync, tmc
+const LAYOUT = {
+  // ── NB stop-bar loops ──────────────────────────────────────────────────────
+  NB_T1: {x:NBX.T1, y:NB_SY,    t:'lv'}, NB_T2: {x:NBX.T2, y:NB_SY, t:'lv'},
+  NB_T3: {x:NBX.T3, y:NB_SY,    t:'lv'}, NB_LT1:{x:NBX.LT1,y:NB_SY, t:'lv'},
+  NB_LT2:{x:NBX.LT2,y:NB_SY,    t:'lv'}, NB_RT1:{x:NBX.RT1,y:NB_SY, t:'lv'},
+  // NB advance (85px south of stop bar)
+  NB_A1: {x:NBX.T1, y:NB_SY+85, t:'av'}, NB_A2: {x:NBX.T2, y:NB_SY+85, t:'av'},
+  NB_A3: {x:NBX.T3, y:NB_SY+85, t:'av'},
+  // NB bike
+  NB_BK: {x:NBX.RT1+11, y:NB_SY+54, t:'bk'},
+
+  // ── SB stop-bar loops ──────────────────────────────────────────────────────
+  SB_T1: {x:SBX.T1, y:SB_SY,    t:'lv'}, SB_T2: {x:SBX.T2, y:SB_SY, t:'lv'},
+  SB_T3: {x:SBX.T3, y:SB_SY,    t:'lv'}, SB_LT1:{x:SBX.LT1,y:SB_SY, t:'lv'},
+  SB_LT2:{x:SBX.LT2,y:SB_SY,    t:'lv'}, SB_RT1:{x:SBX.RT1,y:SB_SY, t:'lv'},
+  SB_A1: {x:SBX.T1, y:SB_SY-85, t:'av'}, SB_A2: {x:SBX.T2, y:SB_SY-85, t:'av'},
+  SB_A3: {x:SBX.T3, y:SB_SY-85, t:'av'},
+  SB_BK: {x:SBX.LT2-11, y:SB_SY-54, t:'bk'},
+
+  // ── EB stop-bar loops ──────────────────────────────────────────────────────
+  EB_T1: {x:EB_SX, y:EBY.T1,  t:'lh'}, EB_T2: {x:EB_SX, y:EBY.T2,  t:'lh'},
+  EB_T3: {x:EB_SX, y:EBY.T3,  t:'lh'}, EB_LT1:{x:EB_SX, y:EBY.LT1, t:'lh'},
+  EB_RT1:{x:EB_SX, y:EBY.RT1, t:'lh'},
+  EB_A1: {x:EB_SX-85, y:EBY.T1, t:'ah'}, EB_A2: {x:EB_SX-85, y:EBY.T2, t:'ah'},
+  EB_BK: {x:EB_SX-54, y:EBY.RT1+11, t:'bk'},
+
+  // ── WB stop-bar loops ──────────────────────────────────────────────────────
+  WB_T1: {x:WB_SX, y:WBY.T1,  t:'lh'}, WB_T2: {x:WB_SX, y:WBY.T2,  t:'lh'},
+  WB_T3: {x:WB_SX, y:WBY.T3,  t:'lh'}, WB_LT1:{x:WB_SX, y:WBY.LT1, t:'lh'},
+  WB_RT1:{x:WB_SX, y:WBY.RT1, t:'lh'},
+  WB_A1: {x:WB_SX+85, y:WBY.T1, t:'ah'}, WB_A2: {x:WB_SX+85, y:WBY.T2, t:'ah'},
+  WB_BK: {x:WB_SX+54, y:WBY.RT1-11, t:'bk'},
+
+  // ── Pedestrian buttons (at four corners) ──────────────────────────────────
+  PED_NE_NS:{x:IX2+16,y:IY1-14,t:'ped'}, PED_NE_EW:{x:IX2+16,y:IY1-28,t:'ped'},
+  PED_NW_NS:{x:IX1-16,y:IY1-14,t:'ped'}, PED_NW_EW:{x:IX1-16,y:IY1-28,t:'ped'},
+  PED_SE_NS:{x:IX2+16,y:IY2+14,t:'ped'}, PED_SE_EW:{x:IX2+16,y:IY2+28,t:'ped'},
+  PED_SW_NS:{x:IX1-16,y:IY2+14,t:'ped'}, PED_SW_EW:{x:IX1-16,y:IY2+28,t:'ped'},
+
+  // ── Emergency preempt (optical heads at approach mast arms) ───────────────
+  EMRG_N:{x:NBX.T2, y:NB_SY+165,t:'em'}, EMRG_S:{x:SBX.T2, y:SB_SY-165,t:'em'},
+  EMRG_E:{x:EB_SX-165,y:EBY.T2, t:'em'}, EMRG_W:{x:WB_SX+165,y:WBY.T2, t:'em'},
+
+  // ── Radar sensors (RS-485) ────────────────────────────────────────────────
+  RADAR_NB:{x:NBX.T1-5, y:NB_SY+118,t:'rad'},
+  RADAR_SB:{x:SBX.T1+5, y:SB_SY-118,t:'rad'},
+  RADAR_EB:{x:EB_SX-118,y:EBY.T1-5, t:'rad'},
+  RADAR_WB:{x:WB_SX+118,y:WBY.T1+5, t:'rad'},
+
+  // ── Video cameras ─────────────────────────────────────────────────────────
+  CAM_NB:{x:NBX.T1+18, y:NB_SY+118,t:'cam'},
+  CAM_SB:{x:SBX.T1-18, y:SB_SY-118,t:'cam'},
+  CAM_EB:{x:EB_SX-118, y:EBY.T1+18,t:'cam'},
+  CAM_WB:{x:WB_SX+118, y:WBY.T1-18,t:'cam'},
+
+  // ── Transit priority ──────────────────────────────────────────────────────
+  TSP_NS:{x:NBX.LT2-6, y:NB_SY+140,t:'tsp'},
+  TSP_EW:{x:EB_SX-140, y:EBY.LT1-6,t:'tsp'},
+
+  // ── System (top-left panel) ───────────────────────────────────────────────
+  GPS:     {x:38, y:44,  t:'sys'},
+  AC_MAIN: {x:68, y:44,  t:'sys'},
+  TEMP:    {x:98, y:44,  t:'tmp'},
+  HUMIDITY:{x:38, y:70,  t:'sys'},
+  DOOR:    {x:68, y:70,  t:'sys'},
+
+  // ── Safety (top-right panel) ──────────────────────────────────────────────
+  MMU:{x:692, y:44, t:'saf'},
+  CMU:{x:722, y:44, t:'saf'},
+
+  // ── Network coordination (edge of canvas) ─────────────────────────────────
+  SYNC_N:{x:CX,    y:22,  t:'syn'},
+  SYNC_S:{x:CX,    y:738, t:'syn'},
+  SYNC_E:{x:738,   y:CY,  t:'syn'},
+  SYNC_W:{x:22,    y:CY,  t:'syn'},
+  TMC:   {x:738,   y:CY+28,t:'tmc'},
+};
+
+// ── State ─────────────────────────────────────────────────────────────────────
+// inputState[id] = [id, active, fault, digital, summary, analogV, cat]
+let inputState = {};
+let eventBuf   = [];   // newest first
+let totalEvents = 0;
+let frame = 0;
+const MAX_EVENTS = 300;
+
+// ── Canvas setup ─────────────────────────────────────────────────────────────
+const canvasEl = document.getElementById('c');
+const ctx      = canvasEl.getContext('2d');
+
+function fitCanvas() {
+  const wrap = document.getElementById('canvas-wrap');
+  const avail = Math.min(wrap.clientWidth, wrap.clientHeight);
+  const scale = avail / W;
+  canvasEl.width  = W;
+  canvasEl.height = H;
+  canvasEl.style.width  = (W * scale) + 'px';
+  canvasEl.style.height = (H * scale) + 'px';
+}
+fitCanvas();
+window.addEventListener('resize', fitCanvas);
+
+// ── Tooltip / hit test ────────────────────────────────────────────────────────
+const tip = document.getElementById('tip');
+const HIT_R = 14;
+
+canvasEl.addEventListener('mousemove', e => {
+  const r   = canvasEl.getBoundingClientRect();
+  const sx  = W / r.width, sy = H / r.height;
+  const mx  = (e.clientX - r.left) * sx;
+  const my  = (e.clientY - r.top)  * sy;
+  let hit = null;
+  for (const [id, pos] of Object.entries(LAYOUT)) {
+    if (Math.hypot(mx - pos.x, my - pos.y) < HIT_R) { hit = id; break; }
+  }
+  if (hit && inputState[hit]) {
+    const s = inputState[hit];
+    const [,a,f,,sum,,cat] = s;
+    const catName = ['VEHICLE','PEDESTRIAN','PRIORITY','SENSOR','SYSTEM','SAFETY','COORD'][cat] || '';
+    tip.style.display = 'block';
+    tip.style.left    = (e.clientX + 14) + 'px';
+    tip.style.top     = (e.clientY - 10) + 'px';
+    const stateCol = f ? '#f85149' : a ? '#3fb950' : '#8b949e';
+    tip.innerHTML = `<div class="ti">${hit}</div>
+      <div style="color:#8b949e;font-size:10px">${catName}</div>
+      <div style="color:${stateCol};margin-top:2px">${sum}</div>`;
+  } else {
+    tip.style.display = 'none';
+  }
+});
+canvasEl.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+
+// ── Drawing helpers ───────────────────────────────────────────────────────────
+function detColor(t, a, f) {
+  if (f)  return '#f85149';
+  if (!a) return '#2d3748';
+  const M = {lv:'#3fb950',lh:'#3fb950',av:'#f0e040',ah:'#f0e040',
+             bk:'#26d9a0',ped:'#ff9500',em:'#ff4422',
+             rad:'#58a6ff',cam:'#a371f7',tsp:'#ff44dd',
+             sys:'#3fb950',tmp:'#ffdd66',saf:'#f85149',
+             syn:'#4488ff',tmc:'#44aaff'};
+  return M[t] || '#ffffff';
+}
+
+function glow(color, blur=8) {
+  ctx.shadowBlur  = blur;
+  ctx.shadowColor = color;
+}
+function noGlow() { ctx.shadowBlur = 0; }
+
+function drawLoopV(x, y, a, f) {
+  const c = detColor('lv', a, f);
+  if (a||f) glow(c);
+  ctx.fillStyle = c;
+  ctx.fillRect(x-5, y-3, 10, 6);
+  noGlow();
+  if (!a && !f) { ctx.strokeStyle='#4a5568'; ctx.lineWidth=.5; ctx.strokeRect(x-5,y-3,10,6); }
+}
+function drawLoopH(x, y, a, f) {
+  const c = detColor('lh', a, f);
+  if (a||f) glow(c);
+  ctx.fillStyle = c;
+  ctx.fillRect(x-3, y-5, 6, 10);
+  noGlow();
+  if (!a && !f) { ctx.strokeStyle='#4a5568'; ctx.lineWidth=.5; ctx.strokeRect(x-3,y-5,6,10); }
+}
+function drawDiamond(x, y, a, f, t) {
+  const c = detColor(t||'av', a, f);
+  if (a||f) glow(c,10);
+  ctx.fillStyle = c;
+  ctx.beginPath();
+  ctx.moveTo(x, y-6); ctx.lineTo(x+6, y); ctx.lineTo(x, y+6); ctx.lineTo(x-6, y);
+  ctx.closePath(); ctx.fill();
+  noGlow();
+}
+function drawCircle(x, y, r, a, f, t) {
+  const c = detColor(t||'bk', a, f);
+  if (a||f) glow(c,10);
+  ctx.fillStyle = c;
+  ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI*2); ctx.fill();
+  noGlow();
+}
+function drawRRect(x, y, w, h, a, f, t) {
+  const c = detColor(t||'rad', a, f);
+  if (a||f) glow(c,8);
+  ctx.fillStyle = c;
+  const r = 2;
+  ctx.beginPath();
+  ctx.moveTo(x-w/2+r, y-h/2);
+  ctx.lineTo(x+w/2-r, y-h/2); ctx.arcTo(x+w/2,y-h/2,x+w/2,y-h/2+r,r);
+  ctx.lineTo(x+w/2,   y+h/2-r); ctx.arcTo(x+w/2,y+h/2,x+w/2-r,y+h/2,r);
+  ctx.lineTo(x-w/2+r, y+h/2);   ctx.arcTo(x-w/2,y+h/2,x-w/2,y+h/2-r,r);
+  ctx.lineTo(x-w/2,   y-h/2+r); ctx.arcTo(x-w/2,y-h/2,x-w/2+r,y-h/2,r);
+  ctx.closePath(); ctx.fill();
+  noGlow();
+}
+function drawTriangle(x, y, dir, a, f) {
+  // dir: 'N','S','E','W' – triangle points toward intersection
+  const c  = detColor('em', a, f);
+  const p  = a ? (0.6 + 0.4*Math.sin(Date.now()/250)) : 0.5;
+  ctx.globalAlpha = f ? 1 : (a ? p : 0.3);
+  if (a||f) glow(c, 14);
+  ctx.fillStyle = c;
+  ctx.beginPath();
+  const S = 9;
+  if      (dir==='N') { ctx.moveTo(x,y+S); ctx.lineTo(x-S,y-S); ctx.lineTo(x+S,y-S); }
+  else if (dir==='S') { ctx.moveTo(x,y-S); ctx.lineTo(x-S,y+S); ctx.lineTo(x+S,y+S); }
+  else if (dir==='E') { ctx.moveTo(x-S,y); ctx.lineTo(x+S,y-S); ctx.lineTo(x+S,y+S); }
+  else                { ctx.moveTo(x+S,y); ctx.lineTo(x-S,y-S); ctx.lineTo(x-S,y+S); }
+  ctx.closePath(); ctx.fill();
+  noGlow();
+  ctx.globalAlpha = 1;
+}
+
+// ── Background & roads ────────────────────────────────────────────────────────
+function drawBackground() {
+  ctx.fillStyle = '#1a2e1a';
+  ctx.fillRect(0, 0, W, H);
+  // Road surface
+  ctx.fillStyle = '#1e1e1e';
+  ctx.fillRect(IX1, 0, IX2-IX1, H);
+  ctx.fillRect(0, IY1, W, IY2-IY1);
+  // Intersection box
+  ctx.fillStyle = '#181818';
+  ctx.fillRect(IX1, IY1, IX2-IX1, IY2-IY1);
+  // Curb/sidewalk line
+  ctx.strokeStyle = '#3a3a3a';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([]);
+  const cc = [[IX1,0,IX1,H],[IX2,0,IX2,H],[0,IY1,W,IY1],[0,IY2,W,IY2]];
+  for (const [x1,y1,x2,y2] of cc) {
+    ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+  }
+}
+
+function drawLaneMarkings() {
+  ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([10, 10]);
+  // NB lanes (south of intersection)
+  for (const x of [NBX.LT1-LW/2, NBX.T1-LW/2, NBX.T2-LW/2, NBX.T3-LW/2, NBX.RT1-LW/2]) {
+    ctx.beginPath(); ctx.moveTo(x, IY2); ctx.lineTo(x, H); ctx.stroke();
+  }
+  // SB lanes (north of intersection)
+  for (const x of [SBX.RT1+LW/2, SBX.T3+LW/2, SBX.T2+LW/2, SBX.T1+LW/2, SBX.LT1+LW/2]) {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, IY1); ctx.stroke();
+  }
+  // EB lanes (west of intersection)
+  for (const y of [EBY.T1-LW/2, EBY.T2-LW/2, EBY.T3-LW/2, EBY.RT1-LW/2]) {
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(IX1, y); ctx.stroke();
+  }
+  // WB lanes (east of intersection)
+  for (const y of [WBY.T1+LW/2, WBY.T2+LW/2, WBY.T3+LW/2, WBY.RT1+LW/2]) {
+    ctx.beginPath(); ctx.moveTo(IX2, y); ctx.lineTo(W, y); ctx.stroke();
+  }
+  ctx.setLineDash([]);
+  // Center yellow double lines
+  ctx.strokeStyle = '#7a6200';
+  ctx.lineWidth = 1.2;
+  const ySegs = [[CX-2.5,0,CX-2.5,IY1],[CX-2.5,IY2,CX-2.5,H],
+                 [CX+2.5,0,CX+2.5,IY1],[CX+2.5,IY2,CX+2.5,H],
+                 [0,CY-2.5,IX1,CY-2.5],[IX2,CY-2.5,W,CY-2.5],
+                 [0,CY+2.5,IX1,CY+2.5],[IX2,CY+2.5,W,CY+2.5]];
+  for (const [x1,y1,x2,y2] of ySegs) {
+    ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+  }
+}
+
+function drawStopBars() {
+  ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+  ctx.lineWidth = 2; ctx.setLineDash([]);
+  const bars = [[CX+DIV,IY2,IX2,IY2],[IX1,IY1,CX-DIV,IY1],
+                [IX1,CY+DIV,IX1,IY2],[IX2,IY1,IX2,CY-DIV]];
+  for (const [x1,y1,x2,y2] of bars) {
+    ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+  }
+}
+
+function drawCrosswalks() {
+  ctx.fillStyle = 'rgba(255,255,255,0.12)';
+  const S=5, G=4;
+  // N crosswalk
+  for (let x=IX1; x<IX2; x+=S+G) ctx.fillRect(x, IY1-11, S, 11);
+  // S crosswalk
+  for (let x=IX1; x<IX2; x+=S+G) ctx.fillRect(x, IY2, S, 11);
+  // W crosswalk
+  for (let y=IY1; y<IY2; y+=S+G) ctx.fillRect(IX1-11, y, 11, S);
+  // E crosswalk
+  for (let y=IY1; y<IY2; y+=S+G) ctx.fillRect(IX2, y, 11, S);
+}
+
+function drawLabels() {
+  ctx.fillStyle = 'rgba(200,200,200,0.35)';
+  ctx.font = 'bold 11px Courier New';
+  ctx.textAlign = 'center';
+  ctx.fillText('7TH ST', CX+36, 14);
+  ctx.fillText('7TH ST', CX+36, H-4);
+  ctx.save(); ctx.translate(14, CY); ctx.rotate(-Math.PI/2);
+  ctx.fillText('CAMELBACK RD', 0, 0); ctx.restore();
+  ctx.save(); ctx.translate(W-6, CY); ctx.rotate(-Math.PI/2);
+  ctx.fillText('CAMELBACK RD', 0, 0); ctx.restore();
+  // North arrow
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  ctx.font = 'bold 10px Courier New';
+  ctx.fillText('N', W-18, 18);
+  ctx.beginPath();
+  ctx.moveTo(W-18, 22); ctx.lineTo(W-21, 32); ctx.lineTo(W-18, 30); ctx.lineTo(W-15, 32);
+  ctx.closePath(); ctx.fill();
+  // Approach direction arrows on roads
+  ctx.fillStyle = 'rgba(255,255,255,0.15)';
+  ctx.font = '10px Courier New';
+  ctx.textAlign = 'center';
+  ctx.fillText('↑NB', CX+36, H-30);
+  ctx.fillText('↓SB', CX-36, 42);
+  ctx.fillText('→EB', 46, CY+36);
+  ctx.fillText('←WB', W-42, CY-26);
+  // System & Safety panel labels
+  ctx.fillStyle = 'rgba(150,150,150,0.5)';
+  ctx.font = '8px Courier New';
+  ctx.textAlign = 'left';
+  ctx.fillText('SYSTEM', 22, 32);
+  ctx.textAlign = 'right';
+  ctx.fillText('SAFETY', W-22, 32);
+  ctx.textAlign = 'center';
+}
+
+// ── Detector label mini-text ──────────────────────────────────────────────────
+function drawDetLabel(x, y, txt, above=true) {
+  ctx.save();
+  ctx.font = '7px Courier New';
+  ctx.fillStyle = 'rgba(160,160,160,0.55)';
+  ctx.textAlign = 'center';
+  ctx.fillText(txt, x, above ? y-7 : y+13);
+  ctx.restore();
+}
+
+// ── Draw all detectors ────────────────────────────────────────────────────────
+function drawDetectors() {
+  for (const [id, pos] of Object.entries(LAYOUT)) {
+    const s = inputState[id];
+    if (!s) continue;
+    const [,a,f,,sum,v,cat] = s;
+    const {x, y, t} = pos;
+
+    switch (t) {
+      case 'lv': drawLoopV(x, y, a, f); break;
+      case 'lh': drawLoopH(x, y, a, f); break;
+      case 'av': case 'ah': drawDiamond(x, y, a, f, t); break;
+      case 'bk': drawCircle(x, y, 5, a, f, 'bk'); break;
+      case 'ped': drawCircle(x, y, 6, a, f, 'ped'); break;
+      case 'em': {
+        // direction from position relative to intersection center
+        const dir = x<CX&&y<CY?'S': x>CX&&y<CY?'S': x<CX&&y>CY?'N': x>CX&&y>CY?'N':
+                    y<IY1?'S': y>IY2?'N': x<IX1?'E': 'W';
+        drawTriangle(x, y, dir, a, f);
+        break;
+      }
+      case 'rad':  drawRRect(x, y, 14, 8, a, f, 'rad'); break;
+      case 'cam':  drawRRect(x, y, 10, 10, a, f, 'cam'); break;
+      case 'tsp':  drawRRect(x, y, 12, 8, a, f, 'tsp'); break;
+      case 'saf':  drawRRect(x, y, 16, 8, a, f, 'saf'); break;
+      case 'sys':  drawCircle(x, y, 5, a, f, 'sys'); break;
+      case 'tmp': {
+        const col = v > 65 ? '#f85149' : v > 55 ? '#d29922' : '#ffdd66';
+        ctx.fillStyle = f ? '#f85149' : col;
+        ctx.beginPath(); ctx.arc(x, y, 5, 0, Math.PI*2); ctx.fill();
+        break;
+      }
+      case 'syn': case 'tmc': drawDiamond(x, y, a, f, 'syn'); break;
+    }
+
+    // Tooltip hover highlight ring
+    // (no per-frame label to keep it clean; tooltip shows on hover)
+  }
+}
+
+// Panel overlays for system/safety
+function drawPanels() {
+  // System panel outline (top-left)
+  ctx.strokeStyle = 'rgba(80,90,100,0.4)'; ctx.lineWidth = 1;
+  ctx.setLineDash([3,3]);
+  ctx.strokeRect(22, 25, 110, 60);
+  ctx.setLineDash([]);
+  // Safety panel outline (top-right)
+  ctx.strokeRect(W-132, 25, 110, 35);
+
+  // Inline ID labels for system/safety (tiny)
+  ctx.font = '7px Courier New'; ctx.textAlign = 'center';
+  for (const [id, {x,y,t}] of Object.entries(LAYOUT)) {
+    if (t === 'sys' || t === 'tmp' || t === 'saf') {
+      const s = inputState[id];
+      ctx.fillStyle = 'rgba(180,180,180,0.5)';
+      ctx.fillText(id.replace('_MAIN','').replace('HUMIDITY','HUM'), x, y+13);
+    }
+  }
+
+  // Sync node labels
+  const syncLabels = {SYNC_N:'N',SYNC_S:'S',SYNC_E:'E',SYNC_W:'W',TMC:'TMC'};
+  for (const [id, lbl] of Object.entries(syncLabels)) {
+    const pos = LAYOUT[id];
+    if (!pos) continue;
+    const s = inputState[id];
+    const a = s?s[1]:false, f = s?s[2]:false;
+    ctx.fillStyle = f?'#f85149':a?'#4488ff':'rgba(100,100,120,0.6)';
+    ctx.font = '8px Courier New'; ctx.textAlign = 'center';
+    const offY = pos.y < CY ? 14 : -8;
+    const offX = pos.x < CX ? 12 : (pos.x > CX+50 ? -12 : 0);
+    ctx.fillText(lbl, pos.x + offX, pos.y + offY);
+  }
+}
+
+// ── Full frame render ─────────────────────────────────────────────────────────
+function render() {
+  frame++;
+  ctx.clearRect(0, 0, W, H);
+  drawBackground();
+  drawLaneMarkings();
+  drawStopBars();
+  drawCrosswalks();
+  drawLabels();
+  drawDetectors();
+  drawPanels();
+  requestAnimationFrame(render);
+}
+
+// ── SSE ───────────────────────────────────────────────────────────────────────
+const connDot  = document.getElementById('conn');
+const sActive  = document.getElementById('sActive');
+const sFaults  = document.getElementById('sFaults');
+const sEvents  = document.getElementById('sEvents');
+const logDiv   = document.getElementById('log');
+const clockEl  = document.getElementById('clock');
+
+function evClass(txt) {
+  if (/TRIP|FAULT|OUTAGE/.test(txt))   return 'ev fault';
+  if (/EMERGENCY|PREEMPT/.test(txt))   return 'ev emrg';
+  if (/SAFETY/.test(txt))              return 'ev safety';
+  if (/TRANSIT|BUS#/.test(txt))        return 'ev transit';
+  if (/PRESSED|LATCHED|SERVICED/.test(txt)) return 'ev ped';
+  if (/WARNING|BROWNOUT|DEGRADED/.test(txt)) return 'ev warn';
+  if (/pres=|cnt=|SYNC OK|GPS SYNC/.test(txt)) return 'ev packet';
+  return 'ev';
+}
+
+let autoScroll = true;
+logDiv.addEventListener('scroll', () => {
+  autoScroll = logDiv.scrollTop + logDiv.clientHeight >= logDiv.scrollHeight - 20;
+});
+
+function appendEvents(evts) {
+  if (!evts.length) return;
+  const frag = document.createDocumentFragment();
+  for (const e of evts) {
+    const d = document.createElement('div');
+    d.className = evClass(e);
+    d.textContent = e;
+    frag.appendChild(d);
+    totalEvents++;
+  }
+  logDiv.appendChild(frag);
+  if (autoScroll) logDiv.scrollTop = logDiv.scrollHeight;
+  // trim
+  while (logDiv.children.length > MAX_EVENTS) logDiv.removeChild(logDiv.firstChild);
+}
+
+function updateClock() {
+  clockEl.textContent = new Date().toLocaleTimeString('en-US',
+    {hour12:false, hour:'2-digit', minute:'2-digit', second:'2-digit'});
+}
+setInterval(updateClock, 500);
+
+const es = new EventSource('/stream');
+
+es.onopen = () => { connDot.className = 'ok'; };
+es.onerror = () => { connDot.className = ''; };
+
+es.onmessage = e => {
+  let data;
+  try { data = JSON.parse(e.data); } catch { return; }
+
+  // Update state map: data.i = [[id,a,f,d,sum,v,cat],...]
+  let active = 0, faults = 0;
+  for (const row of data.i) {
+    const id = row[0];
+    inputState[id] = row;
+    if (row[1]) active++;
+    if (row[2]) faults++;
+  }
+
+  sActive.textContent = `${active}/${data.i.length}`;
+  sFaults.textContent = faults;
+  sFaults.className   = 'val' + (faults > 0 ? ' fault' : '');
+  sEvents.textContent = totalEvents;
+
+  appendEvents(data.e || []);
+};
+
+// ── Fault injection ───────────────────────────────────────────────────────────
+function sendFault(id, type) {
+  fetch('/fault', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({id, type})
+  }).catch(() => {});
+}
+
+// ── Start ─────────────────────────────────────────────────────────────────────
+render();
+</script>
+</body>
+</html>

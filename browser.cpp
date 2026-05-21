@@ -1,0 +1,1415 @@
+// bare-bones browser: text + images in document order
+#include <gtk/gtk.h>
+#include <curl/curl.h>
+#include <string>
+#include <vector>
+#include <thread>
+#include <mutex>
+#include <functional>
+#include <algorithm>
+#include <cctype>
+#include <cstring>
+
+// ---- curl ----
+
+struct Buf { std::string data; };
+static size_t write_cb(char* p, size_t s, size_t n, void* ud) {
+    static_cast<Buf*>(ud)->data.append(p, s*n); return s*n;
+}
+static bool fetch(const std::string& url, Buf& out) {
+    CURL* c = curl_easy_init(); if (!c) return false;
+    curl_easy_setopt(c, CURLOPT_URL,            url.c_str());
+    curl_easy_setopt(c, CURLOPT_WRITEFUNCTION,  write_cb);
+    curl_easy_setopt(c, CURLOPT_WRITEDATA,      &out);
+    curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(c, CURLOPT_USERAGENT,      "Mozilla/5.0");
+    curl_easy_setopt(c, CURLOPT_TIMEOUT,        15L);
+    curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, 0L);
+    CURLcode rc = curl_easy_perform(c); curl_easy_cleanup(c);
+    return rc == CURLE_OK;
+}
+
+// ---- URL ----
+
+static std::string normalize_url(const std::string& r) {
+    if (r.size()>=12 && r.substr(0,12)=="view-source:") return r;
+    if (r.size()>=7  && r.substr(0,7)=="http://")  return r;
+    if (r.size()>=8  && r.substr(0,8)=="https://") return r;
+    return "https://" + r;
+}
+static std::string origin_of(const std::string& url) {
+    auto p = url.find("://"); if (p==std::string::npos) return url;
+    auto q = url.find('/', p+3);
+    return q!=std::string::npos ? url.substr(0,q) : url;
+}
+static std::string resolve(const std::string& base, const std::string& href) {
+    if (href.empty() || href[0]=='#') return "";
+    if (href.size()>=4 && href.substr(0,4)=="http") return href;
+    if (href.size()>=2 && href.substr(0,2)=="//")   return "https:"+href;
+    if (href[0]=='/')                                return origin_of(base)+href;
+    auto last = base.rfind('/');
+    return (last!=std::string::npos ? base.substr(0,last+1) : base+"/") + href;
+}
+
+// ---- HTML helpers ----
+
+static char lc(char c) { return (char)::tolower((unsigned char)c); }
+static std::string tolower_s(std::string s) { for (auto& c:s) c=lc(c); return s; }
+
+static size_t find_ci(const std::string& h, const char* needle, size_t pos=0) {
+    size_t nl = std::strlen(needle);
+    for (size_t i=pos; i+nl<=h.size(); ++i) {
+        bool ok=true;
+        for (size_t j=0; j<nl; ++j) if (lc(h[i+j])!=lc(needle[j])) { ok=false; break; }
+        if (ok) return i;
+    }
+    return std::string::npos;
+}
+
+static std::string decode_entities(const std::string& s) {
+    std::string r; r.reserve(s.size());
+    for (size_t i=0; i<s.size(); ) {
+        if (s[i]!='&') { r+=s[i++]; continue; }
+        size_t semi = s.find(';', i+1);
+        if (semi==std::string::npos || semi-i>12) { r+=s[i++]; continue; }
+        std::string e = s.substr(i+1, semi-i-1);
+        if      (e=="amp")  r+='&';
+        else if (e=="lt")   r+='<';
+        else if (e=="gt")   r+='>';
+        else if (e=="quot") r+='"';
+        else if (e=="apos") r+='\'';
+        else if (e=="nbsp") r+=' ';
+        else if (!e.empty() && e[0]=='#') {
+            try {
+                int code = (e.size()>1 && e[1]=='x') ? std::stoi(e.substr(2),nullptr,16)
+                                                      : std::stoi(e.substr(1));
+                r += (code>0 && code<128) ? (char)code : '?';
+            } catch (...) { r+=s[i++]; continue; }
+        } else { r+=s[i++]; continue; }
+        i = semi+1;
+    }
+    return r;
+}
+
+static std::string collapse_ws(const std::string& s) {
+    std::string r; bool sp=true;
+    for (char c : s) {
+        if (std::isspace((unsigned char)c)) { if (!sp) r+=' '; sp=true; }
+        else { r+=c; sp=false; }
+    }
+    if (!r.empty() && r.back()==' ') r.pop_back();
+    return r;
+}
+
+static std::string extract_attr(const std::string& tag, const char* name) {
+    size_t p = find_ci(tag, name);
+    if (p==std::string::npos) return "";
+    p += std::strlen(name);
+    while (p<tag.size() && tag[p]==' ') ++p;
+    if (p>=tag.size() || tag[p]!='=') return "";
+    ++p;
+    while (p<tag.size() && tag[p]==' ') ++p;
+    if (p>=tag.size()) return "";
+    char q = tag[p];
+    if (q=='"' || q=='\'') {
+        size_t end = tag.find(q, p+1);
+        return end==std::string::npos ? tag.substr(p+1) : tag.substr(p+1, end-p-1);
+    }
+    size_t end=p;
+    while (end<tag.size() && !std::isspace((unsigned char)tag[end]) && tag[end]!='>') ++end;
+    return tag.substr(p, end-p);
+}
+
+// ---- CSS ----
+
+static int fw_value(std::string v) {
+    v = collapse_ws(tolower_s(v));
+    if (v=="bold")    return PANGO_WEIGHT_BOLD;
+    if (v=="normal")  return PANGO_WEIGHT_NORMAL;
+    if (v=="bolder")  return PANGO_WEIGHT_ULTRABOLD;
+    if (v=="lighter") return PANGO_WEIGHT_LIGHT;
+    try {
+        int n = std::stoi(v);
+        if (n<=100) return PANGO_WEIGHT_THIN;
+        if (n<=200) return PANGO_WEIGHT_ULTRALIGHT;
+        if (n<=300) return PANGO_WEIGHT_LIGHT;
+        if (n<=400) return PANGO_WEIGHT_NORMAL;
+        if (n<=500) return PANGO_WEIGHT_MEDIUM;
+        if (n<=600) return PANGO_WEIGHT_SEMIBOLD;
+        if (n<=700) return PANGO_WEIGHT_BOLD;
+        if (n<=800) return PANGO_WEIGHT_ULTRABOLD;
+        return PANGO_WEIGHT_HEAVY;
+    } catch (...) { return -1; }
+}
+
+// extract a single CSS property value from a declaration block
+static std::string prop_val(const std::string& decls, const char* prop) {
+    size_t plen = std::strlen(prop), p = 0;
+    while (true) {
+        p = find_ci(decls, prop, p);
+        if (p==std::string::npos) return "";
+        if (p>0 && decls[p-1]!=';' && !std::isspace((unsigned char)decls[p-1]))
+            { p+=plen; continue; }
+        p += plen;
+        while (p<decls.size() && decls[p]==' ') ++p;
+        if (p>=decls.size() || decls[p]!=':') continue;
+        ++p;
+        while (p<decls.size() && decls[p]==' ') ++p;
+        size_t end = decls.find(';', p);
+        std::string val = end==std::string::npos ? decls.substr(p) : decls.substr(p, end-p);
+        while (!val.empty() && std::isspace((unsigned char)val.back())) val.pop_back();
+        return val;
+    }
+}
+
+static int fw_from_decls(const std::string& d) { return fw_value(prop_val(d, "font-weight")); }
+
+// font-size string → pixels (parent_px used for em/% resolution)
+static int parse_fs(const std::string& raw, int parent_px) {
+    std::string v = collapse_ws(tolower_s(raw));
+    if (v=="xx-small") return 9;   if (v=="x-small")  return 10;
+    if (v=="small")    return 13;  if (v=="medium")    return 16;
+    if (v=="large")    return 18;  if (v=="x-large")   return 24;
+    if (v=="xx-large") return 32;  if (v=="smaller")   return (int)(parent_px*0.833);
+    if (v=="larger")   return (int)(parent_px*1.2);
+    try {
+        size_t pos; double n = std::stod(v, &pos); std::string u = v.substr(pos);
+        if (u=="px")  return (int)n;
+        if (u=="pt")  return (int)(n*4.0/3.0);
+        if (u=="em")  return (int)(n*parent_px);
+        if (u=="rem") return (int)(n*16.0);
+        if (u=="%")   return (int)(n/100.0*parent_px);
+    } catch (...) {}
+    return -1;
+}
+
+// line-height string → multiplier factor (-1 = normal/unset)
+static double parse_lh(const std::string& raw, int fs_px) {
+    std::string v = collapse_ws(tolower_s(raw));
+    if (v=="normal" || v.empty()) return -1.0;
+    try {
+        size_t pos; double n = std::stod(v, &pos); std::string u = v.substr(pos);
+        if (u.empty() || u=="em") return n;
+        if (u=="%")               return n/100.0;
+        if (u=="px" && fs_px>0)   return n/fs_px;
+    } catch (...) {}
+    return -1.0;
+}
+
+// parse a CSS length value → pixels (best-effort; 'auto' → 0)
+static int parse_px_val(const std::string& raw) {
+    std::string v = collapse_ws(tolower_s(raw));
+    if (v.empty() || v=="auto") return 0;
+    try {
+        size_t pos; double n = std::stod(v, &pos); std::string u = v.substr(pos);
+        if (u==""||u=="px") return (int)n;
+        if (u=="pt")        return (int)(n*4.0/3.0);
+        if (u=="em")        return (int)(n*16); // approximate
+        if (u=="rem")       return (int)(n*16);
+    } catch (...) {}
+    return 0;
+}
+
+static std::array<int,4> parse_box_shorthand(const std::string& raw) {
+    std::array<int,4> v={0,0,0,0};
+    std::vector<std::string> parts;
+    size_t i=0, n=raw.size();
+    while (i<n) {
+        while (i<n && raw[i]==' ') ++i;
+        size_t j=i; while (j<n && raw[j]!=' ') ++j;
+        if (j>i) parts.push_back(raw.substr(i,j-i));
+        i=j;
+    }
+    if (parts.empty()) return v;
+    auto p=[](const std::string& s){ return parse_px_val(s); };
+    if (parts.size()==1) v={p(parts[0]),p(parts[0]),p(parts[0]),p(parts[0])};
+    else if(parts.size()==2) v={p(parts[0]),p(parts[1]),p(parts[0]),p(parts[1])};
+    else if(parts.size()==3) v={p(parts[0]),p(parts[1]),p(parts[2]),p(parts[1])};
+    else { v={p(parts[0]),p(parts[1]),p(parts[2]),p(parts[3])}; }
+    return v; // [top, right, bottom, left]
+}
+
+struct CSSRule { std::string sel; int fw=-1; std::string fs_raw, lh_raw, decls, src_url; };
+
+struct ParsedBorder { int width=0; std::string style, color; };
+static ParsedBorder parse_border_shorthand(const std::string& raw) {
+    ParsedBorder b;
+    std::vector<std::string> parts;
+    size_t i=0, n=raw.size();
+    while (i<n) {
+        while (i<n && raw[i]==' ') ++i;
+        size_t j=i; while (j<n && raw[j]!=' ') ++j;
+        if (j>i) parts.push_back(raw.substr(i,j-i));
+        i=j;
+    }
+    static const char* STYLES[]={"solid","dashed","dotted","double","groove","ridge","inset","outset","none",nullptr};
+    std::string color_acc;
+    for (const auto& p : parts) {
+        std::string pl = tolower_s(p);
+        bool is_style=false;
+        for (int si=0; STYLES[si]; ++si) if (pl==STYLES[si]) { b.style=pl; is_style=true; break; }
+        if (is_style) continue;
+        if (b.width==0) {
+            if (pl=="thin")  { b.width=1; continue; }
+            if (pl=="medium"){ b.width=3; continue; }
+            if (pl=="thick") { b.width=5; continue; }
+            int w=parse_px_val(p); if (w>0) { b.width=w; continue; }
+        }
+        if (!color_acc.empty()) color_acc+=' ';
+        color_acc+=p;
+    }
+    if (!color_acc.empty()) b.color=color_acc;
+    return b;
+}
+
+static std::vector<CSSRule> parse_css(const std::string& css) {
+    std::vector<CSSRule> rules;
+    size_t i=0, n=css.size();
+    while (i<n) {
+        while (i<n && std::isspace((unsigned char)css[i])) ++i;
+        // skip /* comments */
+        if (i+1<n && css[i]=='/' && css[i+1]=='*') {
+            size_t e = css.find("*/", i+2);
+            i = e==std::string::npos ? n : e+2; continue;
+        }
+        // skip @rules (find matching braces)
+        if (i<n && css[i]=='@') {
+            size_t ob = css.find('{', i);
+            if (ob==std::string::npos) { i=n; break; }
+            int depth=1; i=ob+1;
+            while (i<n && depth>0) { if(css[i]=='{')++depth; else if(css[i]=='}')--depth; ++i; }
+            continue;
+        }
+        size_t ss=i;
+        while (i<n && css[i]!='{') ++i;
+        if (i>=n) break;
+        std::string sels_str = css.substr(ss, i-ss);
+        ++i; // skip '{'
+        size_t ds=i; int depth=1;
+        while (i<n && depth>0) { if(css[i]=='{')++depth; else if(css[i]=='}')--depth; ++i; }
+        std::string decls = css.substr(ds, i-1-ds);
+        int fw = fw_from_decls(decls);
+        std::string fs_raw = prop_val(decls, "font-size");
+        std::string lh_raw = prop_val(decls, "line-height");
+        bool has_box = !prop_val(decls,"margin").empty() || !prop_val(decls,"padding").empty()
+                    || !prop_val(decls,"margin-top").empty() || !prop_val(decls,"padding-top").empty()
+                    || !prop_val(decls,"width").empty()      || !prop_val(decls,"max-width").empty()
+                    || !prop_val(decls,"height").empty()
+                    || !prop_val(decls,"display").empty()    || !prop_val(decls,"float").empty()
+                    || !prop_val(decls,"background-color").empty()
+                    || !prop_val(decls,"background-image").empty()
+                    || !prop_val(decls,"background").empty()
+                    || !prop_val(decls,"border").empty()     || !prop_val(decls,"border-radius").empty()
+                    || !prop_val(decls,"color").empty()      || !prop_val(decls,"text-align").empty();
+        if (fw==-1 && fs_raw.empty() && lh_raw.empty() && !has_box) continue;
+        // split comma-separated selectors
+        size_t j=0;
+        while (j<=sels_str.size()) {
+            size_t comma = sels_str.find(',', j);
+            std::string sel = collapse_ws(tolower_s(
+                comma==std::string::npos ? sels_str.substr(j) : sels_str.substr(j, comma-j)));
+            if (!sel.empty()) rules.push_back({sel, fw, fs_raw, lh_raw, decls});
+            if (comma==std::string::npos) break;
+            j = comma+1;
+        }
+    }
+    return rules;
+}
+
+// collect CSS from all <style> blocks in the document
+static std::vector<CSSRule> extract_css(const std::string& html) {
+    std::vector<CSSRule> all;
+    size_t i=0;
+    while (true) {
+        size_t start = find_ci(html, "<style", i);
+        if (start==std::string::npos) break;
+        size_t nx = start+6;
+        if (nx<html.size() && html[nx]!='>' && !std::isspace((unsigned char)html[nx]))
+            { i=nx; continue; } // not a <style> tag
+        size_t gt = html.find('>', start);
+        if (gt==std::string::npos) break;
+        size_t end = find_ci(html, "</style>", gt+1);
+        std::string css = html.substr(gt+1, end==std::string::npos ? html.size()-gt-1 : end-gt-1);
+        for (auto& r : parse_css(css)) all.push_back(r);
+        i = end==std::string::npos ? html.size() : end+8;
+    }
+    return all;
+}
+
+// ---- Box model ----
+
+struct BoxModel {
+    int margin[4]  = {0,0,0,0}; // top right bottom left
+    int padding[4] = {0,0,0,0};
+    int width      = -1;
+    int max_width  = -1;
+    int height     = -1;
+    int border_width[4] = {0,0,0,0}; // top right bottom left
+    int border_radius   = 0;
+    std::string border_color;
+    std::string border_style; // solid, dashed, etc.
+    bool halign_center = false;
+    enum class Display : uint8_t { Inherit, Block, Inline, None, Flex, InlineBlock } display = Display::Inherit;
+    enum class Float   : uint8_t { None, Left, Right }                               floatdir = Float::None;
+    std::string bg_image; // resolved URL
+    std::string bg_color; // raw CSS color value
+};
+
+static bool is_block_element(const std::string& t) {
+    static const char* B[]={"div","section","article","main","header","footer","nav","aside",
+                             "p","ul","ol","li","h1","h2","h3","h4","h5","h6",
+                             "blockquote","form","figure","figcaption","details","summary",
+                             "body","html",nullptr};
+    for (int i=0; B[i]; ++i) if (t==B[i]) return true;
+    return false;
+}
+
+static void apply_box(const std::string& decls, BoxModel& bm) {
+    auto m = prop_val(decls, "margin");
+    if (!m.empty()) {
+        auto v = parse_box_shorthand(m);
+        for (int i=0; i<4; ++i) bm.margin[i] = v[i];
+        if (tolower_s(m).find("auto") != std::string::npos) bm.halign_center = true;
+    }
+    { auto s=prop_val(decls,"margin-top");    if(!s.empty()) bm.margin[0]=parse_px_val(s); }
+    { auto s=prop_val(decls,"margin-right");  if(!s.empty()) bm.margin[1]=parse_px_val(s); }
+    { auto s=prop_val(decls,"margin-bottom"); if(!s.empty()) bm.margin[2]=parse_px_val(s); }
+    { auto s=prop_val(decls,"margin-left");   if(!s.empty()) { bm.margin[3]=parse_px_val(s); if(tolower_s(s)=="auto") bm.halign_center=true; } }
+    auto p = prop_val(decls, "padding");
+    if (!p.empty()) { auto v=parse_box_shorthand(p); for(int i=0;i<4;++i) bm.padding[i]=v[i]; }
+    { auto s=prop_val(decls,"padding-top");    if(!s.empty()) bm.padding[0]=parse_px_val(s); }
+    { auto s=prop_val(decls,"padding-right");  if(!s.empty()) bm.padding[1]=parse_px_val(s); }
+    { auto s=prop_val(decls,"padding-bottom"); if(!s.empty()) bm.padding[2]=parse_px_val(s); }
+    { auto s=prop_val(decls,"padding-left");   if(!s.empty()) bm.padding[3]=parse_px_val(s); }
+    { auto s=prop_val(decls,"width");     auto sl=tolower_s(s);
+      if(!s.empty()&&sl!="auto"&&sl!="100%") bm.width=parse_px_val(s); }
+    { auto s=prop_val(decls,"max-width"); if(!s.empty()) bm.max_width=parse_px_val(s); }
+    { auto s=prop_val(decls,"height");    auto sl=tolower_s(s);
+      if(!s.empty()&&sl!="auto") bm.height=parse_px_val(s); }
+    { auto s=tolower_s(prop_val(decls,"display"));
+      if      (s=="none")                       bm.display=BoxModel::Display::None;
+      else if (s=="flex"||s=="inline-flex")     bm.display=BoxModel::Display::Flex;
+      else if (s=="inline-block")               bm.display=BoxModel::Display::InlineBlock;
+      else if (s=="inline")                     bm.display=BoxModel::Display::Inline;
+      else if (s=="block")                      bm.display=BoxModel::Display::Block; }
+    { auto s=tolower_s(prop_val(decls,"float"));
+      if      (s=="left")  bm.floatdir=BoxModel::Float::Left;
+      else if (s=="right") bm.floatdir=BoxModel::Float::Right;
+      else if (s=="none")  bm.floatdir=BoxModel::Float::None; }
+    { auto s = prop_val(decls,"background-color");
+      if (s.empty()) {
+          // background shorthand: grab color if no url()
+          auto bg = prop_val(decls,"background");
+          if (bg.find("url(")==std::string::npos && !bg.empty()) s = bg;
+      }
+      if (!s.empty()) bm.bg_color = collapse_ws(s); }
+    {
+        std::string s = prop_val(decls,"background-image");
+        if (s.empty()) s = prop_val(decls,"background");
+        size_t p = s.find("url(");
+        if (p != std::string::npos) {
+            size_t q = s.find(')', p+4);
+            if (q != std::string::npos) {
+                std::string u = s.substr(p+4, q-p-4);
+                while (!u.empty()&&(u.front()=='"'||u.front()=='\''||u.front()==' ')) u.erase(u.begin());
+                while (!u.empty()&&(u.back() =='"'||u.back() =='\''||u.back() ==' ')) u.pop_back();
+                if (!u.empty()) bm.bg_image = u;
+            }
+        }
+    }
+    // border shorthand
+    { auto s=prop_val(decls,"border"); if (!s.empty()) {
+          auto b=parse_border_shorthand(s);
+          if (b.width>0) for(int i=0;i<4;++i) bm.border_width[i]=b.width;
+          if (!b.style.empty()) bm.border_style=b.style;
+          if (!b.color.empty()) bm.border_color=b.color;
+    }}
+    // individual border sides
+    { const char* sides[4]={"border-top","border-right","border-bottom","border-left"};
+      for (int i=0;i<4;++i) {
+          auto s=prop_val(decls,sides[i]); if (s.empty()) continue;
+          auto b=parse_border_shorthand(s);
+          if (b.width>0) bm.border_width[i]=b.width;
+          if (!b.style.empty()) bm.border_style=b.style;
+          if (!b.color.empty()) bm.border_color=b.color;
+    }}
+    { auto s=prop_val(decls,"border-color"); if (!s.empty()) bm.border_color=collapse_ws(s); }
+    { auto s=prop_val(decls,"border-width"); if (!s.empty()) {
+          auto v=parse_box_shorthand(s); for(int i=0;i<4;++i) if(v[i]>0) bm.border_width[i]=v[i];
+    }}
+    { auto s=tolower_s(prop_val(decls,"border-style")); if (!s.empty()) bm.border_style=s; }
+    { auto s=prop_val(decls,"border-radius"); if (!s.empty()) {
+          size_t sl=s.find('/');
+          bm.border_radius=parse_px_val(sl==std::string::npos ? s : s.substr(0,sl));
+    }}
+}
+
+// ---- Element stack ----
+
+static std::vector<std::string> split_classes(const std::string& s) {
+    std::vector<std::string> v; std::string cur;
+    for (char c : s) {
+        if (c==' '||c=='\t') { if (!cur.empty()) { v.push_back(cur); cur.clear(); } }
+        else cur += lc(c);
+    }
+    if (!cur.empty()) v.push_back(cur);
+    return v;
+}
+
+static bool is_void(const std::string& t) {
+    static const char* V[]={"area","base","br","col","embed","hr","img",
+                             "input","link","meta","param","source","track","wbr",nullptr};
+    for (int i=0; V[i]; ++i) if (t==V[i]) return true;
+    return false;
+}
+
+static const char* BOLD_TAGS[]={"b","strong","h1","h2","h3","h4","h5","h6",nullptr};
+
+struct StackEntry {
+    std::string tag; std::vector<std::string> cls; std::string id;
+    int    fw_own       = -1;
+    int    fs_computed  = 16;
+    double lh_own       = -1.0;
+    std::string color_own;
+    int    text_align_own = -1; // -1=inherit, 0=left, 1=center, 2=right, 3=justify
+    BoxModel box;
+    std::string href; // non-empty for <a> elements
+};
+
+// Match a single simple selector token (tag, .class, #id, tag.class, .a.b, with optional :pseudo)
+static bool simple_match(const std::string& raw, const StackEntry& e) {
+    if (raw.empty() || raw=="*") return true;
+    // strip pseudo-class
+    std::string tok = raw;
+    size_t colon = tok.find(':');
+    if (colon != std::string::npos) tok = tok.substr(0, colon);
+    if (tok.empty()) return true;
+    if (tok[0]=='#') return e.id == tok.substr(1);
+    // parse tag part and class parts from e.g. "div.foo.bar" or ".foo.bar" or "div"
+    std::string tag_part;
+    std::vector<std::string> req_cls;
+    size_t i = 0;
+    if (tok[i] != '.') {
+        size_t d = tok.find('.'); tag_part = tok.substr(0, d);
+        if (d != std::string::npos) i = d + 1; else i = tok.size();
+    } else { ++i; }
+    while (i <= tok.size()) {
+        size_t d = tok.find('.', i);
+        std::string c = tok.substr(i, d==std::string::npos ? std::string::npos : d-i);
+        if (!c.empty()) req_cls.push_back(c);
+        if (d==std::string::npos) break; i = d+1;
+    }
+    if (!tag_part.empty() && e.tag != tag_part) return false;
+    for (const auto& c : req_cls)
+        if (std::find(e.cls.begin(),e.cls.end(),c)==e.cls.end()) return false;
+    return true;
+}
+
+// Match a full selector (handles descendant/child combinators) against ancestors + current element
+static bool sel_matches(const std::string& sel,
+                         const std::vector<StackEntry>& ancestors,
+                         const StackEntry& cur) {
+    if (sel.empty()) return false;
+    // Split selector into tokens, discarding '>' combinator tokens
+    std::vector<std::string> parts;
+    size_t i = 0, n = sel.size();
+    while (i < n) {
+        while (i<n && sel[i]==' ') ++i;
+        size_t j = i; while (j<n && sel[j]!=' ') ++j;
+        if (j>i) { std::string p=sel.substr(i,j-i); if (p!=">") parts.push_back(p); }
+        i = j;
+    }
+    if (parts.empty()) return false;
+    if (!simple_match(parts.back(), cur)) return false;
+    if (parts.size()==1) return true;
+    // greedily match remaining parts against ancestors (right-to-left)
+    int pi = (int)parts.size()-2, ai = (int)ancestors.size()-1;
+    while (pi>=0 && ai>=0) { if (simple_match(parts[pi],ancestors[ai])) --pi; --ai; }
+    return pi < 0;
+}
+
+static int    compute_fw(const std::vector<StackEntry>& s) {
+    int fw=PANGO_WEIGHT_NORMAL; for(auto&e:s) if(e.fw_own!=-1) fw=e.fw_own; return fw;
+}
+static double compute_lh(const std::vector<StackEntry>& s) {
+    double lh=-1.0; for(auto&e:s) if(e.lh_own>=0) lh=e.lh_own; return lh;
+}
+static std::string compute_href(const std::vector<StackEntry>& s) {
+    for (int i=(int)s.size()-1; i>=0; --i) if (!s[i].href.empty()) return s[i].href;
+    return "";
+}
+static std::string compute_color(const std::vector<StackEntry>& s) {
+    for (int i=(int)s.size()-1; i>=0; --i) if (!s[i].color_own.empty()) return s[i].color_own;
+    return "";
+}
+static int compute_text_align(const std::vector<StackEntry>& s) {
+    for (int i=(int)s.size()-1; i>=0; --i) if (s[i].text_align_own>=0) return s[i].text_align_own;
+    return 0;
+}
+
+// ---- Element ----
+
+struct Element {
+    enum {TEXT,IMAGE,DIV_OPEN,DIV_CLOSE} type;
+    std::string content;
+    int fw=PANGO_WEIGHT_NORMAL; int fs_px=16; double lh=-1.0;
+    std::string color;   // text color (TEXT only)
+    int text_align = 0;  // 0=left,1=center,2=right,3=justify (TEXT only)
+    BoxModel box; // DIV_OPEN only
+    std::string href; // non-empty for link text
+    bool is_body = false; // DIV_OPEN only
+};
+
+static std::vector<CSSRule> fetch_linked_css(const std::string& html, const std::string& base) {
+    std::vector<CSSRule> all;
+    size_t i = 0;
+    while (true) {
+        size_t p = find_ci(html, "<link", i);
+        if (p == std::string::npos) break;
+        size_t gt = html.find('>', p);
+        if (gt == std::string::npos) break;
+        std::string tag = html.substr(p+1, gt-p-1);
+        i = gt+1;
+        if (tolower_s(extract_attr(tag,"rel")) != "stylesheet") continue;
+        std::string href = extract_attr(tag,"href");
+        if (href.empty()) continue;
+        std::string url = resolve(base, href);
+        if (url.empty()) continue;
+        Buf buf;
+        if (!fetch(url, buf)) continue;
+        for (auto& r : parse_css(buf.data)) { r.src_url = url; all.push_back(std::move(r)); }
+    }
+    return all;
+}
+
+static std::vector<Element> parse_elements(const std::string& html, const std::string& base) {
+    auto css = extract_css(html);
+    for (auto& r : fetch_linked_css(html, base)) css.push_back(std::move(r));
+    std::vector<Element> elems;
+    std::vector<StackEntry> stack;
+    std::string acc;
+    auto flush = [&]() {
+        std::string t = collapse_ws(decode_entities(acc));
+        if (!t.empty()) {
+            int fs = stack.empty() ? 16 : stack.back().fs_computed;
+            Element el; el.type=Element::TEXT; el.content=t;
+            el.fw=compute_fw(stack); el.fs_px=fs; el.lh=compute_lh(stack);
+            el.href=compute_href(stack);
+            el.color=compute_color(stack);
+            el.text_align=compute_text_align(stack);
+            elems.push_back(std::move(el));
+        }
+        acc.clear();
+    };
+
+    enum { NORM, SCRIPT_SKIP, STYLE_SKIP, COMMENT } state = NORM;
+    int skip_depth = 0; // for display:none subtrees
+    size_t i=0, n=html.size();
+
+    while (i<n) {
+        if (state==COMMENT) {
+            size_t p = html.find("-->", i);
+            i = p==std::string::npos ? n : p+3;
+            state=NORM; continue;
+        }
+        if (state==SCRIPT_SKIP) {
+            size_t p = find_ci(html, "</script>", i);
+            i = p==std::string::npos ? n : p+9;
+            state=NORM; continue;
+        }
+        if (state==STYLE_SKIP) {
+            size_t p = find_ci(html, "</style>", i);
+            i = p==std::string::npos ? n : p+8;
+            state=NORM; continue;
+        }
+        if (html[i]!='<') { if (!skip_depth) acc+=html[i]; ++i; continue; }
+        flush(); ++i;
+        if (i>=n) break;
+        if (i+2<n && html[i]=='!' && html[i+1]=='-' && html[i+2]=='-') {
+            state=COMMENT; i+=3; continue;
+        }
+        // find tag end, respecting quoted attributes
+        size_t ts=i; bool inq=false; char qc=0;
+        while (i<n) {
+            if (!inq && html[i]=='>') break;
+            if (inq && html[i]==qc) inq=false;
+            else if (!inq && (html[i]=='"'||html[i]=='\'')) { inq=true; qc=html[i]; }
+            ++i;
+        }
+        std::string tag = html.substr(ts, i-ts);
+        if (i<n) ++i;
+        if (tag.empty()) continue;
+
+        bool closing = (tag[0]=='/');
+        size_t ks=closing?1:0, k=ks;
+        while (k<tag.size() && !std::isspace((unsigned char)tag[k]) && tag[k]!='>') ++k;
+        std::string tname = tolower_s(tag.substr(ks, k-ks));
+
+        // handle display:none skip region
+        if (skip_depth > 0) {
+            if (!closing && !is_void(tname)) skip_depth++;
+            else if (closing) { if (--skip_depth == 0) acc.clear(); }
+            continue;
+        }
+
+        if (!closing && tname=="script") { state=SCRIPT_SKIP; continue; }
+        if (!closing && tname=="style")  { state=STYLE_SKIP;  continue; }
+
+        if (!closing && tname=="img") {
+            std::string src = extract_attr(tag, "src");
+            if (!src.empty()) {
+                std::string u = resolve(base, src);
+                if (!u.empty()) elems.push_back({Element::IMAGE, u});
+            }
+            continue;
+        }
+
+        if (!closing && !is_void(tname)) {
+            int parent_fs = stack.empty() ? 16 : stack.back().fs_computed;
+            StackEntry e;
+            e.tag = tname;
+            e.cls = split_classes(extract_attr(tag, "class"));
+            e.id  = tolower_s(extract_attr(tag, "id"));
+            e.fs_computed = parent_fs;
+            // UA defaults
+            for (int bi=0; BOLD_TAGS[bi]; ++bi)
+                if (tname==BOLD_TAGS[bi]) e.fw_own=PANGO_WEIGHT_BOLD;
+            // CSS rules
+            std::string bg_img_src; // track src_url of the rule that set bg_image
+            for (const auto& r : css) {
+                if (!sel_matches(r.sel, stack, e)) continue;
+                if (tname == "body") {
+                    FILE* fl = fopen("/tmp/browser_debug.log","a");
+                    if (fl) { fprintf(fl, "body CSS match: sel='%s'\n", r.sel.c_str()); fclose(fl); }
+                }
+                if (r.fw!=-1) e.fw_own = r.fw;
+                if (!r.fs_raw.empty()) { int px=parse_fs(r.fs_raw,parent_fs); if(px>0) e.fs_computed=px; }
+                if (!r.lh_raw.empty()) { double f=parse_lh(r.lh_raw,e.fs_computed); if(f>=0) e.lh_own=f; }
+                std::string prev_bg = e.box.bg_image;
+                apply_box(r.decls, e.box);
+                if (e.box.bg_image != prev_bg) bg_img_src = r.src_url;
+                { auto s=prop_val(r.decls,"color"); if(!s.empty()) e.color_own=collapse_ws(s); }
+                { auto s=tolower_s(prop_val(r.decls,"text-align"));
+                  if      (s=="center")  e.text_align_own=1;
+                  else if (s=="right")   e.text_align_own=2;
+                  else if (s=="justify") e.text_align_own=3;
+                  else if (s=="left")    e.text_align_own=0; }
+            }
+            // anchor href
+            if (tname=="a") {
+                std::string h = extract_attr(tag, "href");
+                if (!h.empty()) e.href = resolve(base, h);
+            }
+            // inline style
+            std::string ist = extract_attr(tag, "style");
+            { int v=fw_value(prop_val(ist,"font-weight"));    if(v!=-1)   e.fw_own=v; }
+            { int px=parse_fs(prop_val(ist,"font-size"),parent_fs); if(px>0) e.fs_computed=px; }
+            { double f=parse_lh(prop_val(ist,"line-height"),e.fs_computed); if(f>=0) e.lh_own=f; }
+            apply_box(ist, e.box);
+            { auto s=prop_val(ist,"color"); if(!s.empty()) e.color_own=collapse_ws(s); }
+            { auto s=tolower_s(prop_val(ist,"text-align"));
+              if      (s=="center")  e.text_align_own=1;
+              else if (s=="right")   e.text_align_own=2;
+              else if (s=="justify") e.text_align_own=3;
+              else if (s=="left")    e.text_align_own=0; }
+
+            // resolve bg_image: use CSS file URL if it came from a linked sheet
+            if (!e.box.bg_image.empty()) {
+                const std::string& res_base = !bg_img_src.empty() ? bg_img_src : base;
+                e.box.bg_image = resolve(res_base, e.box.bg_image);
+            }
+
+            // display:none — skip this subtree entirely
+            if (e.box.display == BoxModel::Display::None) {
+                skip_depth = 1; acc.clear(); continue;
+            }
+
+            // decide if this element creates a block container
+            bool floated = e.box.floatdir != BoxModel::Float::None;
+            bool emits_block = floated
+                || e.box.display == BoxModel::Display::Flex
+                || e.box.display == BoxModel::Display::InlineBlock
+                || e.box.display == BoxModel::Display::Block
+                || (is_block_element(tname) && e.box.display != BoxModel::Display::Inline);
+
+            stack.push_back(e);
+            if (emits_block) {
+                Element d; d.type=Element::DIV_OPEN; d.box=e.box;
+                if (tname == "body") d.is_body = true;
+                elems.push_back(d);
+            }
+        } else if (closing) {
+            for (int j=(int)stack.size()-1; j>=0; --j) {
+                if (stack[j].tag==tname) {
+                    bool floated = stack[j].box.floatdir != BoxModel::Float::None;
+                    bool had_block = floated
+                        || stack[j].box.display == BoxModel::Display::Flex
+                        || stack[j].box.display == BoxModel::Display::InlineBlock
+                        || stack[j].box.display == BoxModel::Display::Block
+                        || (is_block_element(tname) && stack[j].box.display != BoxModel::Display::Inline);
+                    if (had_block) {
+                        Element d; d.type=Element::DIV_CLOSE;
+                        elems.push_back(d);
+                    }
+                    stack.erase(stack.begin()+j, stack.end());
+                    break;
+                }
+            }
+        }
+    }
+    flush();
+    return elems;
+}
+
+// ---- idle trampoline (allows capturing lambdas via g_idle_add) ----
+
+static gboolean idle_trampoline(gpointer data) {
+    auto* fn = static_cast<std::function<void()>*>(data);
+    (*fn)(); delete fn;
+    return G_SOURCE_REMOVE;
+}
+static void idle_add(std::function<void()> fn) {
+    g_idle_add(idle_trampoline, new std::function<void()>(std::move(fn)));
+}
+
+// ---- AppState ----
+
+struct AppState {
+    GtkWidget* window;
+    GtkWidget* address_bar;
+    GtkWidget* content_box;
+    GtkWidget* viewport;
+    GtkWidget* btn_back;
+    GtkWidget* btn_fwd;
+    std::mutex mu;
+    int generation = 0;
+    std::string current_url;
+    std::vector<std::string> back_stack;
+    std::vector<std::string> fwd_stack;
+    gulong body_draw_signal = 0;
+};
+
+// ---- block container builder (main thread only) ----
+
+static GtkWidget* make_block(const BoxModel& box, GtkWidget* parent,
+                              GtkOrientation orient = GTK_ORIENTATION_VERTICAL,
+                              bool to_end = false) {
+    GtkWidget* outer = gtk_box_new(orient, 0);
+    {
+        std::string props;
+        if (!box.bg_color.empty())
+            props += "background-color: " + box.bg_color + "; ";
+        if (box.border_radius > 0)
+            props += "border-radius: " + std::to_string(box.border_radius) + "px; ";
+        bool has_border = box.border_width[0]||box.border_width[1]||box.border_width[2]||box.border_width[3];
+        if (has_border) {
+            std::string bstyle = box.border_style.empty() ? "solid" : box.border_style;
+            std::string bcolor = box.border_color.empty() ? "currentColor" : box.border_color;
+            bool uniform = (box.border_width[0]==box.border_width[1] &&
+                            box.border_width[1]==box.border_width[2] &&
+                            box.border_width[2]==box.border_width[3]);
+            if (uniform)
+                props += "border: " + std::to_string(box.border_width[0]) + "px " + bstyle + " " + bcolor + "; ";
+            else {
+                static const char* sides[4] = {"top","right","bottom","left"};
+                for (int i=0;i<4;++i) if (box.border_width[i]>0)
+                    props += "border-" + std::string(sides[i]) + ": "
+                           + std::to_string(box.border_width[i]) + "px " + bstyle + " " + bcolor + "; ";
+            }
+        }
+        if (!props.empty()) {
+            GtkCssProvider* cp = gtk_css_provider_new();
+            gtk_css_provider_load_from_data(cp, ("box { " + props + "}").c_str(), -1, nullptr);
+            gtk_style_context_add_provider(gtk_widget_get_style_context(outer),
+                GTK_STYLE_PROVIDER(cp), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+            g_object_unref(cp);
+        }
+    }
+    gtk_widget_set_margin_top(outer,    std::max(0, box.margin[0]));
+    gtk_widget_set_margin_end(outer,    std::max(0, box.margin[1]));
+    gtk_widget_set_margin_bottom(outer, std::max(0, box.margin[2]));
+    gtk_widget_set_margin_start(outer,  std::max(0, box.margin[3]));
+
+    int eff_w = box.width > 0 ? box.width : box.max_width;
+    int eff_h = box.height > 0 ? box.height : -1;
+    if (eff_w > 0) {
+        // size_request sets the minimum; GTK can still grow the widget if children
+        // have a larger natural width.  CSS max-width caps the natural width so the
+        // parent container never allocates more than eff_w pixels to this block.
+        gtk_widget_set_size_request(outer, eff_w, eff_h);
+        {
+            GtkCssProvider* cp = gtk_css_provider_new();
+            std::string w_css = "* { min-width: " + std::to_string(eff_w) + "px; }";
+            gtk_css_provider_load_from_data(cp, w_css.c_str(), -1, nullptr);
+            gtk_style_context_add_provider(gtk_widget_get_style_context(outer),
+                GTK_STYLE_PROVIDER(cp), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+            g_object_unref(cp);
+        }
+        gtk_widget_set_hexpand(outer, FALSE);
+        gtk_widget_set_halign(outer, box.halign_center ? GTK_ALIGN_CENTER : GTK_ALIGN_START);
+    } else {
+        if (eff_h > 0) gtk_widget_set_size_request(outer, -1, eff_h);
+        gtk_widget_set_hexpand(outer, orient == GTK_ORIENTATION_VERTICAL);
+        if (box.halign_center) gtk_widget_set_halign(outer, GTK_ALIGN_CENTER);
+    }
+
+    if (to_end) gtk_box_pack_end(GTK_BOX(parent), outer, FALSE, FALSE, 0);
+    else        gtk_box_pack_start(GTK_BOX(parent), outer, FALSE, FALSE, 0);
+    gtk_widget_show(outer);
+
+    // inner box simulates padding
+    bool has_pad = box.padding[0]||box.padding[1]||box.padding[2]||box.padding[3];
+    if (has_pad) {
+        GtkWidget* inner = gtk_box_new(orient, 0);
+        gtk_widget_set_margin_top(inner,    box.padding[0]);
+        gtk_widget_set_margin_end(inner,    box.padding[1]);
+        gtk_widget_set_margin_bottom(inner, box.padding[2]);
+        gtk_widget_set_margin_start(inner,  box.padding[3]);
+        gtk_widget_set_hexpand(inner, TRUE);
+        gtk_box_pack_start(GTK_BOX(outer), inner, TRUE, TRUE, 0);
+        gtk_widget_show(inner);
+        return inner;
+    }
+    return outer;
+}
+
+// ---- page fetch ----
+
+static void navigate(AppState* st, const std::string& raw); // forward decl
+
+static gboolean draw_bg(GtkWidget* w, cairo_t* cr, gpointer) {
+    GdkPixbuf* pb    = (GdkPixbuf*)g_object_get_data(G_OBJECT(w), "bg_pb");
+    const char* bgc  = (const char*)g_object_get_data(G_OBJECT(w), "bg_color_str");
+    {
+        FILE* f = fopen("/tmp/browser_debug.log","a");
+        if (f) { fprintf(f,"draw_bg called: pb=%s bgc=%s\n", pb?"ok":"null", bgc?bgc:"none"); fclose(f); }
+    }
+    // fill background color first (so it shows through transparent parts of image)
+    if (bgc && bgc[0]) {
+        GdkRGBA rgba = {1,1,1,1};
+        gdk_rgba_parse(&rgba, bgc);
+        cairo_set_source_rgba(cr, rgba.red, rgba.green, rgba.blue, rgba.alpha);
+        cairo_paint(cr);
+    }
+    if (!pb) return FALSE;
+    int pw = gdk_pixbuf_get_width(pb);
+    int ph = gdk_pixbuf_get_height(pb);
+    if (pw<=0||ph<=0) return FALSE;
+    // tile the image (background-repeat: repeat is the default)
+    cairo_save(cr);
+    cairo_surface_t* surf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, pw, ph);
+    cairo_t* tc = cairo_create(surf);
+    gdk_cairo_set_source_pixbuf(tc, pb, 0, 0);
+    cairo_paint(tc);
+    cairo_destroy(tc);
+    cairo_pattern_t* pat = cairo_pattern_create_for_surface(surf);
+    cairo_pattern_set_extend(pat, CAIRO_EXTEND_REPEAT);
+    cairo_set_source(cr, pat);
+    cairo_paint(cr);
+    cairo_pattern_destroy(pat);
+    cairo_surface_destroy(surf);
+    cairo_restore(cr);
+    return FALSE;
+}
+
+static void on_inspect(GtkMenuItem*, gpointer d) {
+    auto* st = static_cast<AppState*>(d);
+    if (!st->current_url.empty() && st->current_url.substr(0,12)!="view-source:")
+        navigate(st, "view-source:"+st->current_url);
+}
+static gboolean on_content_click(GtkWidget*, GdkEventButton* ev, gpointer d) {
+    if (ev->button!=3 || ev->type!=GDK_BUTTON_PRESS) return FALSE;
+    auto* st = static_cast<AppState*>(d);
+    GtkWidget* menu = gtk_menu_new();
+    GtkWidget* item = gtk_menu_item_new_with_label("Inspect");
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+    g_signal_connect(item, "activate", G_CALLBACK(on_inspect), st);
+    gtk_widget_show_all(menu);
+    gtk_menu_popup_at_pointer(GTK_MENU(menu), (GdkEvent*)ev);
+    return TRUE;
+}
+
+struct LinkClickData { AppState* st; std::string url; };
+static gboolean on_link_click(GtkWidget*, GdkEventButton* ev, gpointer d) {
+    if (ev->button==1 && ev->type==GDK_BUTTON_PRESS) {
+        auto* ld = static_cast<LinkClickData*>(d);
+        navigate(ld->st, ld->url);
+    }
+    return FALSE;
+}
+static void free_link_data(gpointer d, GClosure*) { delete static_cast<LinkClickData*>(d); }
+
+static void fetch_page(AppState* st, std::string url, int gen) {
+    bool is_vs = (url.size()>=12 && url.substr(0,12)=="view-source:");
+    std::string fetch_url = is_vs ? url.substr(12) : url;
+
+    Buf buf;
+    if (!fetch(fetch_url, buf)) {
+        idle_add([st, url]() {
+            gtk_window_set_title(GTK_WINDOW(st->window), ("Failed: "+url).c_str());
+        });
+        return;
+    }
+    if (gen != st->generation) return;
+
+    if (is_vs) {
+        std::string raw = std::move(buf.data);
+        idle_add([st, gen, url, raw=std::move(raw)]() {
+            if (gen != st->generation) return;
+            gtk_window_set_title(GTK_WINDOW(st->window), url.c_str());
+            GtkWidget* tv = gtk_text_view_new();
+            gtk_text_view_set_editable(GTK_TEXT_VIEW(tv), FALSE);
+            gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(tv), GTK_WRAP_CHAR);
+            GtkCssProvider* css = gtk_css_provider_new();
+            gtk_css_provider_load_from_data(css,
+                "textview, textview text { font-family: monospace; font-size: 10pt; }", -1, nullptr);
+            gtk_style_context_add_provider(gtk_widget_get_style_context(tv),
+                GTK_STYLE_PROVIDER(css), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+            g_object_unref(css);
+            gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(tv)),
+                raw.c_str(), (gint)raw.size());
+            gtk_box_pack_start(GTK_BOX(st->content_box), tv, TRUE, TRUE, 0);
+            gtk_widget_show(tv);
+        });
+        return;
+    }
+
+    auto elems = parse_elements(buf.data, fetch_url);
+
+    idle_add([st, gen, url, elems=std::move(elems)]() {
+        if (gen != st->generation) return;
+        gtk_window_set_title(GTK_WINDOW(st->window), url.c_str());
+
+        // ── debug log ──────────────────────────────────────────────────────────
+        {
+            FILE* f = fopen("/tmp/browser_debug.log", "a");
+            if (f) {
+                fprintf(f, "\n=== %s ===\n", url.c_str());
+                int di = 0;
+                for (const auto& e : elems) {
+                    if (e.type != Element::DIV_OPEN) continue;
+                    const auto& b = e.box;
+                    if (b.width>0||b.height>0||b.margin[0]||b.margin[1]||b.margin[2]||b.margin[3]
+                        ||b.padding[0]||b.padding[1]||b.padding[2]||b.padding[3]) {
+                        fprintf(f,"DIV#%d w=%d h=%d m=[%d,%d,%d,%d] p=[%d,%d,%d,%d] disp=%d float=%d\n",
+                            di, b.width, b.height,
+                            b.margin[0],b.margin[1],b.margin[2],b.margin[3],
+                            b.padding[0],b.padding[1],b.padding[2],b.padding[3],
+                            (int)b.display, (int)b.floatdir);
+                    }
+                    if (!b.bg_image.empty())
+                        fprintf(f,"  DIV#%d bg_image resolved: %s\n", di, b.bg_image.c_str());
+                    di++;
+                }
+                if (di==0) fprintf(f,"(no DIV_OPEN elements)\n");
+                fclose(f);
+            }
+        }
+        // ──────────────────────────────────────────────────────────────────────
+
+        std::vector<GtkWidget*> cstack     = {st->content_box};
+        std::vector<GtkWidget*> float_rows = {nullptr}; // parallel to cstack
+
+        for (const auto& e : elems) {
+            if (e.type == Element::DIV_OPEN && e.is_body) {
+                FILE* flog = fopen("/tmp/browser_debug.log","a");
+                if (flog) {
+                    fprintf(flog, "body: bg_color='%s' bg_image='%s' m=[%d,%d,%d,%d]\n",
+                        e.box.bg_color.c_str(), e.box.bg_image.c_str(),
+                        e.box.margin[0],e.box.margin[1],e.box.margin[2],e.box.margin[3]);
+                    fclose(flog);
+                }
+                // Store bg_color as widget data so draw_bg can fill it even under app_paintable
+                if (!e.box.bg_color.empty()) {
+                    char* bgc = g_strdup(e.box.bg_color.c_str());
+                    g_object_set_data_full(G_OBJECT(st->content_box), "bg_color_str", bgc, g_free);
+                }
+                // Apply body margins to content_box
+                gtk_widget_set_margin_top(st->content_box,    std::max(0, e.box.margin[0]));
+                gtk_widget_set_margin_end(st->content_box,    std::max(0, e.box.margin[1]));
+                gtk_widget_set_margin_bottom(st->content_box, std::max(0, e.box.margin[2]));
+                gtk_widget_set_margin_start(st->content_box,  std::max(0, e.box.margin[3]));
+                // Apply bg to content_box: it shares the bin_window context (viewport's bin_window),
+                // so draw_bg paints directly where content is — the bin_window, not the view_window
+                // which gets composited on top and would have hidden any painting on the viewport.
+                if (!e.box.bg_color.empty() || !e.box.bg_image.empty()) {
+                    gtk_widget_set_app_paintable(st->content_box, TRUE);
+                    st->body_draw_signal = g_signal_connect(st->content_box, "draw", G_CALLBACK(draw_bg), nullptr);
+                }
+                if (!e.box.bg_image.empty()) {
+                    std::string bg_url = e.box.bg_image;
+                    std::thread([st, bg_url, gen]() {
+                        auto dbg = [&](const char* msg) {
+                            FILE* f = fopen("/tmp/browser_debug.log","a");
+                            if (f) { fprintf(f,"BG_IMG(body): %s\n", msg); fclose(f); }
+                        };
+                        dbg(("fetch start: " + bg_url).c_str());
+                        Buf ibuf;
+                        if (gen!=st->generation || !fetch(bg_url,ibuf)) {
+                            dbg(gen!=st->generation ? "skip: generation changed" : ("fetch FAILED: "+bg_url).c_str());
+                            return;
+                        }
+                        dbg(("fetch OK, bytes=" + std::to_string(ibuf.data.size())).c_str());
+                        GdkPixbufLoader* ldr = gdk_pixbuf_loader_new();
+                        GError* err = nullptr;
+                        gdk_pixbuf_loader_write(ldr,(const guchar*)ibuf.data.data(),ibuf.data.size(),&err);
+                        gdk_pixbuf_loader_close(ldr, nullptr);
+                        GdkPixbuf* pb = nullptr;
+                        if (!err) { pb=gdk_pixbuf_loader_get_pixbuf(ldr); if(pb) g_object_ref(pb); }
+                        if (err) { dbg(("pixbuf error: "+std::string(err->message)).c_str()); g_error_free(err); }
+                        else dbg(pb ? "pixbuf loaded OK" : "pixbuf is null after load");
+                        g_object_unref(ldr);
+                        idle_add([st,pb,gen](){
+                            FILE* f = fopen("/tmp/browser_debug.log","a");
+                            if (f) { fprintf(f,"BG_IMG(body): idle gen_match=%d pb=%s\n",
+                                gen==st->generation?1:0, pb?"ok":"null"); fclose(f); }
+                            if (gen==st->generation && pb) {
+                                g_object_set_data_full(G_OBJECT(st->content_box),"bg_pb",pb,(GDestroyNotify)g_object_unref);
+                                gtk_widget_queue_draw(st->content_box);
+                            } else if (pb) g_object_unref(pb);
+                        });
+                    }).detach();
+                }
+                // body itself is not a new child widget; push content_box as the container
+                cstack.push_back(st->content_box);
+                float_rows.push_back(nullptr);
+                continue;
+            }
+            if (e.type == Element::DIV_OPEN) {
+                bool floated = e.box.floatdir != BoxModel::Float::None;
+                bool is_ib   = e.box.display  == BoxModel::Display::InlineBlock;
+                bool is_flex = e.box.display  == BoxModel::Display::Flex;
+
+                GtkWidget* new_blk;
+                if (floated || is_ib) {
+                    // reuse or create a horizontal float row in current container
+                    GtkWidget*& fr = float_rows.back();
+                    if (!fr) {
+                        fr = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+                        gtk_widget_set_hexpand(fr, TRUE);
+                        gtk_box_pack_start(GTK_BOX(cstack.back()), fr, FALSE, FALSE, 0);
+                        gtk_widget_show(fr);
+                    }
+                    bool to_end = (e.box.floatdir == BoxModel::Float::Right);
+                    new_blk = make_block(e.box, fr, GTK_ORIENTATION_VERTICAL, to_end);
+                } else {
+                    float_rows.back() = nullptr; // new normal block breaks float flow
+                    GtkOrientation orient = is_flex ? GTK_ORIENTATION_HORIZONTAL
+                                                    : GTK_ORIENTATION_VERTICAL;
+                    new_blk = make_block(e.box, cstack.back(), orient);
+                }
+                if (!e.box.bg_image.empty()) {
+                    gtk_widget_set_app_paintable(new_blk, TRUE);
+                    g_signal_connect(new_blk, "draw", G_CALLBACK(draw_bg), nullptr);
+                    g_object_ref(new_blk);
+                    std::string bg_url = e.box.bg_image;
+                    std::thread([st, new_blk, bg_url, gen]() {
+                        auto dbg = [&](const char* msg) {
+                            FILE* f = fopen("/tmp/browser_debug.log","a");
+                            if (f) { fprintf(f,"BG_IMG: %s\n", msg); fclose(f); }
+                        };
+                        dbg(("fetch start: " + bg_url).c_str());
+                        Buf ibuf;
+                        if (gen!=st->generation || !fetch(bg_url,ibuf)) {
+                            dbg(gen!=st->generation ? "skip: generation changed" : ("fetch FAILED: " + bg_url).c_str());
+                            idle_add([new_blk](){ g_object_unref(new_blk); });
+                            return;
+                        }
+                        dbg(("fetch OK, bytes=" + std::to_string(ibuf.data.size())).c_str());
+                        GdkPixbufLoader* ldr = gdk_pixbuf_loader_new();
+                        GError* err = nullptr;
+                        gdk_pixbuf_loader_write(ldr,(const guchar*)ibuf.data.data(),ibuf.data.size(),&err);
+                        gdk_pixbuf_loader_close(ldr, nullptr);
+                        GdkPixbuf* pb = nullptr;
+                        if (!err) { pb=gdk_pixbuf_loader_get_pixbuf(ldr); if(pb) g_object_ref(pb); }
+                        if (err) { dbg(("pixbuf error: " + std::string(err->message)).c_str()); g_error_free(err); }
+                        else dbg(pb ? "pixbuf loaded OK" : "pixbuf is null after load");
+                        g_object_unref(ldr);
+                        idle_add([st,new_blk,pb,gen](){
+                            FILE* f = fopen("/tmp/browser_debug.log","a");
+                            if (f) {
+                                fprintf(f,"BG_IMG: idle callback gen_match=%d pb=%s\n",
+                                    gen==st->generation ? 1:0, pb?"ok":"null");
+                                fclose(f);
+                            }
+                            if (gen==st->generation && pb) {
+                                g_object_set_data_full(G_OBJECT(new_blk),"bg_pb",pb,(GDestroyNotify)g_object_unref);
+                                gtk_widget_queue_draw(new_blk);
+                            } else if (pb) g_object_unref(pb);
+                            g_object_unref(new_blk);
+                        });
+                    }).detach();
+                }
+                cstack.push_back(new_blk);
+                float_rows.push_back(nullptr);
+                continue;
+            }
+            if (e.type == Element::DIV_CLOSE) {
+                if (cstack.size() > 1) { cstack.pop_back(); float_rows.pop_back(); }
+                continue;
+            }
+            float_rows.back() = nullptr; // text/image breaks float row
+            GtkWidget* cur = cstack.back();
+            if (e.type == Element::TEXT) {
+                GtkWidget* lbl = gtk_label_new(e.content.c_str());
+                gtk_label_set_line_wrap(GTK_LABEL(lbl), TRUE);
+                gtk_label_set_line_wrap_mode(GTK_LABEL(lbl), PANGO_WRAP_WORD_CHAR);
+                gtk_label_set_xalign(GTK_LABEL(lbl), 0.0f);
+                gtk_widget_set_halign(lbl, GTK_ALIGN_FILL);
+                gtk_widget_set_hexpand(lbl, TRUE);
+                gtk_widget_set_margin_start(lbl, 8);
+                gtk_widget_set_margin_end(lbl, 8);
+                {
+                    PangoAttrList* al = pango_attr_list_new();
+                    if (e.fw != PANGO_WEIGHT_NORMAL)
+                        pango_attr_list_insert(al, pango_attr_weight_new((PangoWeight)e.fw));
+                    pango_attr_list_insert(al, pango_attr_size_new_absolute(e.fs_px * PANGO_SCALE));
+                    if (e.lh >= 0)
+                        pango_attr_list_insert(al, pango_attr_line_height_new(e.lh));
+                    if (!e.href.empty())
+                        pango_attr_list_insert(al, pango_attr_underline_new(PANGO_UNDERLINE_SINGLE));
+                    if (!e.color.empty()) {
+                        GdkRGBA rgba = {0,0,0,1};
+                        if (gdk_rgba_parse(&rgba, e.color.c_str()))
+                            pango_attr_list_insert(al, pango_attr_foreground_new(
+                                (guint16)(rgba.red*65535),
+                                (guint16)(rgba.green*65535),
+                                (guint16)(rgba.blue*65535)));
+                    }
+                    gtk_label_set_attributes(GTK_LABEL(lbl), al);
+                    pango_attr_list_unref(al);
+                }
+                if (e.text_align == 1) {
+                    gtk_label_set_xalign(GTK_LABEL(lbl), 0.5f);
+                    gtk_label_set_justify(GTK_LABEL(lbl), GTK_JUSTIFY_CENTER);
+                } else if (e.text_align == 2) {
+                    gtk_label_set_xalign(GTK_LABEL(lbl), 1.0f);
+                    gtk_label_set_justify(GTK_LABEL(lbl), GTK_JUSTIFY_RIGHT);
+                } else if (e.text_align == 3) {
+                    gtk_label_set_justify(GTK_LABEL(lbl), GTK_JUSTIFY_FILL);
+                }
+                if (!e.href.empty()) {
+                    GtkWidget* eb = gtk_event_box_new();
+                    gtk_event_box_set_above_child(GTK_EVENT_BOX(eb), TRUE);
+                    gtk_widget_add_events(eb, GDK_BUTTON_PRESS_MASK
+                                           | GDK_ENTER_NOTIFY_MASK
+                                           | GDK_LEAVE_NOTIFY_MASK);
+                    gtk_container_add(GTK_CONTAINER(eb), lbl);
+                    g_signal_connect_data(eb, "button-press-event",
+                        G_CALLBACK(on_link_click),
+                        new LinkClickData{st, e.href}, free_link_data, (GConnectFlags)0);
+                    // debug: set hand cursor on realize
+                    g_signal_connect(eb, "realize", G_CALLBACK(+[](GtkWidget* w, gpointer) {
+                        GdkCursor* cur = gdk_cursor_new_for_display(
+                            gtk_widget_get_display(w), GDK_HAND2);
+                        gdk_window_set_cursor(gtk_widget_get_window(w), cur);
+                        g_object_unref(cur);
+                        FILE* f = fopen("/tmp/browser_debug.log","a");
+                        if (f) { fprintf(f,"[link] realize: cursor set, gdk_win=%p\n",
+                            (void*)gtk_widget_get_window(w)); fclose(f); }
+                    }), nullptr);
+                    g_signal_connect(eb, "enter-notify-event", G_CALLBACK(+[](GtkWidget* w, GdkEventCrossing* ev, gpointer) -> gboolean {
+                        FILE* f = fopen("/tmp/browser_debug.log","a");
+                        if (f) { fprintf(f,"[link] enter-notify mode=%d detail=%d\n", ev->mode, ev->detail); fclose(f); }
+                        return FALSE;
+                    }), nullptr);
+                    g_signal_connect(eb, "leave-notify-event", G_CALLBACK(+[](GtkWidget* w, GdkEventCrossing* ev, gpointer) -> gboolean {
+                        FILE* f = fopen("/tmp/browser_debug.log","a");
+                        if (f) { fprintf(f,"[link] leave-notify\n"); fclose(f); }
+                        return FALSE;
+                    }), nullptr);
+                    gtk_box_pack_start(GTK_BOX(cur), eb, FALSE, FALSE, 2);
+                    gtk_widget_show(eb);
+                    gtk_widget_show(lbl);
+                } else {
+                    gtk_box_pack_start(GTK_BOX(cur), lbl, FALSE, FALSE, 2);
+                    gtk_widget_show(lbl);
+                }
+            } else {
+                // placeholder image widget — filled in by background fetch
+                GtkWidget* img = gtk_image_new();
+                gtk_box_pack_start(GTK_BOX(cur), img, FALSE, FALSE, 2);
+                gtk_widget_show(img);
+                g_object_ref(img); // keep alive while fetch is in flight
+                std::string img_url = e.content;
+                std::thread([st, img, img_url, gen]() {
+                    Buf ibuf;
+                    if (gen != st->generation || !fetch(img_url, ibuf)) {
+                        idle_add([img](){ g_object_unref(img); });
+                        return;
+                    }
+                    GdkPixbufLoader* loader = gdk_pixbuf_loader_new();
+                    GError* err = nullptr;
+                    gdk_pixbuf_loader_write(loader,
+                        (const guchar*)ibuf.data.data(), ibuf.data.size(), &err);
+                    gdk_pixbuf_loader_close(loader, nullptr);
+                    GdkPixbuf* pb = nullptr;
+                    if (!err) {
+                        pb = gdk_pixbuf_loader_get_pixbuf(loader);
+                        if (pb) {
+                            int w = gdk_pixbuf_get_width(pb);
+                            if (w > 900) {
+                                int h = gdk_pixbuf_get_height(pb);
+                                pb = gdk_pixbuf_scale_simple(pb, 900,
+                                        (int)(h*900.0/w), GDK_INTERP_BILINEAR);
+                            } else {
+                                g_object_ref(pb);
+                            }
+                        }
+                    }
+                    if (err) g_error_free(err);
+                    g_object_unref(loader);
+                    idle_add([st, img, pb, gen]() {
+                        if (gen == st->generation && pb)
+                            gtk_image_set_from_pixbuf(GTK_IMAGE(img), pb);
+                        if (pb) g_object_unref(pb);
+                        g_object_unref(img);
+                    });
+                }).detach();
+            }
+        }
+    });
+}
+
+// ---- navigate ----
+
+static void update_nav_buttons(AppState* st) {
+    gtk_widget_set_sensitive(st->btn_back, !st->back_stack.empty());
+    gtk_widget_set_sensitive(st->btn_fwd,  !st->fwd_stack.empty());
+}
+
+// load_url: fetch without touching history
+static void load_url(AppState* st, const std::string& url) {
+    gtk_entry_set_text(GTK_ENTRY(st->address_bar), url.c_str());
+
+    int gen;
+    { std::lock_guard<std::mutex> lk(st->mu); gen = ++st->generation; }
+
+    // clean up previous body styles from content_box
+    if (st->body_draw_signal) {
+        g_signal_handler_disconnect(st->content_box, st->body_draw_signal);
+        st->body_draw_signal = 0;
+        gtk_widget_set_app_paintable(st->content_box, FALSE);
+        g_object_set_data(G_OBJECT(st->content_box), "bg_pb", nullptr);
+        g_object_set_data(G_OBJECT(st->content_box), "bg_color_str", nullptr);
+    }
+    gtk_widget_set_margin_top(st->content_box, 0);
+    gtk_widget_set_margin_end(st->content_box, 0);
+    gtk_widget_set_margin_bottom(st->content_box, 0);
+    gtk_widget_set_margin_start(st->content_box, 0);
+
+    GList* ch = gtk_container_get_children(GTK_CONTAINER(st->content_box));
+    for (GList* l=ch; l; l=l->next) gtk_widget_destroy(GTK_WIDGET(l->data));
+    g_list_free(ch);
+
+    gtk_window_set_title(GTK_WINDOW(st->window), ("Loading "+url+"...").c_str());
+    std::thread(fetch_page, st, url, gen).detach();
+}
+
+static void navigate(AppState* st, const std::string& raw) {
+    std::string url = normalize_url(raw);
+    if (!st->current_url.empty()) st->back_stack.push_back(st->current_url);
+    st->fwd_stack.clear();
+    st->current_url = url;
+    update_nav_buttons(st);
+    load_url(st, url);
+}
+
+static void on_go(GtkButton*, gpointer d) {
+    auto* st = static_cast<AppState*>(d);
+    navigate(st, gtk_entry_get_text(GTK_ENTRY(st->address_bar)));
+}
+static void on_activate(GtkEntry*, gpointer d) {
+    auto* st = static_cast<AppState*>(d);
+    navigate(st, gtk_entry_get_text(GTK_ENTRY(st->address_bar)));
+}
+static void on_back(GtkButton*, gpointer d) {
+    auto* st = static_cast<AppState*>(d);
+    if (st->back_stack.empty()) return;
+    if (!st->current_url.empty()) st->fwd_stack.push_back(st->current_url);
+    st->current_url = st->back_stack.back(); st->back_stack.pop_back();
+    update_nav_buttons(st);
+    load_url(st, st->current_url);
+}
+static void on_fwd(GtkButton*, gpointer d) {
+    auto* st = static_cast<AppState*>(d);
+    if (st->fwd_stack.empty()) return;
+    if (!st->current_url.empty()) st->back_stack.push_back(st->current_url);
+    st->current_url = st->fwd_stack.back(); st->fwd_stack.pop_back();
+    update_nav_buttons(st);
+    load_url(st, st->current_url);
+}
+static void on_refresh(GtkButton*, gpointer d) {
+    auto* st = static_cast<AppState*>(d);
+    if (!st->current_url.empty()) load_url(st, st->current_url);
+}
+
+// ---- main ----
+
+int main(int argc, char** argv) {
+    curl_global_init(CURL_GLOBAL_DEFAULT);
+    gtk_init(&argc, &argv);
+
+    AppState* st = new AppState();
+    st->window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+    gtk_window_set_title(GTK_WINDOW(st->window), "Browser");
+    gtk_window_set_default_size(GTK_WINDOW(st->window), 960, 800);
+    g_signal_connect(st->window, "destroy", G_CALLBACK(gtk_main_quit), nullptr);
+
+    GtkWidget* root = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_container_add(GTK_CONTAINER(st->window), root);
+
+    GtkWidget* bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_set_margin_start(bar, 4);
+    gtk_widget_set_margin_end(bar, 4);
+    gtk_widget_set_margin_top(bar, 4);
+    gtk_widget_set_margin_bottom(bar, 4);
+    gtk_box_pack_start(GTK_BOX(root), bar, FALSE, FALSE, 0);
+
+    st->btn_back = gtk_button_new_with_label("←");
+    gtk_widget_set_sensitive(st->btn_back, FALSE);
+    gtk_box_pack_start(GTK_BOX(bar), st->btn_back, FALSE, FALSE, 0);
+    g_signal_connect(st->btn_back, "clicked", G_CALLBACK(on_back), st);
+
+    st->btn_fwd = gtk_button_new_with_label("→");
+    gtk_widget_set_sensitive(st->btn_fwd, FALSE);
+    gtk_box_pack_start(GTK_BOX(bar), st->btn_fwd, FALSE, FALSE, 0);
+    g_signal_connect(st->btn_fwd, "clicked", G_CALLBACK(on_fwd), st);
+
+    GtkWidget* btn_refresh = gtk_button_new_with_label("↺");
+    gtk_box_pack_start(GTK_BOX(bar), btn_refresh, FALSE, FALSE, 4);
+    g_signal_connect(btn_refresh, "clicked", G_CALLBACK(on_refresh), st);
+
+    st->address_bar = gtk_entry_new();
+    gtk_entry_set_text(GTK_ENTRY(st->address_bar), "mattmontag.com");
+    gtk_box_pack_start(GTK_BOX(bar), st->address_bar, TRUE, TRUE, 0);
+    g_signal_connect(st->address_bar, "activate", G_CALLBACK(on_activate), st);
+
+    GtkWidget* go_btn = gtk_button_new_with_label("Go");
+    gtk_box_pack_start(GTK_BOX(bar), go_btn, FALSE, FALSE, 4);
+    g_signal_connect(go_btn, "clicked", G_CALLBACK(on_go), st);
+
+    GtkWidget* scroll = gtk_scrolled_window_new(nullptr, nullptr);
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll),
+        GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
+    gtk_box_pack_start(GTK_BOX(root), scroll, TRUE, TRUE, 0);
+
+    GtkWidget* viewport = gtk_viewport_new(nullptr, nullptr);
+    gtk_container_add(GTK_CONTAINER(scroll), viewport);
+    gtk_widget_add_events(viewport, GDK_BUTTON_PRESS_MASK);
+    g_signal_connect(viewport, "button-press-event", G_CALLBACK(on_content_click), st);
+    st->viewport = viewport;
+
+    st->content_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_widget_set_hexpand(st->content_box, TRUE);
+    gtk_widget_set_vexpand(st->content_box, TRUE);
+    gtk_container_add(GTK_CONTAINER(viewport), st->content_box);
+
+    gtk_widget_show_all(st->window);
+    navigate(st, "mattmontag.com");
+
+    gtk_main();
+    curl_global_cleanup();
+    delete st;
+    return 0;
+}
