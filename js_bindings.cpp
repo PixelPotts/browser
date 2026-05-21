@@ -486,6 +486,96 @@ static JSValue js_element_removeChild(JSContext* ctx, JSValueConst this_val,
     return JS_DupValue(ctx, argv[0]);
 }
 
+static JSValue js_element_insertBefore(JSContext* ctx, JSValueConst this_val,
+                                        int argc, JSValueConst* argv) {
+    DOMNode* parent = js_get_node(ctx, this_val);
+    if (!parent || argc < 1 || !g_js_engine || !g_js_engine->document) return JS_UNDEFINED;
+    DOMNode* newChild = js_get_node(ctx, argv[0]);
+    if (!newChild) return JS_UNDEFINED;
+    DOMNode* refChild = (argc >= 2 && !JS_IsNull(argv[1]) && !JS_IsUndefined(argv[1]))
+                        ? js_get_node(ctx, argv[1]) : nullptr;
+
+    auto& doc = g_js_engine->document;
+    std::shared_ptr<DOMNode> child_ptr;
+    if (newChild->parent) {
+        for (auto& sp : newChild->parent->children)
+            if (sp.get() == newChild) { child_ptr = sp; break; }
+    }
+    if (!child_ptr) {
+        for (auto& sp : doc->orphans)
+            if (sp.get() == newChild) { child_ptr = sp; break; }
+    }
+    if (child_ptr) {
+        doc->insertBefore(parent, child_ptr, refChild);
+    }
+    return JS_DupValue(ctx, argv[0]);
+}
+
+static JSValue js_element_replaceChild(JSContext* ctx, JSValueConst this_val,
+                                        int argc, JSValueConst* argv) {
+    DOMNode* parent = js_get_node(ctx, this_val);
+    if (!parent || argc < 2 || !g_js_engine || !g_js_engine->document) return JS_UNDEFINED;
+    DOMNode* newChild = js_get_node(ctx, argv[0]);
+    DOMNode* oldChild = js_get_node(ctx, argv[1]);
+    if (!newChild || !oldChild) return JS_UNDEFINED;
+
+    auto& doc = g_js_engine->document;
+    std::shared_ptr<DOMNode> new_ptr;
+    if (newChild->parent) {
+        for (auto& sp : newChild->parent->children)
+            if (sp.get() == newChild) { new_ptr = sp; break; }
+    }
+    if (!new_ptr) {
+        for (auto& sp : doc->orphans)
+            if (sp.get() == newChild) { new_ptr = sp; break; }
+    }
+    if (new_ptr) {
+        doc->insertBefore(parent, new_ptr, oldChild);
+        doc->removeChild(parent, oldChild);
+    }
+    return JS_DupValue(ctx, argv[1]);
+}
+
+static JSValue js_element_getElementsByTagName(JSContext* ctx, JSValueConst this_val,
+                                                int argc, JSValueConst* argv) {
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node || argc < 1) return js_wrap_nodelist(ctx, {});
+    const char* tag = JS_ToCString(ctx, argv[0]);
+    if (!tag) return js_wrap_nodelist(ctx, {});
+    std::string ltag = tag;
+    for (auto& c : ltag) c = tolower((unsigned char)c);
+    JS_FreeCString(ctx, tag);
+    bool match_all = (ltag == "*");
+    std::vector<DOMNode*> results;
+    std::function<void(DOMNode*)> search = [&](DOMNode* n) {
+        if (n != node && n->node_type == DOMNode::ELEMENT &&
+            (match_all || n->tag_name == ltag))
+            results.push_back(n);
+        for (auto& c : n->children) search(c.get());
+    };
+    for (auto& c : node->children) search(c.get());
+    return js_wrap_nodelist(ctx, results);
+}
+
+static JSValue js_element_getElementsByClassName(JSContext* ctx, JSValueConst this_val,
+                                                  int argc, JSValueConst* argv) {
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node || argc < 1) return js_wrap_nodelist(ctx, {});
+    const char* cls = JS_ToCString(ctx, argv[0]);
+    if (!cls) return js_wrap_nodelist(ctx, {});
+    std::string lcls = cls;
+    for (auto& c : lcls) c = tolower((unsigned char)c);
+    JS_FreeCString(ctx, cls);
+    std::vector<DOMNode*> results;
+    std::function<void(DOMNode*)> search = [&](DOMNode* n) {
+        if (n != node && n->node_type == DOMNode::ELEMENT && n->hasClass(lcls))
+            results.push_back(n);
+        for (auto& c : n->children) search(c.get());
+    };
+    for (auto& c : node->children) search(c.get());
+    return js_wrap_nodelist(ctx, results);
+}
+
 static JSValue js_element_querySelector(JSContext* ctx, JSValueConst this_val,
                                           int argc, JSValueConst* argv) {
     DOMNode* node = js_get_node(ctx, this_val);
@@ -723,6 +813,12 @@ static JSValue js_doc_get_documentElement(JSContext* ctx, JSValueConst this_val)
     return js_wrap_node(ctx, g_js_engine->document->root.get());
 }
 
+static JSValue js_doc_get_currentScript(JSContext* ctx, JSValueConst this_val) {
+    if (!g_js_engine || !g_js_engine->has_current_script || !g_js_engine->current_script_node)
+        return JS_NULL;
+    return js_wrap_node(ctx, g_js_engine->current_script_node);
+}
+
 // ---- NodeList forEach ----
 
 static JSValue js_nodelist_forEach(JSContext* ctx, JSValueConst this_val,
@@ -953,6 +1049,14 @@ void js_bindings_init(JSEngine* engine) {
         JS_NewCFunction(ctx, js_element_appendChild, "appendChild", 1));
     JS_SetPropertyStr(ctx, elem_proto, "removeChild",
         JS_NewCFunction(ctx, js_element_removeChild, "removeChild", 1));
+    JS_SetPropertyStr(ctx, elem_proto, "insertBefore",
+        JS_NewCFunction(ctx, js_element_insertBefore, "insertBefore", 2));
+    JS_SetPropertyStr(ctx, elem_proto, "replaceChild",
+        JS_NewCFunction(ctx, js_element_replaceChild, "replaceChild", 2));
+    JS_SetPropertyStr(ctx, elem_proto, "getElementsByTagName",
+        JS_NewCFunction(ctx, js_element_getElementsByTagName, "getElementsByTagName", 1));
+    JS_SetPropertyStr(ctx, elem_proto, "getElementsByClassName",
+        JS_NewCFunction(ctx, js_element_getElementsByClassName, "getElementsByClassName", 1));
     JS_SetPropertyStr(ctx, elem_proto, "querySelector",
         JS_NewCFunction(ctx, js_element_querySelector, "querySelector", 1));
     JS_SetPropertyStr(ctx, elem_proto, "querySelectorAll",
@@ -1022,6 +1126,10 @@ void js_bindings_init(JSEngine* engine) {
     JS_DefinePropertyGetSet(ctx, doc_obj,
         JS_NewAtom(ctx, "documentElement"),
         JS_NewCFunction(ctx, (JSCFunction*)js_doc_get_documentElement, "get documentElement", 0),
+        JS_UNDEFINED, JS_PROP_CONFIGURABLE);
+    JS_DefinePropertyGetSet(ctx, doc_obj,
+        JS_NewAtom(ctx, "currentScript"),
+        JS_NewCFunction(ctx, (JSCFunction*)js_doc_get_currentScript, "get currentScript", 0),
         JS_UNDEFINED, JS_PROP_CONFIGURABLE);
 
     JS_SetPropertyStr(ctx, global, "document", doc_obj);

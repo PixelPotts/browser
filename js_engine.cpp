@@ -1106,6 +1106,20 @@ document.getElementsByName = function(name) {
         return n;
     };
 })();
+
+// Google Ads / Analytics stubs to prevent crashes
+if (typeof window.google === 'undefined') window.google = {};
+if (typeof window.google.ima === 'undefined') window.google.ima = { AdDisplayContainer: function(){}, AdsLoader: function(){}, AdsManagerLoadedEvent: { Type: {} }, AdsRenderingSettings: function(){}, ViewMode: {} };
+if (typeof window.googletag === 'undefined') window.googletag = { cmd: [], apiReady: false, pubads: function() { return { enableSingleRequest: function(){}, collapseEmptyDivs: function(){}, addEventListener: function(){}, set: function(){ return this; }, setTargeting: function(){ return this; }, refresh: function(){}, getSlots: function(){ return []; } }; }, enableServices: function(){}, defineSlot: function() { return { addService: function(){ return this; }, setTargeting: function(){ return this; }, defineSizeMapping: function(){ return this; } }; }, defineOutOfPageSlot: function() { return { addService: function(){ return this; } }; }, sizeMapping: function() { return { addSize: function(){ return this; }, build: function(){ return []; } }; }, display: function(){}, destroySlots: function(){} };
+if (typeof window.ga === 'undefined') window.ga = function() {};
+if (typeof window.gtag === 'undefined') window.gtag = function() {};
+if (typeof window.dataLayer === 'undefined') window.dataLayer = [];
+if (typeof window.adsbygoogle === 'undefined') window.adsbygoogle = [];
+
+// Google Ads bootstrapper stubs
+if (typeof window.__google_ad_request_done === 'undefined') window.__google_ad_request_done = function() {};
+if (typeof window._gaq === 'undefined') window._gaq = { push: function() {} };
+
 )JS";
 
     eval(doc_polyfills, "<browser-doc-polyfills>");

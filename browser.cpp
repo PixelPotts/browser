@@ -3002,14 +3002,31 @@ static void fetch_page(AppState* st, std::string url, int gen) {
         }
 
         // Execute external scripts first (in document order they were found)
+        DOMNode* script_parent = doc->head ? doc->head : doc->body;
         for (size_t i = 0; i < external_scripts.size(); i++) {
             std::string fname = i < doc->script_srcs.size() ? doc->script_srcs[i] : "<external>";
+            auto script_el = doc->createElement("script");
+            script_el->attributes["src"] = fname;
+            if (script_parent) doc->appendChild(script_parent, script_el);
+            engine->has_current_script = true;
+            engine->current_script_src = fname;
+            engine->current_script_node = script_el.get();
             engine->eval(external_scripts[i], fname);
+            engine->has_current_script = false;
+            engine->current_script_src.clear();
+            engine->current_script_node = nullptr;
         }
 
         // Execute inline scripts
         for (size_t i = 0; i < doc->scripts.size(); i++) {
+            auto script_el = doc->createElement("script");
+            if (script_parent) doc->appendChild(script_parent, script_el);
+            engine->has_current_script = true;
+            engine->current_script_src.clear();
+            engine->current_script_node = script_el.get();
             engine->eval(doc->scripts[i], "<script>");
+            engine->has_current_script = false;
+            engine->current_script_node = nullptr;
         }
 
         // Execute pending microtasks after all scripts

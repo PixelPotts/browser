@@ -12,6 +12,7 @@ extern "C" {
 
 class Document;
 struct AppState;
+struct DOMNode;
 
 // ---- Console log entry (for inspector Console tab) ----
 enum class ConsoleLevel { LOG, INFO, WARN, ERROR };
@@ -59,6 +60,11 @@ public:
     AppState* app_state = nullptr;
     Document* document = nullptr;
     std::string page_url; // current page URL for location object
+
+    // Track currently executing script for document.currentScript
+    std::string current_script_src; // empty for inline scripts
+    bool has_current_script = false;
+    DOMNode* current_script_node = nullptr; // points into DOM tree
 
 private:
     void setupGlobals();
