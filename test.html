@@ -86,6 +86,7 @@
         <h2>2. Text & HTML Manipulation</h2>
         <div id="text-target">Original text</div>
         <div id="html-target">Original <b>HTML</b></div>
+        <p>Static: <b>bold</b>, <i>italic</i>, <em>emphasis</em>, <b><i>bold+italic</i></b></p>
         <p id="text-result">Waiting...</p>
     </div>
 
@@ -215,7 +216,7 @@
         results.push(textEl.textContent === "Modified via textContent" ? "textContent set: PASS" : "textContent set: FAIL");
 
         var htmlEl = document.getElementById("html-target");
-        htmlEl.innerHTML = "New <b>bold</b> content";
+        htmlEl.innerHTML = "New <b>bold</b> and <i>italic</i> and <b><i>bold-italic</i></b> content";
         results.push("innerHTML set: PASS");
 
         document.getElementById("text-result").textContent = results.join(" | ");
