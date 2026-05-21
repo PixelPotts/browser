@@ -449,7 +449,10 @@ static const char* STYLE_PROPS[] = {
     "padding", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft",
     "width", "height", "maxWidth", "border", "borderRadius",
     "textAlign", "visibility", "opacity", "position", "overflow",
-    "cursor", "float", "lineHeight", nullptr
+    "cursor", "float", "lineHeight", "textTransform", "fontFamily",
+    "boxShadow", "flexDirection", "justifyContent", "alignItems",
+    "flexWrap", "gap", "top", "left", "right", "bottom", "zIndex",
+    nullptr
 };
 
 static JSValue js_style_getter_magic(JSContext* ctx, JSValueConst this_val, int magic) {

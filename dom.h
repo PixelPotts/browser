@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <algorithm>
 #include <array>
+#include <climits>
 
 // Forward declarations
 struct BoxModel;
@@ -38,7 +39,27 @@ struct DOMNode {
     double lh_computed = -1.0;  // line-height factor
     std::string color_computed; // text color
     int text_align_computed = -1; // -1=inherit, 0=left,1=center,2=right,3=justify
+    int text_transform = -1;    // -1=inherit, 0=none, 1=uppercase, 2=lowercase, 3=capitalize
+    std::string font_family;    // CSS font-family (inherited)
+    std::string box_shadow;     // CSS box-shadow raw value
+    double opacity = 1.0;       // CSS opacity (0.0–1.0)
+    int overflow = -1;          // -1=inherit, 0=visible, 1=hidden, 2=scroll, 3=auto
     std::string href;           // for <a> elements
+
+    // Flex properties
+    int flex_direction = 0;     // 0=row, 1=column, 2=row-reverse, 3=column-reverse
+    int justify_content = 0;    // 0=start, 1=end, 2=center, 3=between, 4=around, 5=evenly
+    int align_items = 0;        // 0=stretch, 1=start, 2=end, 3=center
+    int flex_wrap = 0;          // 0=nowrap, 1=wrap
+    int gap = 0;                // gap in px
+
+    // Positioning
+    int position = 0;           // 0=static, 1=relative, 2=absolute, 3=fixed
+    int pos_top = INT_MIN;      // top offset (INT_MIN = unset)
+    int pos_left = INT_MIN;
+    int pos_right = INT_MIN;
+    int pos_bottom = INT_MIN;
+    int z_index = 0;
 
     // Box model (for block elements)
     int margin[4]  = {0,0,0,0};

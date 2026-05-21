@@ -345,7 +345,17 @@ static std::vector<CSSRule> parse_css(const std::string& css) {
                     || !prop_val(decls,"background-image").empty()
                     || !prop_val(decls,"background").empty()
                     || !prop_val(decls,"border").empty()     || !prop_val(decls,"border-radius").empty()
-                    || !prop_val(decls,"color").empty()      || !prop_val(decls,"text-align").empty();
+                    || !prop_val(decls,"color").empty()      || !prop_val(decls,"text-align").empty()
+                    || !prop_val(decls,"text-transform").empty() || !prop_val(decls,"font-family").empty()
+                    || !prop_val(decls,"box-shadow").empty() || !prop_val(decls,"opacity").empty()
+                    || !prop_val(decls,"overflow").empty()
+                    || !prop_val(decls,"flex-direction").empty() || !prop_val(decls,"justify-content").empty()
+                    || !prop_val(decls,"align-items").empty() || !prop_val(decls,"flex-wrap").empty()
+                    || !prop_val(decls,"gap").empty()
+                    || !prop_val(decls,"position").empty()
+                    || !prop_val(decls,"top").empty() || !prop_val(decls,"left").empty()
+                    || !prop_val(decls,"right").empty() || !prop_val(decls,"bottom").empty()
+                    || !prop_val(decls,"z-index").empty();
         if (fw==-1 && fs_raw.empty() && lh_raw.empty() && !has_box) continue;
         // split comma-separated selectors
         size_t j=0;
@@ -1038,6 +1048,59 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
                   else if (s == "right")   elem->text_align_computed = 2;
                   else if (s == "justify") elem->text_align_computed = 3;
                   else if (s == "left")    elem->text_align_computed = 0; }
+                { auto s = tolower_s(prop_val(r.decls, "text-transform"));
+                  if      (s == "uppercase")  elem->text_transform = 1;
+                  else if (s == "lowercase")  elem->text_transform = 2;
+                  else if (s == "capitalize") elem->text_transform = 3;
+                  else if (s == "none")       elem->text_transform = 0; }
+                { auto s = prop_val(r.decls, "font-family");
+                  if (!s.empty()) elem->font_family = s; }
+                { auto s = prop_val(r.decls, "box-shadow");
+                  if (!s.empty()) elem->box_shadow = s; }
+                { auto s = prop_val(r.decls, "opacity");
+                  if (!s.empty()) { try { elem->opacity = std::stod(s); } catch(...){} } }
+                { auto s = tolower_s(prop_val(r.decls, "overflow"));
+                  if      (s == "visible") elem->overflow = 0;
+                  else if (s == "hidden")  elem->overflow = 1;
+                  else if (s == "scroll")  elem->overflow = 2;
+                  else if (s == "auto")    elem->overflow = 3; }
+                { auto s = tolower_s(prop_val(r.decls, "flex-direction"));
+                  if      (s == "row")            elem->flex_direction = 0;
+                  else if (s == "column")         elem->flex_direction = 1;
+                  else if (s == "row-reverse")    elem->flex_direction = 2;
+                  else if (s == "column-reverse") elem->flex_direction = 3; }
+                { auto s = tolower_s(prop_val(r.decls, "justify-content"));
+                  if      (s == "flex-start" || s == "start") elem->justify_content = 0;
+                  else if (s == "flex-end" || s == "end")     elem->justify_content = 1;
+                  else if (s == "center")                     elem->justify_content = 2;
+                  else if (s == "space-between")              elem->justify_content = 3;
+                  else if (s == "space-around")               elem->justify_content = 4;
+                  else if (s == "space-evenly")               elem->justify_content = 5; }
+                { auto s = tolower_s(prop_val(r.decls, "align-items"));
+                  if      (s == "stretch")                    elem->align_items = 0;
+                  else if (s == "flex-start" || s == "start") elem->align_items = 1;
+                  else if (s == "flex-end" || s == "end")     elem->align_items = 2;
+                  else if (s == "center")                     elem->align_items = 3; }
+                { auto s = tolower_s(prop_val(r.decls, "flex-wrap"));
+                  if      (s == "nowrap") elem->flex_wrap = 0;
+                  else if (s == "wrap")   elem->flex_wrap = 1; }
+                { auto s = prop_val(r.decls, "gap");
+                  if (!s.empty()) { int px = parse_px_val(s); if (px > 0) elem->gap = px; } }
+                { auto s = tolower_s(prop_val(r.decls, "position"));
+                  if      (s == "static")   elem->position = 0;
+                  else if (s == "relative") elem->position = 1;
+                  else if (s == "absolute") elem->position = 2;
+                  else if (s == "fixed")    elem->position = 3; }
+                { auto s = prop_val(r.decls, "top");
+                  if (!s.empty() && tolower_s(s) != "auto") elem->pos_top = parse_px_val(s); }
+                { auto s = prop_val(r.decls, "left");
+                  if (!s.empty() && tolower_s(s) != "auto") elem->pos_left = parse_px_val(s); }
+                { auto s = prop_val(r.decls, "right");
+                  if (!s.empty() && tolower_s(s) != "auto") elem->pos_right = parse_px_val(s); }
+                { auto s = prop_val(r.decls, "bottom");
+                  if (!s.empty() && tolower_s(s) != "auto") elem->pos_bottom = parse_px_val(s); }
+                { auto s = prop_val(r.decls, "z-index");
+                  if (!s.empty()) { try { elem->z_index = std::stoi(s); } catch(...){} } }
             }
 
             // anchor href
@@ -1065,6 +1128,59 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
               else if (s == "right")   elem->text_align_computed = 2;
               else if (s == "justify") elem->text_align_computed = 3;
               else if (s == "left")    elem->text_align_computed = 0; }
+            { auto s = tolower_s(prop_val(ist, "text-transform"));
+              if      (s == "uppercase")  elem->text_transform = 1;
+              else if (s == "lowercase")  elem->text_transform = 2;
+              else if (s == "capitalize") elem->text_transform = 3;
+              else if (s == "none")       elem->text_transform = 0; }
+            { auto s = prop_val(ist, "font-family");
+              if (!s.empty()) elem->font_family = s; }
+            { auto s = prop_val(ist, "box-shadow");
+              if (!s.empty()) elem->box_shadow = s; }
+            { auto s = prop_val(ist, "opacity");
+              if (!s.empty()) { try { elem->opacity = std::stod(s); } catch(...){} } }
+            { auto s = tolower_s(prop_val(ist, "overflow"));
+              if      (s == "visible") elem->overflow = 0;
+              else if (s == "hidden")  elem->overflow = 1;
+              else if (s == "scroll")  elem->overflow = 2;
+              else if (s == "auto")    elem->overflow = 3; }
+            { auto s = tolower_s(prop_val(ist, "flex-direction"));
+              if      (s == "row")            elem->flex_direction = 0;
+              else if (s == "column")         elem->flex_direction = 1;
+              else if (s == "row-reverse")    elem->flex_direction = 2;
+              else if (s == "column-reverse") elem->flex_direction = 3; }
+            { auto s = tolower_s(prop_val(ist, "justify-content"));
+              if      (s == "flex-start" || s == "start") elem->justify_content = 0;
+              else if (s == "flex-end" || s == "end")     elem->justify_content = 1;
+              else if (s == "center")                     elem->justify_content = 2;
+              else if (s == "space-between")              elem->justify_content = 3;
+              else if (s == "space-around")               elem->justify_content = 4;
+              else if (s == "space-evenly")               elem->justify_content = 5; }
+            { auto s = tolower_s(prop_val(ist, "align-items"));
+              if      (s == "stretch")                    elem->align_items = 0;
+              else if (s == "flex-start" || s == "start") elem->align_items = 1;
+              else if (s == "flex-end" || s == "end")     elem->align_items = 2;
+              else if (s == "center")                     elem->align_items = 3; }
+            { auto s = tolower_s(prop_val(ist, "flex-wrap"));
+              if      (s == "nowrap") elem->flex_wrap = 0;
+              else if (s == "wrap")   elem->flex_wrap = 1; }
+            { auto s = prop_val(ist, "gap");
+              if (!s.empty()) { int px = parse_px_val(s); if (px > 0) elem->gap = px; } }
+            { auto s = tolower_s(prop_val(ist, "position"));
+              if      (s == "static")   elem->position = 0;
+              else if (s == "relative") elem->position = 1;
+              else if (s == "absolute") elem->position = 2;
+              else if (s == "fixed")    elem->position = 3; }
+            { auto s = prop_val(ist, "top");
+              if (!s.empty() && tolower_s(s) != "auto") elem->pos_top = parse_px_val(s); }
+            { auto s = prop_val(ist, "left");
+              if (!s.empty() && tolower_s(s) != "auto") elem->pos_left = parse_px_val(s); }
+            { auto s = prop_val(ist, "right");
+              if (!s.empty() && tolower_s(s) != "auto") elem->pos_right = parse_px_val(s); }
+            { auto s = prop_val(ist, "bottom");
+              if (!s.empty() && tolower_s(s) != "auto") elem->pos_bottom = parse_px_val(s); }
+            { auto s = prop_val(ist, "z-index");
+              if (!s.empty()) { try { elem->z_index = std::stoi(s); } catch(...){} } }
 
             // Resolve bg_image
             if (!bm.bg_image.empty()) {
@@ -1116,6 +1232,22 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
                 doc->body->floatdir = elem->floatdir;
                 doc->body->bg_image = elem->bg_image;
                 doc->body->bg_color = elem->bg_color;
+                doc->body->text_transform = elem->text_transform;
+                doc->body->font_family = elem->font_family;
+                doc->body->box_shadow = elem->box_shadow;
+                doc->body->opacity = elem->opacity;
+                doc->body->overflow = elem->overflow;
+                doc->body->flex_direction = elem->flex_direction;
+                doc->body->justify_content = elem->justify_content;
+                doc->body->align_items = elem->align_items;
+                doc->body->flex_wrap = elem->flex_wrap;
+                doc->body->gap = elem->gap;
+                doc->body->position = elem->position;
+                doc->body->pos_top = elem->pos_top;
+                doc->body->pos_left = elem->pos_left;
+                doc->body->pos_right = elem->pos_right;
+                doc->body->pos_bottom = elem->pos_bottom;
+                doc->body->z_index = elem->z_index;
                 doc->body->is_body = true;
                 doc->body->inline_style_raw = elem->inline_style_raw;
                 if (!elem->id.empty()) {
@@ -1601,6 +1733,8 @@ static void render_node(AppState* st, DOMNode* node, int gen,
         double lh = node->lh_computed;
         std::string color = node->color_computed;
         int text_align = node->text_align_computed;
+        int text_transform = node->text_transform;
+        std::string font_family = node->font_family;
         std::string href = node->href;
 
         // Inherit from ancestors (also check style_props for JS-set values)
@@ -1622,6 +1756,8 @@ static void render_node(AppState* st, DOMNode* node, int gen,
                 else if (!p->color_computed.empty()) color = p->color_computed;
             }
             if (text_align < 0 && p->text_align_computed >= 0) text_align = p->text_align_computed;
+            if (text_transform < 0 && p->text_transform >= 0) text_transform = p->text_transform;
+            if (font_family.empty() && !p->font_family.empty()) font_family = p->font_family;
             if (lh < 0 && p->lh_computed >= 0) lh = p->lh_computed;
             if (href.empty() && !p->href.empty()) href = p->href;
             p = p->parent;
@@ -1631,6 +1767,28 @@ static void render_node(AppState* st, DOMNode* node, int gen,
         if (fi == -1) fi = PANGO_STYLE_NORMAL;
         if (text_align < 0) text_align = 0;
         if (fs <= 0) fs = 16;
+
+        // Apply text-transform
+        if (text_transform == 1) { // uppercase
+            gchar* up = g_utf8_strup(text.c_str(), -1);
+            text = up; g_free(up);
+        } else if (text_transform == 2) { // lowercase
+            gchar* lo = g_utf8_strdown(text.c_str(), -1);
+            text = lo; g_free(lo);
+        } else if (text_transform == 3) { // capitalize
+            std::string result;
+            bool next_upper = true;
+            const char* s = text.c_str();
+            while (*s) {
+                gunichar ch = g_utf8_get_char(s);
+                if (g_unichar_isspace(ch)) { next_upper = true; }
+                else if (next_upper) { ch = g_unichar_toupper(ch); next_upper = false; }
+                char buf[6]; int len = g_unichar_to_utf8(ch, buf);
+                result.append(buf, len);
+                s = g_utf8_next_char(s);
+            }
+            text = result;
+        }
 
         fprintf(stderr, "[DEBUG render_text] text='%.40s' fw=%d fi=%d fs=%d parent=<%s>\n",
                 text.c_str(), fw, fi, fs, node->parent ? node->parent->tag_name.c_str() : "NONE");
@@ -1651,6 +1809,11 @@ static void render_node(AppState* st, DOMNode* node, int gen,
         if (fi != PANGO_STYLE_NORMAL)
             pango_attr_list_insert(al, pango_attr_style_new((PangoStyle)fi));
         pango_attr_list_insert(al, pango_attr_size_new_absolute(fs * PANGO_SCALE));
+        if (!font_family.empty()) {
+            PangoFontDescription* fd = pango_font_description_from_string(font_family.c_str());
+            pango_attr_list_insert(al, pango_attr_font_desc_new(fd));
+            pango_font_description_free(fd);
+        }
         if (lh >= 0)
             pango_attr_list_insert(al, pango_attr_line_height_new(lh));
         if (!href.empty())
