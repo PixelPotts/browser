@@ -67,6 +67,18 @@
             white-space: pre-wrap;
             min-height: 40px;
         }
+        .css-italic { font-style: italic; }
+        .css-oblique { font-style: oblique; }
+        .css-td-underline { text-decoration: underline; }
+        .css-td-linethrough { text-decoration: line-through; }
+        .css-td-none { text-decoration: none; }
+        .css-ls-wide { letter-spacing: 5px; }
+        .css-fv-smallcaps { font-variant: small-caps; }
+        .css-ws-nowrap { white-space: nowrap; }
+        .css-ws-pre { white-space: pre; }
+        .css-ti-30 { text-indent: 30px; }
+        .css-to-ellipsis { text-overflow: ellipsis; }
+        .css-fstretch-condensed { font-stretch: condensed; }
     </style>
 </head>
 <body>
@@ -456,6 +468,100 @@
             <div id="pos-rel" style="position: relative; top: 10px; left: 20px; background-color: #3498db; padding: 5px;">Relative</div>
         </div>
         <p id="pos-result">Waiting...</p>
+    </div>
+
+    <!-- ===== Test 49: font-style from CSS rules ===== -->
+    <div class="test-section">
+        <h2>49. font-style from CSS Rules</h2>
+        <p id="fi-css-italic" class="css-italic">CSS Italic text</p>
+        <p id="fi-css-oblique" class="css-oblique">CSS Oblique text</p>
+        <p id="fi-result">Waiting...</p>
+    </div>
+
+    <!-- ===== Test 50: text-decoration ===== -->
+    <div class="test-section">
+        <h2>50. Text Decoration</h2>
+        <p id="td-underline" class="css-td-underline">Underlined text</p>
+        <p id="td-linethrough" class="css-td-linethrough">Strikethrough text</p>
+        <p id="td-inline" style="text-decoration: underline;">Inline underline</p>
+        <p id="td-none" class="css-td-none">No decoration</p>
+        <a href="#" id="td-link-none" class="css-td-none">Link without underline</a>
+        <p id="td-result">Waiting...</p>
+    </div>
+
+    <!-- ===== Test 51: letter-spacing ===== -->
+    <div class="test-section">
+        <h2>51. Letter Spacing</h2>
+        <p id="ls-wide" class="css-ls-wide">Wide spacing</p>
+        <p id="ls-inline" style="letter-spacing: 3px;">Inline 3px spacing</p>
+        <p id="ls-result">Waiting...</p>
+    </div>
+
+    <!-- ===== Test 52: font-variant / white-space ===== -->
+    <div class="test-section">
+        <h2>52. Font Variant &amp; White Space</h2>
+        <p id="fv-smallcaps" class="css-fv-smallcaps">Small Caps Text</p>
+        <p id="ws-nowrap" class="css-ws-nowrap">This should not wrap even though it is very long text that would normally wrap to the next line</p>
+        <p id="ws-pre" class="css-ws-pre">Pre    formatted   text</p>
+        <p id="fv-ws-result">Waiting...</p>
+    </div>
+
+    <!-- ===== Test 53: Semantic Tag UA Defaults ===== -->
+    <div class="test-section">
+        <h2>53. Semantic Tag Defaults</h2>
+        <p><s id="sem-s">Strikethrough S</s></p>
+        <p><del id="sem-del">Deleted Del</del></p>
+        <p><u id="sem-u">Underline U</u></p>
+        <p><ins id="sem-ins">Inserted Ins</ins></p>
+        <p><code id="sem-code">code tag</code></p>
+        <p><kbd id="sem-kbd">kbd tag</kbd></p>
+        <p><samp id="sem-samp">samp tag</samp></p>
+        <p><small id="sem-small">small tag</small></p>
+        <p><big id="sem-big">big tag</big></p>
+        <p><mark id="sem-mark">marked text</mark></p>
+        <p><abbr id="sem-abbr" title="Abbreviation">abbr tag</abbr></p>
+        <p id="sem-result">Waiting...</p>
+    </div>
+
+    <!-- ===== Test 54: font shorthand ===== -->
+    <div class="test-section">
+        <h2>54. Font Shorthand</h2>
+        <p id="fs-short1" style="font: italic bold 20px serif;">Font shorthand test</p>
+        <p id="fs-short2" style="font: 14px/1.5 monospace;">Size+family shorthand</p>
+        <p id="fs-result">Waiting...</p>
+    </div>
+
+    <!-- ===== Test 55: JS Font Style API ===== -->
+    <div class="test-section">
+        <h2>55. JS Font Style API</h2>
+        <p id="jsfs-target">JS style target</p>
+        <p id="jsfs-result">Waiting...</p>
+    </div>
+
+    <!-- ===== Test 56: text-decoration sub-properties ===== -->
+    <div class="test-section">
+        <h2>56. Text Decoration Sub-Properties</h2>
+        <p id="td-color" style="text-decoration: underline; text-decoration-color: red;">Colored underline</p>
+        <p id="td-style" style="text-decoration: underline; text-decoration-style: dotted;">Dotted underline</p>
+        <p id="td-line" style="text-decoration-line: line-through;">Line-through via sub-prop</p>
+        <p id="td-sub-result">Waiting...</p>
+    </div>
+
+    <!-- ===== Test 57: text-indent / text-overflow / word-spacing ===== -->
+    <div class="test-section">
+        <h2>57. Text Indent, Overflow, Word Spacing</h2>
+        <p id="ti-30" class="css-ti-30">Indented paragraph</p>
+        <p id="to-ellipsis" class="css-to-ellipsis" style="overflow: hidden; width: 100px;">This text should be clipped with ellipsis</p>
+        <p id="wsp-wide" style="word-spacing: 10px;">Words with wide spacing</p>
+        <p id="ti-to-result">Waiting...</p>
+    </div>
+
+    <!-- ===== Test 58: font-stretch / text-shadow ===== -->
+    <div class="test-section">
+        <h2>58. Font Stretch &amp; Text Shadow</h2>
+        <p id="fst-condensed" class="css-fstretch-condensed">Condensed text</p>
+        <p id="tsh-shadow" style="text-shadow: 2px 2px 4px rgba(0,0,0,0.5);">Shadow text</p>
+        <p id="fst-tsh-result">Waiting...</p>
     </div>
 
     <script>
@@ -1226,8 +1332,170 @@
         console.log("Test 48 (positioning): done");
     })();
 
+    // ===== Test 49: font-style from CSS rules =====
+    (function() {
+        var r = [];
+        var it = document.getElementById("fi-css-italic");
+        r.push(it ? "fi-css-italic exists: PASS" : "fi-css-italic: FAIL");
+        var ob = document.getElementById("fi-css-oblique");
+        r.push(ob ? "fi-css-oblique exists: PASS" : "fi-css-oblique: FAIL");
+        document.getElementById("fi-result").textContent = r.join(" | ");
+        console.log("Test 49 (font-style CSS rules): done");
+    })();
+
+    // ===== Test 50: text-decoration =====
+    (function() {
+        var r = [];
+        var ul = document.getElementById("td-underline");
+        r.push(ul ? "td-underline exists: PASS" : "td-underline: FAIL");
+        var lt = document.getElementById("td-linethrough");
+        r.push(lt ? "td-linethrough exists: PASS" : "td-linethrough: FAIL");
+        var inl = document.getElementById("td-inline");
+        r.push(inl ? "td-inline exists: PASS" : "td-inline: FAIL");
+        var none = document.getElementById("td-none");
+        r.push(none ? "td-none exists: PASS" : "td-none: FAIL");
+        var lnone = document.getElementById("td-link-none");
+        r.push(lnone ? "td-link-none exists: PASS" : "td-link-none: FAIL");
+        document.getElementById("td-result").textContent = r.join(" | ");
+        console.log("Test 50 (text-decoration): done");
+    })();
+
+    // ===== Test 51: letter-spacing =====
+    (function() {
+        var r = [];
+        var wide = document.getElementById("ls-wide");
+        r.push(wide ? "ls-wide exists: PASS" : "ls-wide: FAIL");
+        var inl = document.getElementById("ls-inline");
+        r.push(inl ? "ls-inline exists: PASS" : "ls-inline: FAIL");
+        document.getElementById("ls-result").textContent = r.join(" | ");
+        console.log("Test 51 (letter-spacing): done");
+    })();
+
+    // ===== Test 52: font-variant / white-space =====
+    (function() {
+        var r = [];
+        var sc = document.getElementById("fv-smallcaps");
+        r.push(sc ? "fv-smallcaps exists: PASS" : "fv-smallcaps: FAIL");
+        var nw = document.getElementById("ws-nowrap");
+        r.push(nw ? "ws-nowrap exists: PASS" : "ws-nowrap: FAIL");
+        var pre = document.getElementById("ws-pre");
+        r.push(pre ? "ws-pre exists: PASS" : "ws-pre: FAIL");
+        document.getElementById("fv-ws-result").textContent = r.join(" | ");
+        console.log("Test 52 (font-variant/white-space): done");
+    })();
+
+    // ===== Test 53: Semantic tag UA defaults =====
+    (function() {
+        var r = [];
+        r.push(document.getElementById("sem-s") ? "s tag: PASS" : "s tag: FAIL");
+        r.push(document.getElementById("sem-del") ? "del tag: PASS" : "del tag: FAIL");
+        r.push(document.getElementById("sem-u") ? "u tag: PASS" : "u tag: FAIL");
+        r.push(document.getElementById("sem-ins") ? "ins tag: PASS" : "ins tag: FAIL");
+        r.push(document.getElementById("sem-code") ? "code tag: PASS" : "code tag: FAIL");
+        r.push(document.getElementById("sem-kbd") ? "kbd tag: PASS" : "kbd tag: FAIL");
+        r.push(document.getElementById("sem-small") ? "small tag: PASS" : "small tag: FAIL");
+        r.push(document.getElementById("sem-big") ? "big tag: PASS" : "big tag: FAIL");
+        r.push(document.getElementById("sem-mark") ? "mark tag: PASS" : "mark tag: FAIL");
+        r.push(document.getElementById("sem-abbr") ? "abbr tag: PASS" : "abbr tag: FAIL");
+        document.getElementById("sem-result").textContent = r.join(" | ");
+        console.log("Test 53 (semantic tag defaults): done");
+    })();
+
+    // ===== Test 54: font shorthand =====
+    (function() {
+        var r = [];
+        var s1 = document.getElementById("fs-short1");
+        r.push(s1 ? "fs-short1 exists: PASS" : "fs-short1: FAIL");
+        var s2 = document.getElementById("fs-short2");
+        r.push(s2 ? "fs-short2 exists: PASS" : "fs-short2: FAIL");
+        document.getElementById("fs-result").textContent = r.join(" | ");
+        console.log("Test 54 (font shorthand): done");
+    })();
+
+    // ===== Test 55: JS Font Style API round-trips =====
+    (function() {
+        var r = [];
+        var el = document.getElementById("jsfs-target");
+        // Test fontStyle
+        el.style.fontStyle = "italic";
+        r.push(el.style.fontStyle === "italic" ? "fontStyle set: PASS" : "fontStyle set: FAIL ('" + el.style.fontStyle + "')");
+        // Test letterSpacing
+        el.style.letterSpacing = "3px";
+        r.push(el.style.letterSpacing === "3px" ? "letterSpacing set: PASS" : "letterSpacing set: FAIL ('" + el.style.letterSpacing + "')");
+        // Test textDecoration
+        el.style.textDecoration = "underline";
+        r.push(el.style.textDecoration === "underline" ? "textDecoration set: PASS" : "textDecoration set: FAIL ('" + el.style.textDecoration + "')");
+        // Test fontVariant
+        el.style.fontVariant = "small-caps";
+        r.push(el.style.fontVariant === "small-caps" ? "fontVariant set: PASS" : "fontVariant set: FAIL ('" + el.style.fontVariant + "')");
+        // Test whiteSpace
+        el.style.whiteSpace = "nowrap";
+        r.push(el.style.whiteSpace === "nowrap" ? "whiteSpace set: PASS" : "whiteSpace set: FAIL ('" + el.style.whiteSpace + "')");
+        // Test textShadow
+        el.style.textShadow = "1px 1px black";
+        r.push(el.style.textShadow === "1px 1px black" ? "textShadow set: PASS" : "textShadow set: FAIL ('" + el.style.textShadow + "')");
+        // Test fontStretch
+        el.style.fontStretch = "condensed";
+        r.push(el.style.fontStretch === "condensed" ? "fontStretch set: PASS" : "fontStretch set: FAIL ('" + el.style.fontStretch + "')");
+        document.getElementById("jsfs-result").textContent = r.join(" | ");
+        console.log("Test 55 (JS font style API): done");
+    })();
+
+    // ===== Test 56: text-decoration sub-properties =====
+    (function() {
+        var r = [];
+        var color = document.getElementById("td-color");
+        r.push(color ? "td-color exists: PASS" : "td-color: FAIL");
+        var style = document.getElementById("td-style");
+        r.push(style ? "td-style exists: PASS" : "td-style: FAIL");
+        var line = document.getElementById("td-line");
+        r.push(line ? "td-line exists: PASS" : "td-line: FAIL");
+        // Test JS API for sub-properties
+        var el = document.getElementById("jsfs-target");
+        el.style.textDecorationColor = "blue";
+        r.push(el.style.textDecorationColor === "blue" ? "tdColor JS: PASS" : "tdColor JS: FAIL");
+        el.style.textDecorationStyle = "dotted";
+        r.push(el.style.textDecorationStyle === "dotted" ? "tdStyle JS: PASS" : "tdStyle JS: FAIL");
+        el.style.textDecorationLine = "underline";
+        r.push(el.style.textDecorationLine === "underline" ? "tdLine JS: PASS" : "tdLine JS: FAIL");
+        document.getElementById("td-sub-result").textContent = r.join(" | ");
+        console.log("Test 56 (text-decoration sub-props): done");
+    })();
+
+    // ===== Test 57: text-indent / text-overflow / word-spacing =====
+    (function() {
+        var r = [];
+        var ti = document.getElementById("ti-30");
+        r.push(ti ? "ti-30 exists: PASS" : "ti-30: FAIL");
+        var to = document.getElementById("to-ellipsis");
+        r.push(to ? "to-ellipsis exists: PASS" : "to-ellipsis: FAIL");
+        var ws = document.getElementById("wsp-wide");
+        r.push(ws ? "wsp-wide exists: PASS" : "wsp-wide: FAIL");
+        // JS API tests
+        var el = document.getElementById("jsfs-target");
+        el.style.textIndent = "20px";
+        r.push(el.style.textIndent === "20px" ? "textIndent JS: PASS" : "textIndent JS: FAIL");
+        el.style.textOverflow = "ellipsis";
+        r.push(el.style.textOverflow === "ellipsis" ? "textOverflow JS: PASS" : "textOverflow JS: FAIL");
+        el.style.wordSpacing = "5px";
+        r.push(el.style.wordSpacing === "5px" ? "wordSpacing JS: PASS" : "wordSpacing JS: FAIL");
+        document.getElementById("ti-to-result").textContent = r.join(" | ");
+        console.log("Test 57 (text-indent/overflow/word-spacing): done");
+    })();
+
+    // ===== Test 58: font-stretch / text-shadow =====
+    (function() {
+        var r = [];
+        var fst = document.getElementById("fst-condensed");
+        r.push(fst ? "fst-condensed exists: PASS" : "fst-condensed: FAIL");
+        var tsh = document.getElementById("tsh-shadow");
+        r.push(tsh ? "tsh-shadow exists: PASS" : "tsh-shadow: FAIL");
+        document.getElementById("fst-tsh-result").textContent = r.join(" | ");
+        console.log("Test 58 (font-stretch/text-shadow): done");
+    })();
+
     // ===== Initial summary =====
-    console.log("=== All 48 test sections initialized ===");
+    console.log("=== All 58 test sections initialized ===");
     console.info("Right-click > Inspect or press F12 to open inspector");
     console.warn("This is a test warning to verify Console tab");
     </script>

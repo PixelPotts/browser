@@ -46,6 +46,19 @@ struct DOMNode {
     int overflow = -1;          // -1=inherit, 0=visible, 1=hidden, 2=scroll, 3=auto
     std::string href;           // for <a> elements
 
+    // Text decoration & font properties
+    int text_decoration = -1;          // -1=inherit, 0=none, bitmask: 1=underline, 2=overline, 4=line-through
+    std::string text_decoration_color; // empty=currentColor
+    int text_decoration_style = 0;     // 0=solid, 1=double, 2=dotted, 3=dashed, 4=wavy
+    int letter_spacing = INT_MIN;      // Pango units, INT_MIN=inherit
+    int word_spacing = INT_MIN;        // px, INT_MIN=inherit
+    int font_variant = -1;            // -1=inherit, 0=normal, 1=small-caps
+    int white_space = -1;             // -1=inherit, 0=normal, 1=nowrap, 2=pre, 3=pre-wrap, 4=pre-line
+    int text_indent = INT_MIN;        // px, INT_MIN=inherit
+    int text_overflow = 0;            // 0=clip, 1=ellipsis
+    int font_stretch = -1;            // -1=inherit, PangoStretch enum
+    std::string text_shadow;          // raw CSS value (store only)
+
     // Flex properties
     int flex_direction = 0;     // 0=row, 1=column, 2=row-reverse, 3=column-reverse
     int justify_content = 0;    // 0=start, 1=end, 2=center, 3=between, 4=around, 5=evenly

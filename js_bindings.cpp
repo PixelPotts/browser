@@ -558,6 +558,10 @@ static const char* STYLE_PROPS[] = {
     "cursor", "float", "lineHeight", "textTransform", "fontFamily",
     "boxShadow", "flexDirection", "justifyContent", "alignItems",
     "flexWrap", "gap", "top", "left", "right", "bottom", "zIndex",
+    "fontStyle", "letterSpacing", "wordSpacing", "textDecoration",
+    "textDecorationColor", "textDecorationStyle", "textDecorationLine",
+    "fontVariant", "whiteSpace", "textIndent", "textOverflow",
+    "textShadow", "fontStretch",
     nullptr
 };
 

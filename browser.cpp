@@ -274,6 +274,153 @@ static std::array<int,4> parse_box_shorthand(const std::string& raw) {
     return v; // [top, right, bottom, left]
 }
 
+// Strip CSS quotes and normalize font-family for Pango
+static std::string css_font_to_pango(const std::string& s) {
+    std::string result;
+    bool in_quote = false;
+    char qch = 0;
+    for (size_t i = 0; i < s.size(); ++i) {
+        char c = s[i];
+        if (!in_quote && (c == '"' || c == '\'')) { in_quote = true; qch = c; continue; }
+        if (in_quote && c == qch) { in_quote = false; continue; }
+        result += c;
+    }
+    return result;
+}
+
+// Parse text-decoration-line value into bitmask
+static int parse_td_line(const std::string& s) {
+    if (s == "none") return 0;
+    int mask = 0;
+    if (s.find("underline") != std::string::npos) mask |= 1;
+    if (s.find("overline") != std::string::npos) mask |= 2;
+    if (s.find("line-through") != std::string::npos) mask |= 4;
+    return mask;
+}
+
+// Parse text-decoration shorthand: line || style || color
+static void parse_text_decoration(const std::string& s, DOMNode* elem) {
+    if (s == "none") { elem->text_decoration = 0; return; }
+    // Check for line keywords
+    int mask = parse_td_line(s);
+    if (mask > 0) elem->text_decoration = mask;
+    else elem->text_decoration = 0;
+    // Check for style keywords in the shorthand
+    if (s.find("dotted") != std::string::npos) elem->text_decoration_style = 2;
+    else if (s.find("dashed") != std::string::npos) elem->text_decoration_style = 3;
+    else if (s.find("double") != std::string::npos) elem->text_decoration_style = 1;
+    else if (s.find("wavy") != std::string::npos) elem->text_decoration_style = 4;
+}
+
+// Parse text-decoration-style string to int
+static int parse_td_style(const std::string& s) {
+    if (s == "solid") return 0;
+    if (s == "double") return 1;
+    if (s == "dotted") return 2;
+    if (s == "dashed") return 3;
+    if (s == "wavy") return 4;
+    return 0;
+}
+
+// Parse white-space value to int
+static int parse_white_space(const std::string& s) {
+    if (s == "normal") return 0;
+    if (s == "nowrap") return 1;
+    if (s == "pre") return 2;
+    if (s == "pre-wrap") return 3;
+    if (s == "pre-line") return 4;
+    return -1;
+}
+
+// Parse font-stretch value to PangoStretch enum
+static int parse_font_stretch(const std::string& s) {
+    if (s == "ultra-condensed") return PANGO_STRETCH_ULTRA_CONDENSED;
+    if (s == "extra-condensed") return PANGO_STRETCH_EXTRA_CONDENSED;
+    if (s == "condensed") return PANGO_STRETCH_CONDENSED;
+    if (s == "semi-condensed") return PANGO_STRETCH_SEMI_CONDENSED;
+    if (s == "normal") return PANGO_STRETCH_NORMAL;
+    if (s == "semi-expanded") return PANGO_STRETCH_SEMI_EXPANDED;
+    if (s == "expanded") return PANGO_STRETCH_EXPANDED;
+    if (s == "extra-expanded") return PANGO_STRETCH_EXTRA_EXPANDED;
+    if (s == "ultra-expanded") return PANGO_STRETCH_ULTRA_EXPANDED;
+    return -1;
+}
+
+// Parse font shorthand: font: [style] [variant] [weight] [stretch] size[/line-height] family
+static void parse_font_shorthand(const std::string& val, DOMNode* elem, int parent_fs) {
+    std::string v = collapse_ws(val);
+    if (v.empty()) return;
+    // Split into tokens
+    std::vector<std::string> tokens;
+    size_t i = 0;
+    while (i < v.size()) {
+        while (i < v.size() && v[i] == ' ') ++i;
+        size_t j = i;
+        // If we hit a quote, find matching end
+        if (j < v.size() && (v[j] == '"' || v[j] == '\'')) {
+            char q = v[j]; ++j;
+            while (j < v.size() && v[j] != q) ++j;
+            if (j < v.size()) ++j;
+        } else {
+            while (j < v.size() && v[j] != ' ') ++j;
+        }
+        if (j > i) tokens.push_back(v.substr(i, j - i));
+        i = j;
+    }
+    if (tokens.empty()) return;
+
+    // Last token(s) are family - find the size token first
+    // Size is the first token that starts with a digit or is a keyword size
+    int size_idx = -1;
+    for (int ti = 0; ti < (int)tokens.size(); ++ti) {
+        std::string tl = tolower_s(tokens[ti]);
+        // Remove /line-height part for checking
+        std::string check = tl;
+        auto slash = check.find('/');
+        if (slash != std::string::npos) check = check.substr(0, slash);
+        int px = parse_fs(check, parent_fs);
+        if (px > 0) { size_idx = ti; break; }
+    }
+    if (size_idx < 0) return; // can't parse without size
+
+    // Tokens before size_idx are style/variant/weight/stretch
+    for (int ti = 0; ti < size_idx; ++ti) {
+        std::string tl = tolower_s(tokens[ti]);
+        if (tl == "italic") elem->fi_computed = PANGO_STYLE_ITALIC;
+        else if (tl == "oblique") elem->fi_computed = PANGO_STYLE_OBLIQUE;
+        else if (tl == "small-caps") elem->font_variant = 1;
+        else {
+            int w = fw_value(tl);
+            if (w != -1) elem->fw_computed = w;
+            int st = parse_font_stretch(tl);
+            if (st >= 0) elem->font_stretch = st;
+        }
+    }
+
+    // Parse size[/line-height]
+    std::string size_tok = tokens[size_idx];
+    auto slash = size_tok.find('/');
+    if (slash != std::string::npos) {
+        std::string lh_str = size_tok.substr(slash + 1);
+        size_tok = size_tok.substr(0, slash);
+        double lh = parse_lh(lh_str, elem->fs_computed);
+        if (lh >= 0) elem->lh_computed = lh;
+    }
+    int px = parse_fs(size_tok, parent_fs);
+    if (px > 0) elem->fs_computed = px;
+
+    // Everything after size is the family
+    if (size_idx + 1 < (int)tokens.size()) {
+        std::string fam;
+        for (int ti = size_idx + 1; ti < (int)tokens.size(); ++ti) {
+            if (!fam.empty()) fam += ' ';
+            fam += tokens[ti];
+        }
+        // Remove trailing commas and clean for Pango
+        elem->font_family = css_font_to_pango(fam);
+    }
+}
+
 struct CSSRule { std::string sel; int fw=-1; std::string fs_raw, lh_raw, decls, src_url; };
 
 struct ParsedBorder { int width=0; std::string style, color; };
@@ -357,7 +504,21 @@ static std::vector<CSSRule> parse_css(const std::string& css) {
                     || !prop_val(decls,"right").empty() || !prop_val(decls,"bottom").empty()
                     || !prop_val(decls,"z-index").empty()
                     || !prop_val(decls,"background-repeat").empty()
-                    || !prop_val(decls,"background-size").empty();
+                    || !prop_val(decls,"background-size").empty()
+                    || !prop_val(decls,"font-style").empty()
+                    || !prop_val(decls,"text-decoration").empty()
+                    || !prop_val(decls,"text-decoration-line").empty()
+                    || !prop_val(decls,"text-decoration-color").empty()
+                    || !prop_val(decls,"text-decoration-style").empty()
+                    || !prop_val(decls,"letter-spacing").empty()
+                    || !prop_val(decls,"word-spacing").empty()
+                    || !prop_val(decls,"font-variant").empty()
+                    || !prop_val(decls,"white-space").empty()
+                    || !prop_val(decls,"text-indent").empty()
+                    || !prop_val(decls,"text-overflow").empty()
+                    || !prop_val(decls,"font-stretch").empty()
+                    || !prop_val(decls,"text-shadow").empty()
+                    || !prop_val(decls,"font").empty();
         if (fw==-1 && fs_raw.empty() && lh_raw.empty() && !has_box) continue;
         // split comma-separated selectors
         size_t j=0;
@@ -1073,6 +1234,24 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
             else if (tname == "h5") elem->fs_computed = 13;
             else if (tname == "h6") elem->fs_computed = 11;
 
+            // UA defaults for strikethrough tags
+            if (tname == "s" || tname == "del" || tname == "strike")
+                elem->text_decoration = 4; // line-through
+            // UA defaults for underline tags
+            if (tname == "u" || tname == "ins")
+                elem->text_decoration = 1; // underline
+            // UA defaults for monospace tags
+            if (tname == "code" || tname == "kbd" || tname == "samp" || tname == "tt")
+                elem->font_family = "monospace";
+            // UA defaults for <pre>
+            if (tname == "pre") { elem->font_family = "monospace"; elem->white_space = 2; }
+            // UA defaults for size tags
+            if (tname == "small") elem->fs_computed = (int)(parent_fs * 0.83);
+            if (tname == "sub" || tname == "sup") elem->fs_computed = (int)(parent_fs * 0.83);
+            if (tname == "big") elem->fs_computed = (int)(parent_fs * 1.17);
+            // UA defaults for <abbr> - dotted underline
+            if (tname == "abbr") { elem->text_decoration = 1; elem->text_decoration_style = 2; }
+
             // Build StackEntry for CSS matching
             StackEntry se;
             se.tag = tname;
@@ -1156,14 +1335,69 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
                   if (!s.empty() && tolower_s(s) != "auto") elem->pos_bottom = parse_px_val(s); }
                 { auto s = prop_val(r.decls, "z-index");
                   if (!s.empty()) { try { elem->z_index = std::stoi(s); } catch(...){} } }
+                // font-style from CSS rules (BUG FIX: was only parsed from inline styles)
+                { std::string fs = tolower_s(prop_val(r.decls, "font-style"));
+                  if (fs == "italic") elem->fi_computed = PANGO_STYLE_ITALIC;
+                  else if (fs == "oblique") elem->fi_computed = PANGO_STYLE_OBLIQUE;
+                  else if (fs == "normal") elem->fi_computed = PANGO_STYLE_NORMAL; }
+                // text-decoration shorthand
+                { auto s = tolower_s(prop_val(r.decls, "text-decoration"));
+                  if (!s.empty()) parse_text_decoration(s, elem.get()); }
+                // text-decoration-line
+                { auto s = tolower_s(prop_val(r.decls, "text-decoration-line"));
+                  if (!s.empty()) elem->text_decoration = parse_td_line(s); }
+                // text-decoration-color
+                { auto s = prop_val(r.decls, "text-decoration-color");
+                  if (!s.empty()) elem->text_decoration_color = s; }
+                // text-decoration-style
+                { auto s = tolower_s(prop_val(r.decls, "text-decoration-style"));
+                  if (!s.empty()) elem->text_decoration_style = parse_td_style(s); }
+                // letter-spacing
+                { auto s = prop_val(r.decls, "letter-spacing");
+                  if (tolower_s(s) == "normal") elem->letter_spacing = 0;
+                  else if (!s.empty()) { int px = parse_px_val(s); elem->letter_spacing = px * PANGO_SCALE; } }
+                // word-spacing
+                { auto s = prop_val(r.decls, "word-spacing");
+                  if (tolower_s(s) == "normal") elem->word_spacing = 0;
+                  else if (!s.empty()) elem->word_spacing = parse_px_val(s); }
+                // font-variant
+                { auto s = tolower_s(prop_val(r.decls, "font-variant"));
+                  if (s == "small-caps") elem->font_variant = 1;
+                  else if (s == "normal") elem->font_variant = 0; }
+                // white-space
+                { auto s = tolower_s(prop_val(r.decls, "white-space"));
+                  if (!s.empty()) { int ws = parse_white_space(s); if (ws >= 0) elem->white_space = ws; } }
+                // text-indent
+                { auto s = prop_val(r.decls, "text-indent");
+                  if (!s.empty()) elem->text_indent = parse_px_val(s); }
+                // text-overflow
+                { auto s = tolower_s(prop_val(r.decls, "text-overflow"));
+                  if (s == "ellipsis") elem->text_overflow = 1;
+                  else if (s == "clip") elem->text_overflow = 0; }
+                // font-stretch
+                { auto s = tolower_s(prop_val(r.decls, "font-stretch"));
+                  if (!s.empty()) { int st = parse_font_stretch(s); if (st >= 0) elem->font_stretch = st; } }
+                // text-shadow (store only)
+                { auto s = prop_val(r.decls, "text-shadow");
+                  if (!s.empty()) elem->text_shadow = s; }
+                // font shorthand
+                { auto s = prop_val(r.decls, "font");
+                  if (!s.empty()) parse_font_shorthand(s, elem.get(), parent_fs); }
+                // font-family: clean for Pango
+                if (!elem->font_family.empty())
+                    elem->font_family = css_font_to_pango(elem->font_family);
             }
 
-            // anchor href
+            // anchor href + default underline
             if (tname == "a") {
                 auto href_it = elem->attributes.find("href");
-                if (href_it != elem->attributes.end() && !href_it->second.empty())
+                if (href_it != elem->attributes.end() && !href_it->second.empty()) {
                     elem->href = resolve(base, href_it->second);
+                    if (elem->text_decoration < 0) elem->text_decoration = 1; // default underline
+                }
             }
+            // UA default for <mark> - yellow background
+            if (tname == "mark") bm.bg_color = "yellow";
 
             // inline style
             auto style_it = elem->attributes.find("style");
@@ -1236,6 +1470,49 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
               if (!s.empty() && tolower_s(s) != "auto") elem->pos_bottom = parse_px_val(s); }
             { auto s = prop_val(ist, "z-index");
               if (!s.empty()) { try { elem->z_index = std::stoi(s); } catch(...){} } }
+            // text-decoration shorthand (inline)
+            { auto s = tolower_s(prop_val(ist, "text-decoration"));
+              if (!s.empty()) parse_text_decoration(s, elem.get()); }
+            { auto s = tolower_s(prop_val(ist, "text-decoration-line"));
+              if (!s.empty()) elem->text_decoration = parse_td_line(s); }
+            { auto s = prop_val(ist, "text-decoration-color");
+              if (!s.empty()) elem->text_decoration_color = s; }
+            { auto s = tolower_s(prop_val(ist, "text-decoration-style"));
+              if (!s.empty()) elem->text_decoration_style = parse_td_style(s); }
+            // letter-spacing (inline)
+            { auto s = prop_val(ist, "letter-spacing");
+              if (tolower_s(s) == "normal") elem->letter_spacing = 0;
+              else if (!s.empty()) { int px = parse_px_val(s); elem->letter_spacing = px * PANGO_SCALE; } }
+            // word-spacing (inline)
+            { auto s = prop_val(ist, "word-spacing");
+              if (tolower_s(s) == "normal") elem->word_spacing = 0;
+              else if (!s.empty()) elem->word_spacing = parse_px_val(s); }
+            // font-variant (inline)
+            { auto s = tolower_s(prop_val(ist, "font-variant"));
+              if (s == "small-caps") elem->font_variant = 1;
+              else if (s == "normal") elem->font_variant = 0; }
+            // white-space (inline)
+            { auto s = tolower_s(prop_val(ist, "white-space"));
+              if (!s.empty()) { int ws = parse_white_space(s); if (ws >= 0) elem->white_space = ws; } }
+            // text-indent (inline)
+            { auto s = prop_val(ist, "text-indent");
+              if (!s.empty()) elem->text_indent = parse_px_val(s); }
+            // text-overflow (inline)
+            { auto s = tolower_s(prop_val(ist, "text-overflow"));
+              if (s == "ellipsis") elem->text_overflow = 1;
+              else if (s == "clip") elem->text_overflow = 0; }
+            // font-stretch (inline)
+            { auto s = tolower_s(prop_val(ist, "font-stretch"));
+              if (!s.empty()) { int st = parse_font_stretch(s); if (st >= 0) elem->font_stretch = st; } }
+            // text-shadow (inline, store only)
+            { auto s = prop_val(ist, "text-shadow");
+              if (!s.empty()) elem->text_shadow = s; }
+            // font shorthand (inline)
+            { auto s = prop_val(ist, "font");
+              if (!s.empty()) parse_font_shorthand(s, elem.get(), parent_fs); }
+            // Clean font-family for Pango
+            if (!elem->font_family.empty())
+                elem->font_family = css_font_to_pango(elem->font_family);
 
             // Resolve bg_image
             if (!bm.bg_image.empty()) {
@@ -1864,8 +2141,6 @@ static void render_node(AppState* st, DOMNode* node, int gen,
                          std::vector<GtkWidget*>& float_rows) {
     if (node->node_type == DOMNode::TEXT) {
         if (node->text_content.empty()) return;
-        std::string text = collapse_ws(node->text_content);
-        if (text.empty()) return;
 
         float_rows.back() = nullptr;
 
@@ -1878,6 +2153,11 @@ static void render_node(AppState* st, DOMNode* node, int gen,
         int text_transform = node->text_transform;
         std::string font_family = node->font_family;
         std::string href = node->href;
+        int text_decoration = node->text_decoration;  // NOT inherited per CSS spec
+        int letter_spacing = node->letter_spacing;
+        int font_variant = node->font_variant;
+        int white_space = node->white_space;
+        int font_stretch = node->font_stretch;
 
         // Inherit from ancestors (also check style_props for JS-set values)
         auto get_sp_color = [](DOMNode* n) -> std::string {
@@ -1902,6 +2182,13 @@ static void render_node(AppState* st, DOMNode* node, int gen,
             if (font_family.empty() && !p->font_family.empty()) font_family = p->font_family;
             if (lh < 0 && p->lh_computed >= 0) lh = p->lh_computed;
             if (href.empty() && !p->href.empty()) href = p->href;
+            // text_decoration: look at parent element (not inherited, but applied on element)
+            if (text_decoration < 0 && p->text_decoration >= 0) text_decoration = p->text_decoration;
+            // Inherited properties
+            if (letter_spacing == INT_MIN && p->letter_spacing != INT_MIN) letter_spacing = p->letter_spacing;
+            if (font_variant < 0 && p->font_variant >= 0) font_variant = p->font_variant;
+            if (white_space < 0 && p->white_space >= 0) white_space = p->white_space;
+            if (font_stretch < 0 && p->font_stretch >= 0) font_stretch = p->font_stretch;
             p = p->parent;
         }
 
@@ -1909,6 +2196,11 @@ static void render_node(AppState* st, DOMNode* node, int gen,
         if (fi == -1) fi = PANGO_STYLE_NORMAL;
         if (text_align < 0) text_align = 0;
         if (fs <= 0) fs = 16;
+
+        // White-space handling: decide whether to collapse
+        bool preserve_ws = (white_space >= 2); // pre, pre-wrap, pre-line
+        std::string text = preserve_ws ? node->text_content : collapse_ws(node->text_content);
+        if (text.empty()) return;
 
         // Apply text-transform
         if (text_transform == 1) { // uppercase
@@ -1937,7 +2229,11 @@ static void render_node(AppState* st, DOMNode* node, int gen,
 
         GtkWidget* cur = cstack.back();
         GtkWidget* lbl = gtk_label_new(text.c_str());
-        gtk_label_set_line_wrap(GTK_LABEL(lbl), TRUE);
+        // white-space: nowrap/pre disable wrapping
+        if (white_space == 1 || white_space == 2) // nowrap or pre
+            gtk_label_set_line_wrap(GTK_LABEL(lbl), FALSE);
+        else
+            gtk_label_set_line_wrap(GTK_LABEL(lbl), TRUE);
         gtk_label_set_line_wrap_mode(GTK_LABEL(lbl), PANGO_WRAP_WORD_CHAR);
         gtk_label_set_xalign(GTK_LABEL(lbl), 0.0f);
         gtk_widget_set_halign(lbl, GTK_ALIGN_FILL);
@@ -1958,8 +2254,22 @@ static void render_node(AppState* st, DOMNode* node, int gen,
         }
         if (lh >= 0)
             pango_attr_list_insert(al, pango_attr_line_height_new(lh));
-        if (!href.empty())
-            pango_attr_list_insert(al, pango_attr_underline_new(PANGO_UNDERLINE_SINGLE));
+        // text-decoration via Pango (replaces hardcoded link underline)
+        if (text_decoration > 0) {
+            if (text_decoration & 1) // underline
+                pango_attr_list_insert(al, pango_attr_underline_new(PANGO_UNDERLINE_SINGLE));
+            if (text_decoration & 4) // line-through
+                pango_attr_list_insert(al, pango_attr_strikethrough_new(TRUE));
+        }
+        // letter-spacing
+        if (letter_spacing != INT_MIN && letter_spacing != 0)
+            pango_attr_list_insert(al, pango_attr_letter_spacing_new(letter_spacing));
+        // font-variant: small-caps
+        if (font_variant == 1)
+            pango_attr_list_insert(al, pango_attr_variant_new(PANGO_VARIANT_SMALL_CAPS));
+        // font-stretch
+        if (font_stretch >= 0)
+            pango_attr_list_insert(al, pango_attr_stretch_new((PangoStretch)font_stretch));
         if (!color.empty()) {
             GdkRGBA rgba = {0,0,0,1};
             if (gdk_rgba_parse(&rgba, color.c_str()))
@@ -3596,6 +3906,215 @@ static void run_probes_phase7(AppState* st) {
     }
 }
 
+// Phase 8: Font/text feature probes (tests 49-58)
+static void run_probes_phase8(AppState* st) {
+    Document* doc = st->document.get();
+    if (!doc) return;
+
+    fprintf(stderr, "\n\033[1m=== C++ DOM Probes: Phase 8 (Font/text features 49-58) ===\033[0m\n");
+
+    // T49: font-style from CSS rules
+    {
+        DOMNode* el = probe_node(doc, "fi-css-italic");
+        probe_check("T49: fi-css-italic exists", el != nullptr);
+        if (el) probe_check("T49: fi-css-italic fi_computed=ITALIC",
+            el->fi_computed == PANGO_STYLE_ITALIC);
+        DOMNode* el2 = probe_node(doc, "fi-css-oblique");
+        probe_check("T49: fi-css-oblique exists", el2 != nullptr);
+        if (el2) probe_check("T49: fi-css-oblique fi_computed=OBLIQUE",
+            el2->fi_computed == PANGO_STYLE_OBLIQUE);
+    }
+
+    // T50: text-decoration
+    {
+        DOMNode* ul = probe_node(doc, "td-underline");
+        probe_check("T50: td-underline exists", ul != nullptr);
+        if (ul) probe_check("T50: td-underline text_decoration has underline bit",
+            (ul->text_decoration & 1) != 0);
+        DOMNode* lt = probe_node(doc, "td-linethrough");
+        probe_check("T50: td-linethrough exists", lt != nullptr);
+        if (lt) probe_check("T50: td-linethrough text_decoration has line-through bit",
+            (lt->text_decoration & 4) != 0);
+        DOMNode* inl = probe_node(doc, "td-inline");
+        probe_check("T50: td-inline exists", inl != nullptr);
+        if (inl) probe_check("T50: td-inline text_decoration has underline bit",
+            (inl->text_decoration & 1) != 0);
+        DOMNode* none = probe_node(doc, "td-none");
+        probe_check("T50: td-none exists", none != nullptr);
+        if (none) probe_check("T50: td-none text_decoration=0 (none)",
+            none->text_decoration == 0);
+        DOMNode* lnone = probe_node(doc, "td-link-none");
+        probe_check("T50: td-link-none exists", lnone != nullptr);
+        if (lnone) probe_check("T50: td-link-none text_decoration=0 (CSS overrides link default)",
+            lnone->text_decoration == 0);
+    }
+
+    // T51: letter-spacing
+    {
+        DOMNode* el = probe_node(doc, "ls-wide");
+        probe_check("T51: ls-wide exists", el != nullptr);
+        if (el) probe_check("T51: ls-wide letter_spacing = 5*PANGO_SCALE",
+            el->letter_spacing == 5 * PANGO_SCALE);
+        DOMNode* el2 = probe_node(doc, "ls-inline");
+        probe_check("T51: ls-inline exists", el2 != nullptr);
+        if (el2) probe_check("T51: ls-inline letter_spacing = 3*PANGO_SCALE",
+            el2->letter_spacing == 3 * PANGO_SCALE);
+    }
+
+    // T52: font-variant / white-space
+    {
+        DOMNode* sc = probe_node(doc, "fv-smallcaps");
+        probe_check("T52: fv-smallcaps exists", sc != nullptr);
+        if (sc) probe_check("T52: fv-smallcaps font_variant=1 (small-caps)",
+            sc->font_variant == 1);
+        DOMNode* nw = probe_node(doc, "ws-nowrap");
+        probe_check("T52: ws-nowrap exists", nw != nullptr);
+        if (nw) probe_check("T52: ws-nowrap white_space=1 (nowrap)",
+            nw->white_space == 1);
+        DOMNode* pre = probe_node(doc, "ws-pre");
+        probe_check("T52: ws-pre exists", pre != nullptr);
+        if (pre) probe_check("T52: ws-pre white_space=2 (pre)",
+            pre->white_space == 2);
+    }
+
+    // T53: Semantic tag UA defaults
+    {
+        DOMNode* s = probe_node(doc, "sem-s");
+        probe_check("T53: sem-s exists", s != nullptr);
+        if (s) probe_check("T53: sem-s text_decoration=4 (line-through)",
+            s->text_decoration == 4);
+        DOMNode* del_el = probe_node(doc, "sem-del");
+        probe_check("T53: sem-del exists", del_el != nullptr);
+        if (del_el) probe_check("T53: sem-del text_decoration=4 (line-through)",
+            del_el->text_decoration == 4);
+        DOMNode* u = probe_node(doc, "sem-u");
+        probe_check("T53: sem-u exists", u != nullptr);
+        if (u) probe_check("T53: sem-u text_decoration=1 (underline)",
+            u->text_decoration == 1);
+        DOMNode* ins = probe_node(doc, "sem-ins");
+        probe_check("T53: sem-ins exists", ins != nullptr);
+        if (ins) probe_check("T53: sem-ins text_decoration=1 (underline)",
+            ins->text_decoration == 1);
+        DOMNode* code = probe_node(doc, "sem-code");
+        probe_check("T53: sem-code exists", code != nullptr);
+        if (code) probe_check("T53: sem-code font_family contains 'monospace'",
+            code->font_family.find("monospace") != std::string::npos);
+        DOMNode* kbd = probe_node(doc, "sem-kbd");
+        probe_check("T53: sem-kbd exists", kbd != nullptr);
+        if (kbd) probe_check("T53: sem-kbd font_family contains 'monospace'",
+            kbd->font_family.find("monospace") != std::string::npos);
+        DOMNode* small_el = probe_node(doc, "sem-small");
+        probe_check("T53: sem-small exists", small_el != nullptr);
+        if (small_el) probe_check("T53: sem-small fs_computed < 16 (0.83em)",
+            small_el->fs_computed < 16 && small_el->fs_computed > 0);
+        DOMNode* big_el = probe_node(doc, "sem-big");
+        probe_check("T53: sem-big exists", big_el != nullptr);
+        if (big_el) probe_check("T53: sem-big fs_computed > 16 (1.17em)",
+            big_el->fs_computed > 16);
+        DOMNode* mark = probe_node(doc, "sem-mark");
+        probe_check("T53: sem-mark exists", mark != nullptr);
+        if (mark) probe_check("T53: sem-mark bg_color is yellow",
+            mark->bg_color == "yellow");
+        DOMNode* abbr = probe_node(doc, "sem-abbr");
+        probe_check("T53: sem-abbr exists", abbr != nullptr);
+        if (abbr) {
+            probe_check("T53: sem-abbr text_decoration=1 (underline)",
+                abbr->text_decoration == 1);
+            probe_check("T53: sem-abbr text_decoration_style=2 (dotted)",
+                abbr->text_decoration_style == 2);
+        }
+    }
+
+    // T54: font shorthand
+    {
+        DOMNode* s1 = probe_node(doc, "fs-short1");
+        probe_check("T54: fs-short1 exists", s1 != nullptr);
+        if (s1) {
+            probe_check("T54: fs-short1 fi_computed=ITALIC",
+                s1->fi_computed == PANGO_STYLE_ITALIC);
+            probe_check("T54: fs-short1 fw_computed=BOLD",
+                s1->fw_computed == PANGO_WEIGHT_BOLD);
+            probe_check("T54: fs-short1 fs_computed=20",
+                s1->fs_computed == 20);
+            probe_check("T54: fs-short1 font_family contains 'serif'",
+                s1->font_family.find("serif") != std::string::npos);
+        }
+        DOMNode* s2 = probe_node(doc, "fs-short2");
+        probe_check("T54: fs-short2 exists", s2 != nullptr);
+        if (s2) {
+            probe_check("T54: fs-short2 fs_computed=14",
+                s2->fs_computed == 14);
+            probe_check("T54: fs-short2 font_family contains 'monospace'",
+                s2->font_family.find("monospace") != std::string::npos);
+        }
+    }
+
+    // T55: JS Font Style API (check JS result text)
+    {
+        std::string t = probe_text(doc, "jsfs-result");
+        probe_check("T55: jsfs-result contains PASS",
+            t.find("PASS") != std::string::npos);
+        probe_check("T55: jsfs-result has no FAIL",
+            t.find("FAIL") == std::string::npos);
+    }
+
+    // T56: text-decoration sub-properties
+    {
+        DOMNode* color = probe_node(doc, "td-color");
+        probe_check("T56: td-color exists", color != nullptr);
+        if (color) probe_check("T56: td-color text_decoration_color is 'red'",
+            color->text_decoration_color == "red");
+        DOMNode* style = probe_node(doc, "td-style");
+        probe_check("T56: td-style exists", style != nullptr);
+        if (style) probe_check("T56: td-style text_decoration_style=2 (dotted)",
+            style->text_decoration_style == 2);
+        DOMNode* line = probe_node(doc, "td-line");
+        probe_check("T56: td-line exists", line != nullptr);
+        if (line) probe_check("T56: td-line text_decoration=4 (line-through)",
+            (line->text_decoration & 4) != 0);
+        // JS result
+        std::string t = probe_text(doc, "td-sub-result");
+        probe_check("T56: td-sub-result contains PASS",
+            t.find("PASS") != std::string::npos);
+    }
+
+    // T57: text-indent / text-overflow / word-spacing
+    {
+        DOMNode* ti = probe_node(doc, "ti-30");
+        probe_check("T57: ti-30 exists", ti != nullptr);
+        if (ti) probe_check("T57: ti-30 text_indent=30",
+            ti->text_indent == 30);
+        DOMNode* to_el = probe_node(doc, "to-ellipsis");
+        probe_check("T57: to-ellipsis exists", to_el != nullptr);
+        if (to_el) probe_check("T57: to-ellipsis text_overflow=1",
+            to_el->text_overflow == 1);
+        DOMNode* ws = probe_node(doc, "wsp-wide");
+        probe_check("T57: wsp-wide exists", ws != nullptr);
+        if (ws) probe_check("T57: wsp-wide word_spacing=10",
+            ws->word_spacing == 10);
+        // JS result
+        std::string t = probe_text(doc, "ti-to-result");
+        probe_check("T57: ti-to-result contains PASS",
+            t.find("PASS") != std::string::npos);
+    }
+
+    // T58: font-stretch / text-shadow
+    {
+        DOMNode* fst = probe_node(doc, "fst-condensed");
+        probe_check("T58: fst-condensed exists", fst != nullptr);
+        if (fst) probe_check("T58: fst-condensed font_stretch=CONDENSED",
+            fst->font_stretch == PANGO_STRETCH_CONDENSED);
+        DOMNode* tsh = probe_node(doc, "tsh-shadow");
+        probe_check("T58: tsh-shadow exists", tsh != nullptr);
+        if (tsh) probe_check("T58: tsh-shadow text_shadow not empty",
+            !tsh->text_shadow.empty());
+        // JS result
+        std::string t = probe_text(doc, "fst-tsh-result");
+        probe_check("T58: fst-tsh-result contains PASS",
+            t.find("PASS") != std::string::npos);
+    }
+}
+
 static void run_test_probes(AppState* st) {
     fprintf(stderr, "\n\033[1;36m╔══════════════════════════════════════════╗\033[0m\n");
     fprintf(stderr, "\033[1;36m║     C++ DOM PROBE TEST SUITE             ║\033[0m\n");
@@ -3608,6 +4127,7 @@ static void run_test_probes(AppState* st) {
     run_probes_phase5(st);
     run_probes_phase6(st);
     run_probes_phase7(st);
+    run_probes_phase8(st);
 
     fprintf(stderr, "\n\033[1m═══════════════════════════════════════════\033[0m\n");
     fprintf(stderr, "  Total: %d passed, %d failed, %d total\n",
