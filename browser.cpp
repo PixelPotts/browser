@@ -1819,6 +1819,505 @@ static GtkWidget* make_block(const BoxModel& box, GtkWidget* parent,
     return outer;
 }
 
+// ---- SVG rendering ----
+
+struct SvgStyle {
+    std::string fill = "black";
+    std::string stroke;
+    double stroke_width = 1.0;
+    double opacity = 1.0;
+    double fill_opacity = 1.0;
+    double stroke_opacity = 1.0;
+    std::string font_family = "sans-serif";
+    double font_size = 16.0;
+    std::string text_anchor = "start";
+    int font_weight = 400;
+};
+
+struct SvgPathCmd {
+    char cmd;
+    std::vector<double> args;
+};
+
+struct SvgTransform {
+    double a=1, b=0, c=0, d=1, e=0, f=0;
+    void multiply(const SvgTransform& o) {
+        double na=a*o.a+c*o.b, nb=b*o.a+d*o.b;
+        double nc=a*o.c+c*o.d, nd=b*o.c+d*o.d;
+        double ne=a*o.e+c*o.f+e, nf=b*o.e+d*o.f+f;
+        a=na; b=nb; c=nc; d=nd; e=ne; f=nf;
+    }
+    cairo_matrix_t as_matrix() const {
+        cairo_matrix_t m; cairo_matrix_init(&m, a, b, c, d, e, f); return m;
+    }
+};
+
+struct SvgViewBox {
+    double min_x=0, min_y=0, width=0, height=0;
+    bool valid = false;
+};
+
+static bool svg_parse_color(const std::string& s, double& r, double& g, double& b, double& a) {
+    if (s.empty() || s == "none") return false;
+    GdkRGBA rgba = {0,0,0,1};
+    if (gdk_rgba_parse(&rgba, s.c_str())) {
+        r = rgba.red; g = rgba.green; b = rgba.blue; a = rgba.alpha;
+        return true;
+    }
+    return false;
+}
+
+static double svg_parse_double(const std::string& s, size_t& pos) {
+    while (pos < s.size() && (s[pos]==' '||s[pos]==','||s[pos]=='\t'||s[pos]=='\n'||s[pos]=='\r')) ++pos;
+    if (pos >= s.size()) return 0;
+    size_t start = pos;
+    if (s[pos]=='-'||s[pos]=='+') ++pos;
+    while (pos < s.size() && ((s[pos]>='0'&&s[pos]<='9')||s[pos]=='.')) ++pos;
+    if (pos < s.size() && (s[pos]=='e'||s[pos]=='E')) {
+        ++pos;
+        if (pos < s.size() && (s[pos]=='-'||s[pos]=='+')) ++pos;
+        while (pos < s.size() && s[pos]>='0'&&s[pos]<='9') ++pos;
+    }
+    if (pos == start) return 0;
+    try { return std::stod(s.substr(start, pos-start)); } catch (...) { return 0; }
+}
+
+static SvgViewBox svg_parse_viewbox(const std::string& s) {
+    SvgViewBox vb;
+    if (s.empty()) return vb;
+    size_t pos = 0;
+    vb.min_x = svg_parse_double(s, pos);
+    vb.min_y = svg_parse_double(s, pos);
+    vb.width = svg_parse_double(s, pos);
+    vb.height = svg_parse_double(s, pos);
+    vb.valid = (vb.width > 0 && vb.height > 0);
+    return vb;
+}
+
+static SvgTransform svg_parse_transform(const std::string& s) {
+    SvgTransform result;
+    size_t i = 0;
+    while (i < s.size()) {
+        while (i < s.size() && (s[i]==' '||s[i]==',')) ++i;
+        size_t ns = i;
+        while (i < s.size() && s[i] != '(') ++i;
+        if (i >= s.size()) break;
+        std::string fn = s.substr(ns, i - ns);
+        while (!fn.empty() && fn.back()==' ') fn.pop_back();
+        ++i; // skip (
+        std::vector<double> args;
+        while (i < s.size() && s[i] != ')') {
+            args.push_back(svg_parse_double(s, i));
+        }
+        if (i < s.size()) ++i; // skip )
+
+        SvgTransform t;
+        if (fn == "translate" && args.size() >= 1) {
+            t.e = args[0]; t.f = args.size()>=2 ? args[1] : 0;
+        } else if (fn == "scale" && args.size() >= 1) {
+            t.a = args[0]; t.d = args.size()>=2 ? args[1] : args[0];
+        } else if (fn == "rotate" && args.size() >= 1) {
+            double rad = args[0] * M_PI / 180.0;
+            double co = cos(rad), si = sin(rad);
+            if (args.size() >= 3) {
+                SvgTransform t1; t1.e = args[1]; t1.f = args[2];
+                SvgTransform r; r.a = co; r.b = si; r.c = -si; r.d = co;
+                SvgTransform t2; t2.e = -args[1]; t2.f = -args[2];
+                t1.multiply(r); t1.multiply(t2);
+                t = t1;
+            } else {
+                t.a = co; t.b = si; t.c = -si; t.d = co;
+            }
+        } else if (fn == "skewX" && args.size() >= 1) {
+            t.c = tan(args[0] * M_PI / 180.0);
+        } else if (fn == "skewY" && args.size() >= 1) {
+            t.b = tan(args[0] * M_PI / 180.0);
+        } else if (fn == "matrix" && args.size() >= 6) {
+            t.a=args[0]; t.b=args[1]; t.c=args[2]; t.d=args[3]; t.e=args[4]; t.f=args[5];
+        }
+        result.multiply(t);
+    }
+    return result;
+}
+
+static SvgStyle svg_resolve_style(DOMNode* node) {
+    SvgStyle style;
+    std::vector<DOMNode*> chain;
+    DOMNode* n = node;
+    while (n) {
+        chain.push_back(n);
+        if (n->tag_name == "svg") break;
+        n = n->parent;
+    }
+    for (int i = (int)chain.size()-1; i >= 0; --i) {
+        DOMNode* cur = chain[i];
+        auto get = [&](const char* attr) -> std::string {
+            auto it = cur->attributes.find(attr);
+            if (it != cur->attributes.end()) return it->second;
+            auto sit = cur->attributes.find("style");
+            if (sit != cur->attributes.end()) {
+                std::string v = prop_val(sit->second, attr);
+                if (!v.empty()) return v;
+            }
+            return "";
+        };
+        std::string v;
+        v = get("fill"); if (!v.empty()) style.fill = v;
+        v = get("stroke"); if (!v.empty()) style.stroke = v;
+        v = get("stroke-width"); if (!v.empty()) { try { style.stroke_width = std::stod(v); } catch (...) {} }
+        v = get("opacity"); if (!v.empty()) { try { style.opacity = std::stod(v); } catch (...) {} }
+        v = get("fill-opacity"); if (!v.empty()) { try { style.fill_opacity = std::stod(v); } catch (...) {} }
+        v = get("stroke-opacity"); if (!v.empty()) { try { style.stroke_opacity = std::stod(v); } catch (...) {} }
+        v = get("font-family"); if (!v.empty()) style.font_family = v;
+        v = get("font-size"); if (!v.empty()) { try { style.font_size = std::stod(v); } catch (...) {} }
+        v = get("text-anchor"); if (!v.empty()) style.text_anchor = v;
+        v = get("font-weight"); if (!v.empty()) {
+            if (v == "bold") style.font_weight = 700;
+            else { try { style.font_weight = std::stoi(v); } catch (...) {} }
+        }
+    }
+    return style;
+}
+
+static std::vector<SvgPathCmd> svg_parse_path_d(const std::string& d) {
+    std::vector<SvgPathCmd> cmds;
+    size_t i = 0, n = d.size();
+    char cur_cmd = 'M';
+    while (i < n) {
+        while (i < n && (d[i]==' '||d[i]==','||d[i]=='\t'||d[i]=='\n'||d[i]=='\r')) ++i;
+        if (i >= n) break;
+
+        char c = d[i];
+        if ((c>='A'&&c<='Z') || (c>='a'&&c<='z')) {
+            cur_cmd = c; ++i;
+        }
+        if (cur_cmd == 'Z' || cur_cmd == 'z') {
+            cmds.push_back({cur_cmd, {}});
+            continue;
+        }
+
+        std::vector<double> args;
+        while (i < n) {
+            while (i < n && (d[i]==' '||d[i]==','||d[i]=='\t'||d[i]=='\n'||d[i]=='\r')) ++i;
+            if (i >= n) break;
+            char ch = d[i];
+            if ((ch>='A'&&ch<='Z') || (ch>='a'&&ch<='z')) break;
+            // Arc flag parsing: single digit 0/1 without separator
+            if ((cur_cmd=='A'||cur_cmd=='a') && args.size() >= 3 &&
+                (args.size() % 7 == 3 || args.size() % 7 == 4)) {
+                if (ch == '0' || ch == '1') { args.push_back(ch - '0'); ++i; continue; }
+            }
+            args.push_back(svg_parse_double(d, i));
+        }
+
+        int nargs = 0;
+        switch (cur_cmd) {
+            case 'M': case 'm': case 'L': case 'l': case 'T': case 't': nargs=2; break;
+            case 'H': case 'h': case 'V': case 'v': nargs=1; break;
+            case 'C': case 'c': nargs=6; break;
+            case 'S': case 's': case 'Q': case 'q': nargs=4; break;
+            case 'A': case 'a': nargs=7; break;
+        }
+        if (nargs == 0) {
+            cmds.push_back({cur_cmd, args});
+        } else {
+            for (size_t j = 0; j + (size_t)nargs <= args.size(); j += nargs) {
+                char emit = cur_cmd;
+                if (j > 0 && cur_cmd == 'M') emit = 'L';
+                if (j > 0 && cur_cmd == 'm') emit = 'l';
+                cmds.push_back({emit, std::vector<double>(args.begin()+j, args.begin()+j+nargs)});
+            }
+        }
+    }
+    return cmds;
+}
+
+static void svg_arc_to_cairo(cairo_t* cr, double x1, double y1,
+                              double rx, double ry, double phi_deg,
+                              int large_arc, int sweep, double x2, double y2) {
+    if (rx == 0 || ry == 0) { cairo_line_to(cr, x2, y2); return; }
+    rx = fabs(rx); ry = fabs(ry);
+    double phi = phi_deg * M_PI / 180.0;
+    double cp = cos(phi), sp = sin(phi);
+    double dx = (x1-x2)/2.0, dy = (y1-y2)/2.0;
+    double x1p = cp*dx + sp*dy, y1p = -sp*dx + cp*dy;
+    double lam = (x1p*x1p)/(rx*rx) + (y1p*y1p)/(ry*ry);
+    if (lam > 1) { double sl = sqrt(lam); rx *= sl; ry *= sl; }
+    double num = rx*rx*ry*ry - rx*rx*y1p*y1p - ry*ry*x1p*x1p;
+    double den = rx*rx*y1p*y1p + ry*ry*x1p*x1p;
+    double sq = (den > 0) ? sqrt(fabs(num/den)) : 0;
+    if (large_arc == sweep) sq = -sq;
+    double cxp = sq*rx*y1p/ry, cyp = -sq*ry*x1p/rx;
+    double cx = cp*cxp - sp*cyp + (x1+x2)/2.0;
+    double cy = sp*cxp + cp*cyp + (y1+y2)/2.0;
+    auto angle = [](double ux, double uy, double vx, double vy) -> double {
+        double n = sqrt(ux*ux+uy*uy) * sqrt(vx*vx+vy*vy);
+        if (n == 0) return 0;
+        double c = (ux*vx+uy*vy)/n;
+        c = std::max(-1.0, std::min(1.0, c));
+        double a = acos(c);
+        if (ux*vy - uy*vx < 0) a = -a;
+        return a;
+    };
+    double theta1 = angle(1, 0, (x1p-cxp)/rx, (y1p-cyp)/ry);
+    double dtheta = angle((x1p-cxp)/rx, (y1p-cyp)/ry, (-x1p-cxp)/rx, (-y1p-cyp)/ry);
+    if (!sweep && dtheta > 0) dtheta -= 2*M_PI;
+    if (sweep && dtheta < 0) dtheta += 2*M_PI;
+    cairo_save(cr);
+    cairo_translate(cr, cx, cy);
+    cairo_rotate(cr, phi);
+    cairo_scale(cr, rx, ry);
+    if (dtheta > 0) cairo_arc(cr, 0, 0, 1, theta1, theta1+dtheta);
+    else            cairo_arc_negative(cr, 0, 0, 1, theta1, theta1+dtheta);
+    cairo_restore(cr);
+}
+
+static void svg_render_path_cmds(cairo_t* cr, const std::vector<SvgPathCmd>& cmds) {
+    double cx=0, cy=0, sx=0, sy=0, lcx=0, lcy=0;
+    char last_cmd = 0;
+    for (const auto& cmd : cmds) {
+        switch (cmd.cmd) {
+        case 'M': if (cmd.args.size()>=2) { cx=cmd.args[0]; cy=cmd.args[1]; cairo_move_to(cr,cx,cy); sx=cx; sy=cy; } break;
+        case 'm': if (cmd.args.size()>=2) { cx+=cmd.args[0]; cy+=cmd.args[1]; cairo_move_to(cr,cx,cy); sx=cx; sy=cy; } break;
+        case 'L': if (cmd.args.size()>=2) { cx=cmd.args[0]; cy=cmd.args[1]; cairo_line_to(cr,cx,cy); } break;
+        case 'l': if (cmd.args.size()>=2) { cx+=cmd.args[0]; cy+=cmd.args[1]; cairo_line_to(cr,cx,cy); } break;
+        case 'H': if (cmd.args.size()>=1) { cx=cmd.args[0]; cairo_line_to(cr,cx,cy); } break;
+        case 'h': if (cmd.args.size()>=1) { cx+=cmd.args[0]; cairo_line_to(cr,cx,cy); } break;
+        case 'V': if (cmd.args.size()>=1) { cy=cmd.args[0]; cairo_line_to(cr,cx,cy); } break;
+        case 'v': if (cmd.args.size()>=1) { cy+=cmd.args[0]; cairo_line_to(cr,cx,cy); } break;
+        case 'C': if (cmd.args.size()>=6) {
+            lcx=cmd.args[2]; lcy=cmd.args[3];
+            cairo_curve_to(cr, cmd.args[0],cmd.args[1], lcx,lcy, cmd.args[4],cmd.args[5]);
+            cx=cmd.args[4]; cy=cmd.args[5];
+        } break;
+        case 'c': if (cmd.args.size()>=6) {
+            double x1=cx+cmd.args[0],y1=cy+cmd.args[1]; lcx=cx+cmd.args[2]; lcy=cy+cmd.args[3];
+            double x=cx+cmd.args[4],y=cy+cmd.args[5];
+            cairo_curve_to(cr, x1,y1, lcx,lcy, x,y); cx=x; cy=y;
+        } break;
+        case 'S': if (cmd.args.size()>=4) {
+            double rx1=cx,ry1=cy;
+            if (last_cmd=='C'||last_cmd=='c'||last_cmd=='S'||last_cmd=='s') { rx1=2*cx-lcx; ry1=2*cy-lcy; }
+            lcx=cmd.args[0]; lcy=cmd.args[1];
+            cairo_curve_to(cr, rx1,ry1, lcx,lcy, cmd.args[2],cmd.args[3]);
+            cx=cmd.args[2]; cy=cmd.args[3];
+        } break;
+        case 's': if (cmd.args.size()>=4) {
+            double rx1=cx,ry1=cy;
+            if (last_cmd=='C'||last_cmd=='c'||last_cmd=='S'||last_cmd=='s') { rx1=2*cx-lcx; ry1=2*cy-lcy; }
+            lcx=cx+cmd.args[0]; lcy=cy+cmd.args[1];
+            double x=cx+cmd.args[2],y=cy+cmd.args[3];
+            cairo_curve_to(cr, rx1,ry1, lcx,lcy, x,y); cx=x; cy=y;
+        } break;
+        case 'Q': if (cmd.args.size()>=4) {
+            lcx=cmd.args[0]; lcy=cmd.args[1];
+            double cp1x=cx+2.0/3.0*(lcx-cx), cp1y=cy+2.0/3.0*(lcy-cy);
+            double cp2x=cmd.args[2]+2.0/3.0*(lcx-cmd.args[2]), cp2y=cmd.args[3]+2.0/3.0*(lcy-cmd.args[3]);
+            cairo_curve_to(cr, cp1x,cp1y, cp2x,cp2y, cmd.args[2],cmd.args[3]);
+            cx=cmd.args[2]; cy=cmd.args[3];
+        } break;
+        case 'q': if (cmd.args.size()>=4) {
+            lcx=cx+cmd.args[0]; lcy=cy+cmd.args[1];
+            double x=cx+cmd.args[2],y=cy+cmd.args[3];
+            double cp1x=cx+2.0/3.0*(lcx-cx), cp1y=cy+2.0/3.0*(lcy-cy);
+            double cp2x=x+2.0/3.0*(lcx-x), cp2y=y+2.0/3.0*(lcy-y);
+            cairo_curve_to(cr, cp1x,cp1y, cp2x,cp2y, x,y); cx=x; cy=y;
+        } break;
+        case 'T': if (cmd.args.size()>=2) {
+            if (last_cmd=='Q'||last_cmd=='q'||last_cmd=='T'||last_cmd=='t') { lcx=2*cx-lcx; lcy=2*cy-lcy; }
+            else { lcx=cx; lcy=cy; }
+            double cp1x=cx+2.0/3.0*(lcx-cx), cp1y=cy+2.0/3.0*(lcy-cy);
+            double cp2x=cmd.args[0]+2.0/3.0*(lcx-cmd.args[0]), cp2y=cmd.args[1]+2.0/3.0*(lcy-cmd.args[1]);
+            cairo_curve_to(cr, cp1x,cp1y, cp2x,cp2y, cmd.args[0],cmd.args[1]);
+            cx=cmd.args[0]; cy=cmd.args[1];
+        } break;
+        case 't': if (cmd.args.size()>=2) {
+            if (last_cmd=='Q'||last_cmd=='q'||last_cmd=='T'||last_cmd=='t') { lcx=2*cx-lcx; lcy=2*cy-lcy; }
+            else { lcx=cx; lcy=cy; }
+            double x=cx+cmd.args[0],y=cy+cmd.args[1];
+            double cp1x=cx+2.0/3.0*(lcx-cx), cp1y=cy+2.0/3.0*(lcy-cy);
+            double cp2x=x+2.0/3.0*(lcx-x), cp2y=y+2.0/3.0*(lcy-y);
+            cairo_curve_to(cr, cp1x,cp1y, cp2x,cp2y, x,y); cx=x; cy=y;
+        } break;
+        case 'A': if (cmd.args.size()>=7) {
+            svg_arc_to_cairo(cr, cx,cy, cmd.args[0],cmd.args[1], cmd.args[2],
+                             (int)cmd.args[3],(int)cmd.args[4], cmd.args[5],cmd.args[6]);
+            cx=cmd.args[5]; cy=cmd.args[6];
+        } break;
+        case 'a': if (cmd.args.size()>=7) {
+            double x=cx+cmd.args[5],y=cy+cmd.args[6];
+            svg_arc_to_cairo(cr, cx,cy, cmd.args[0],cmd.args[1], cmd.args[2],
+                             (int)cmd.args[3],(int)cmd.args[4], x,y);
+            cx=x; cy=y;
+        } break;
+        case 'Z': case 'z': cairo_close_path(cr); cx=sx; cy=sy; break;
+        }
+        last_cmd = cmd.cmd;
+    }
+}
+
+static void svg_apply_style(cairo_t* cr, const SvgStyle& style) {
+    double fr, fg, fb, fa;
+    bool has_fill = (style.fill != "none" && svg_parse_color(style.fill, fr, fg, fb, fa));
+    double sr, sg, sb, sa;
+    bool has_stroke = (!style.stroke.empty() && style.stroke != "none" &&
+                       svg_parse_color(style.stroke, sr, sg, sb, sa));
+    if (has_fill) {
+        cairo_set_source_rgba(cr, fr, fg, fb, fa * style.fill_opacity * style.opacity);
+        if (has_stroke) cairo_fill_preserve(cr);
+        else cairo_fill(cr);
+    }
+    if (has_stroke) {
+        cairo_set_source_rgba(cr, sr, sg, sb, sa * style.stroke_opacity * style.opacity);
+        cairo_set_line_width(cr, style.stroke_width);
+        cairo_stroke(cr);
+    }
+    if (!has_fill && !has_stroke) cairo_new_path(cr);
+}
+
+static void svg_render_element(cairo_t* cr, DOMNode* node) {
+    if (node->node_type != DOMNode::ELEMENT) return;
+    const std::string& tag = node->tag_name;
+    if (tag=="defs"||tag=="title"||tag=="desc"||tag=="metadata"||tag=="style") return;
+
+    SvgStyle style = svg_resolve_style(node);
+
+    auto tr_it = node->attributes.find("transform");
+    bool has_transform = (tr_it != node->attributes.end() && !tr_it->second.empty());
+    if (has_transform) {
+        cairo_save(cr);
+        SvgTransform t = svg_parse_transform(tr_it->second);
+        cairo_matrix_t m = t.as_matrix();
+        cairo_transform(cr, &m);
+    }
+
+    auto ga = [&](const char* name) -> double {
+        auto it = node->attributes.find(name);
+        if (it == node->attributes.end()) return 0;
+        try { return std::stod(it->second); } catch (...) { return 0; }
+    };
+
+    if (tag == "g") {
+        for (auto& child : node->children)
+            svg_render_element(cr, child.get());
+    } else if (tag == "rect") {
+        double x=ga("x"), y=ga("y"), w=ga("width"), h=ga("height");
+        double rx=ga("rx"), ry=ga("ry");
+        if (rx==0 && ry>0) rx=ry; if (ry==0 && rx>0) ry=rx;
+        if (rx > w/2) rx = w/2; if (ry > h/2) ry = h/2;
+        if (rx > 0 && ry > 0) {
+            cairo_new_sub_path(cr);
+            cairo_arc(cr, x+w-rx, y+ry,   rx, -M_PI/2, 0);
+            cairo_arc(cr, x+w-rx, y+h-ry, rx, 0,        M_PI/2);
+            cairo_arc(cr, x+rx,   y+h-ry, rx, M_PI/2,   M_PI);
+            cairo_arc(cr, x+rx,   y+ry,   rx, M_PI,      3*M_PI/2);
+            cairo_close_path(cr);
+        } else {
+            cairo_rectangle(cr, x, y, w, h);
+        }
+        svg_apply_style(cr, style);
+    } else if (tag == "circle") {
+        double ccx=ga("cx"), ccy=ga("cy"), r=ga("r");
+        if (r > 0) { cairo_arc(cr, ccx, ccy, r, 0, 2*M_PI); svg_apply_style(cr, style); }
+    } else if (tag == "ellipse") {
+        double ecx=ga("cx"), ecy=ga("cy"), erx=ga("rx"), ery=ga("ry");
+        if (erx > 0 && ery > 0) {
+            cairo_save(cr);
+            cairo_translate(cr, ecx, ecy);
+            cairo_scale(cr, erx, ery);
+            cairo_arc(cr, 0, 0, 1, 0, 2*M_PI);
+            cairo_restore(cr);
+            svg_apply_style(cr, style);
+        }
+    } else if (tag == "line") {
+        cairo_move_to(cr, ga("x1"), ga("y1"));
+        cairo_line_to(cr, ga("x2"), ga("y2"));
+        double sr, sg, sb, sa;
+        if (!style.stroke.empty() && style.stroke != "none" &&
+            svg_parse_color(style.stroke, sr, sg, sb, sa)) {
+            cairo_set_source_rgba(cr, sr, sg, sb, sa * style.stroke_opacity * style.opacity);
+            cairo_set_line_width(cr, style.stroke_width);
+            cairo_stroke(cr);
+        } else cairo_new_path(cr);
+    } else if (tag == "polyline" || tag == "polygon") {
+        auto pts_it = node->attributes.find("points");
+        if (pts_it != node->attributes.end()) {
+            std::vector<double> pts;
+            size_t pos = 0;
+            while (pos < pts_it->second.size())
+                pts.push_back(svg_parse_double(pts_it->second, pos));
+            if (pts.size() >= 4) {
+                cairo_move_to(cr, pts[0], pts[1]);
+                for (size_t j = 2; j+1 < pts.size(); j += 2)
+                    cairo_line_to(cr, pts[j], pts[j+1]);
+                if (tag == "polygon") cairo_close_path(cr);
+                svg_apply_style(cr, style);
+            }
+        }
+    } else if (tag == "path") {
+        auto d_it = node->attributes.find("d");
+        if (d_it != node->attributes.end()) {
+            auto cmds = svg_parse_path_d(d_it->second);
+            svg_render_path_cmds(cr, cmds);
+            svg_apply_style(cr, style);
+        }
+    } else if (tag == "text") {
+        std::string text = node->getTextContent();
+        if (!text.empty()) {
+            double tx=ga("x"), ty=ga("y");
+            cairo_select_font_face(cr, style.font_family.c_str(),
+                CAIRO_FONT_SLANT_NORMAL,
+                style.font_weight >= 700 ? CAIRO_FONT_WEIGHT_BOLD : CAIRO_FONT_WEIGHT_NORMAL);
+            cairo_set_font_size(cr, style.font_size);
+            if (style.text_anchor == "middle" || style.text_anchor == "end") {
+                cairo_text_extents_t ext;
+                cairo_text_extents(cr, text.c_str(), &ext);
+                if (style.text_anchor == "middle") tx -= ext.width / 2.0;
+                else tx -= ext.width;
+            }
+            cairo_move_to(cr, tx, ty);
+            double fr, fg, fb, fa;
+            if (style.fill != "none" && svg_parse_color(style.fill, fr, fg, fb, fa)) {
+                cairo_set_source_rgba(cr, fr, fg, fb, fa * style.fill_opacity * style.opacity);
+                cairo_show_text(cr, text.c_str());
+            }
+        }
+    }
+
+    if (has_transform) cairo_restore(cr);
+}
+
+static gboolean draw_svg(GtkWidget* w, cairo_t* cr, gpointer data) {
+    DOMNode* svg_node = static_cast<DOMNode*>(data);
+    if (!svg_node) return FALSE;
+
+    int widget_w = gtk_widget_get_allocated_width(w);
+    int widget_h = gtk_widget_get_allocated_height(w);
+
+    SvgViewBox vb;
+    auto vb_it = svg_node->attributes.find("viewbox");
+    if (vb_it != svg_node->attributes.end())
+        vb = svg_parse_viewbox(vb_it->second);
+
+    cairo_save(cr);
+    if (vb.valid) {
+        double sx = (double)widget_w / vb.width;
+        double sy = (double)widget_h / vb.height;
+        double scale = std::min(sx, sy);
+        double tx = (widget_w - vb.width * scale) / 2.0;
+        double ty = (widget_h - vb.height * scale) / 2.0;
+        cairo_translate(cr, tx, ty);
+        cairo_scale(cr, scale, scale);
+        cairo_translate(cr, -vb.min_x, -vb.min_y);
+    }
+
+    for (auto& child : svg_node->children)
+        svg_render_element(cr, child.get());
+
+    cairo_restore(cr);
+    return FALSE;
+}
+
 // ---- page fetch ----
 
 static void navigate(AppState* st, const std::string& raw); // forward decl
@@ -2338,6 +2837,38 @@ static void render_node(AppState* st, DOMNode* node, int gen,
     }
 
     // ELEMENT node
+
+    // <svg> — render with Cairo drawing area
+    if (node->tag_name == "svg") {
+        float_rows.back() = nullptr;
+        GtkWidget* cur = cstack.back();
+        int svg_w = 300, svg_h = 150; // SVG spec defaults
+        auto w_it = node->attributes.find("width");
+        auto h_it = node->attributes.find("height");
+        if (w_it != node->attributes.end()) {
+            try { svg_w = (int)std::stod(w_it->second); } catch (...) {}
+        }
+        if (h_it != node->attributes.end()) {
+            try { svg_h = (int)std::stod(h_it->second); } catch (...) {}
+        }
+        if (w_it == node->attributes.end() || h_it == node->attributes.end()) {
+            auto vb_it = node->attributes.find("viewbox");
+            if (vb_it != node->attributes.end()) {
+                SvgViewBox vb = svg_parse_viewbox(vb_it->second);
+                if (vb.valid) {
+                    if (w_it == node->attributes.end()) svg_w = (int)vb.width;
+                    if (h_it == node->attributes.end()) svg_h = (int)vb.height;
+                }
+            }
+        }
+        GtkWidget* da = gtk_drawing_area_new();
+        gtk_widget_set_size_request(da, svg_w, svg_h);
+        g_signal_connect(da, "draw", G_CALLBACK(draw_svg), (gpointer)node);
+        gtk_box_pack_start(GTK_BOX(cur), da, FALSE, FALSE, 2);
+        gtk_widget_show(da);
+        return;
+    }
+
     if (node->tag_name == "img") {
         float_rows.back() = nullptr;
         GtkWidget* cur = cstack.back();
