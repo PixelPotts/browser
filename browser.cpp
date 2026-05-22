@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstring>
+#include <cmath>
 #include <memory>
 #include "dom.h"
 #include "js_engine.h"
@@ -693,7 +694,9 @@ static std::vector<std::string> split_classes(const std::string& s) {
 
 static bool is_void(const std::string& t) {
     static const char* V[]={"area","base","br","col","embed","hr","img",
-                             "input","link","meta","param","source","track","wbr",nullptr};
+                             "input","link","meta","param","source","track","wbr",
+                             "path","circle","ellipse","line","polyline","polygon",
+                             "rect","use","stop",nullptr};
     for (int i=0; V[i]; ++i) if (t==V[i]) return true;
     return false;
 }

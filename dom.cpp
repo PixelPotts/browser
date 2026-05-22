@@ -107,7 +107,9 @@ static void parse_tag_attrs(const std::string& tag_body, DOMNode* node) {
 static bool is_void_element(const std::string& tag) {
     static const char* voids[] = {
         "area","base","br","col","embed","hr","img","input",
-        "link","meta","param","source","track","wbr", nullptr
+        "link","meta","param","source","track","wbr",
+        "path","circle","ellipse","line","polyline","polygon",
+        "rect","use","stop", nullptr
     };
     for (const char** p = voids; *p; ++p)
         if (tag == *p) return true;
