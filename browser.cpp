@@ -1230,6 +1230,23 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
             continue;
         }
 
+        // SVG void elements — need DOM nodes for the SVG renderer
+        if (!closing && (tname=="path"||tname=="circle"||tname=="ellipse"||
+            tname=="line"||tname=="polyline"||tname=="polygon"||
+            tname=="rect"||tname=="use"||tname=="stop")) {
+            auto elem = doc->createElement(tname);
+            elem->attributes = extract_all_attrs(tag);
+            auto id_it = elem->attributes.find("id");
+            elem->id = id_it != elem->attributes.end() ? id_it->second : "";
+            auto cls_it = elem->attributes.find("class");
+            elem->class_list = cls_it != elem->attributes.end() ? split_classes(cls_it->second) : std::vector<std::string>{};
+            cur_parent->children.push_back(elem);
+            elem->parent = cur_parent;
+            doc->registerNode(elem.get());
+            if (!elem->id.empty()) doc->id_map[elem->id] = elem.get();
+            continue;
+        }
+
         if (!closing && !is_void(tname)) {
             int parent_fs = cur_parent ? cur_parent->fs_computed : 16;
             auto elem = doc->createElement(tname);
