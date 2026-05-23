@@ -4265,38 +4265,6 @@ static void fetch_page(AppState* st, TabState* tab, std::string url, int gen) {
         engine->page_url = tab->current_url;
         engine->init(st, tab, doc.get());
 
-        // Debug: trace Test completion
-        engine->eval(R"JS(
-            // Patch Test to trace completion
-            var _origTest = typeof Test !== 'undefined' ? Test : null;
-            if (_origTest) {
-                var _origFinished = _origTest.prototype ? _origTest.prototype.finished : null;
-                if (_origFinished) {
-                    _origTest.prototype.finished = function() {
-                        console.log('[DBG-TEST] Test finished! Calling callback...');
-                        _origFinished.call(this);
-                    };
-                }
-                var _origWait = _origTest.prototype ? _origTest.prototype.waitForBackground : null;
-                if (_origWait) {
-                    _origTest.prototype.checkForBackground = function() {
-                        var running = 0;
-                        for (var task = 0; task < this.backgroundTasks.length; task++) {
-                            if (this.backgroundTasks[task]) {
-                                running++;
-                            }
-                        }
-                        console.log('[DBG-TEST] checkForBackground: running=' + running);
-                        if (running) {
-                            this.waitForBackground();
-                        } else {
-                            this.finished();
-                        }
-                    };
-                }
-            }
-        )JS", "<debug>");
-
         // Wire up inspector console callback if inspector is open
         if (tab->inspector_visible) {
             engine->on_console_entry = [st, tab]() {
@@ -4325,6 +4293,46 @@ static void fetch_page(AppState* st, TabState* tab, std::string url, int gen) {
             engine->current_script_src.clear();
             engine->current_script_node = nullptr;
         }
+
+        // Debug: patch Test (Runner) to trace background tasks
+        engine->eval(R"JS(
+            if (typeof Test !== 'undefined' && Test.prototype) {
+                var _origStart = Test.prototype.startBackground;
+                var _origStop = Test.prototype.stopBackground;
+                var _origFinished = Test.prototype.finished;
+                Test.prototype.startBackground = function(id) {
+                    console.log('[BG] START: ' + id);
+                    return _origStart.call(this, id);
+                };
+                Test.prototype.stopBackground = function(id) {
+                    console.log('[BG] STOP: ' + id);
+                    return _origStop.call(this, id);
+                };
+                Test.prototype.finished = function() {
+                    console.log('[BG] FINISHED - all background tasks done');
+                    return _origFinished.call(this);
+                };
+                Test.prototype.checkForBackground = function() {
+                    var running = 0;
+                    var stuck = [];
+                    for (var task = 0; task < this.backgroundTasks.length; task++) {
+                        if (this.backgroundTasks[task]) {
+                            running++;
+                            // Find key for this task
+                            for (var k in this.backgroundIds) {
+                                if (this.backgroundIds[k] === task) { stuck.push(k); break; }
+                            }
+                        }
+                    }
+                    console.log('[BG] check: running=' + running + (stuck.length ? ' stuck=' + stuck.join(',') : ''));
+                    if (running) {
+                        this.waitForBackground();
+                    } else {
+                        this.finished();
+                    }
+                };
+            }
+        )JS", "<debug>");
 
         // Execute inline scripts
         for (size_t i = 0; i < doc->scripts.size(); i++) {

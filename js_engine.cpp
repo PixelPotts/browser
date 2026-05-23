@@ -274,6 +274,7 @@ static JSValue js_set_timeout(JSContext* ctx, JSValueConst this_val,
     if (delay < 0) delay = 0;
 
     uint32_t id = g_js_engine->setTimeout(JS_DupValue(ctx, func), delay);
+    fprintf(stderr, "[TIMER] setTimeout registered id=%u delay=%dms\n", id, delay);
     return JS_NewInt32(ctx, (int32_t)id);
 }
 
@@ -1074,16 +1075,7 @@ globalThis.IntersectionObserver = function IntersectionObserver(cb, opts) {
     this.thresholds = (opts && opts.threshold) ? [].concat(opts.threshold) : [0];
 };
 
-// Image constructor stub
-globalThis.Image = function Image(w, h) {
-    this.src = '';
-    this.width = w || 0;
-    this.height = h || 0;
-    this.onload = null;
-    this.onerror = null;
-    this.addEventListener = function() {};
-    this.removeEventListener = function() {};
-};
+// Image constructor is provided natively by js_bindings_init
 
 // btoa / atob
 if (typeof globalThis.btoa === 'undefined') {
@@ -1507,6 +1499,7 @@ uint32_t JSEngine::setTimeout(JSValue func, int delay_ms) {
             return G_SOURCE_REMOVE;
         }
         uint32_t timer_id = td->id;
+        fprintf(stderr, "[TIMER] setTimeout id=%u firing (delay was registered)\n", timer_id);
         JSValue func_copy = JS_DupValue(td->engine->ctx, it->second.func);
         JSValue ret = JS_Call(td->engine->ctx, func_copy,
                               JS_UNDEFINED, 0, nullptr);

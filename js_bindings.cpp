@@ -15,6 +15,25 @@
 // Forward declaration
 static bool img_fetch(const std::string& url, std::string& out);
 
+static std::string base64_decode(const std::string& in) {
+    static const unsigned char t[256] = {
+        64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,
+        64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,64,62,64,64,64,63,
+        52,53,54,55,56,57,58,59,60,61,64,64,64,0,64,64,64,0,1,2,3,4,5,6,7,8,9,10,
+        11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,64,64,64,64,64,64,26,27,28,
+        29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51
+    };
+    std::string out;
+    int val = 0, bits = -8;
+    for (unsigned char c : in) {
+        if (c >= 128 || t[c] == 64) continue;
+        val = (val << 6) | t[c];
+        bits += 6;
+        if (bits >= 0) { out.push_back(char((val >> bits) & 0xFF)); bits -= 8; }
+    }
+    return out;
+}
+
 extern "C" {
 #include "quickjs.h"
 }
@@ -1222,13 +1241,14 @@ static JSValue js_image_get_src(JSContext* ctx, JSValueConst this_val) {
     return JS_NewString(ctx, op->src.c_str());
 }
 
-static JSValue js_image_set_src(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+static JSValue js_image_set_src(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* op = (ImageOpaque*)JS_GetOpaque(this_val, js_image_class_id);
-    if (!op) return JS_UNDEFINED;
-    const char* s = JS_ToCString(ctx, val);
+    if (!op || argc < 1) return JS_UNDEFINED;
+    const char* s = JS_ToCString(ctx, argv[0]);
     if (!s) return JS_UNDEFINED;
     op->src = s;
     JS_FreeCString(ctx, s);
+    fprintf(stderr, "[IMG-SRC] set_src called: url='%.60s...' (len=%zu)\n", op->src.c_str(), op->src.size());
 
     // Resolve relative URL
     std::string url = op->src;
@@ -1250,8 +1270,24 @@ static JSValue js_image_set_src(JSContext* ctx, JSValueConst this_val, JSValueCo
         std::string data;
         bool ok = false;
 
-        // Try local file first
-        if (url.substr(0, 7) == "file://" || url[0] == '/') {
+        // Handle data: URLs
+        if (url.size() > 5 && url.substr(0, 5) == "data:") {
+            auto comma = url.find(',');
+            if (comma != std::string::npos) {
+                std::string header = url.substr(5, comma - 5);
+                std::string payload = url.substr(comma + 1);
+                fprintf(stderr, "[IMG] data: URL header='%s' payload_len=%zu\n", header.c_str(), payload.size());
+                if (header.find("base64") != std::string::npos) {
+                    data = base64_decode(payload);
+                } else {
+                    data = payload;
+                }
+                ok = !data.empty();
+                fprintf(stderr, "[IMG] data: decoded %zu bytes, ok=%d\n", data.size(), ok);
+            }
+        }
+        // Try local file
+        else if (url.substr(0, 7) == "file://" || url[0] == '/') {
             std::string path = (url.substr(0, 7) == "file://") ? url.substr(7) : url;
             FILE* f = fopen(path.c_str(), "rb");
             if (f) {
@@ -1295,7 +1331,9 @@ static JSValue js_image_set_src(JSContext* ctx, JSValueConst this_val, JSValueCo
         }
 
         // Fire onload/onerror on main thread
+        fprintf(stderr, "[IMG] scheduling g_idle_add callback, complete=%d\n", op->complete);
         g_idle_add([](gpointer data) -> gboolean {
+            fprintf(stderr, "[IMG] g_idle_add callback firing\n");
             auto* info = static_cast<std::pair<ImageOpaque*, std::pair<JSValue, JSEngine*>>*>(data);
             auto* op = info->first;
             JSValue obj_ref = info->second.first;
@@ -1342,11 +1380,11 @@ static JSValue js_image_get_onload(JSContext* ctx, JSValueConst this_val) {
     return op ? JS_DupValue(ctx, op->onload) : JS_UNDEFINED;
 }
 
-static JSValue js_image_set_onload(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+static JSValue js_image_set_onload(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* op = (ImageOpaque*)JS_GetOpaque(this_val, js_image_class_id);
-    if (!op) return JS_UNDEFINED;
+    if (!op || argc < 1) return JS_UNDEFINED;
     JS_FreeValue(ctx, op->onload);
-    op->onload = JS_DupValue(ctx, val);
+    op->onload = JS_DupValue(ctx, argv[0]);
     return JS_UNDEFINED;
 }
 
@@ -1355,11 +1393,11 @@ static JSValue js_image_get_onerror(JSContext* ctx, JSValueConst this_val) {
     return op ? JS_DupValue(ctx, op->onerror) : JS_UNDEFINED;
 }
 
-static JSValue js_image_set_onerror(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+static JSValue js_image_set_onerror(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* op = (ImageOpaque*)JS_GetOpaque(this_val, js_image_class_id);
-    if (!op) return JS_UNDEFINED;
+    if (!op || argc < 1) return JS_UNDEFINED;
     JS_FreeValue(ctx, op->onerror);
-    op->onerror = JS_DupValue(ctx, val);
+    op->onerror = JS_DupValue(ctx, argv[0]);
     return JS_UNDEFINED;
 }
 
@@ -1942,7 +1980,7 @@ void js_bindings_init(JSEngine* engine) {
         JSValue img_proto = JS_NewObject(ctx);
         JS_DefinePropertyGetSet(ctx, img_proto, JS_NewAtom(ctx, "src"),
             JS_NewCFunction(ctx, (JSCFunction*)js_image_get_src, "get src", 0),
-            JS_NewCFunction(ctx, (JSCFunction*)js_image_set_src, "set src", 1),
+            JS_NewCFunction(ctx, js_image_set_src, "set src", 1),
             JS_PROP_CONFIGURABLE);
         JS_DefinePropertyGetSet(ctx, img_proto, JS_NewAtom(ctx, "width"),
             JS_NewCFunction(ctx, (JSCFunction*)js_image_get_width, "get width", 0),
@@ -1961,11 +1999,11 @@ void js_bindings_init(JSEngine* engine) {
             JS_UNDEFINED, JS_PROP_CONFIGURABLE);
         JS_DefinePropertyGetSet(ctx, img_proto, JS_NewAtom(ctx, "onload"),
             JS_NewCFunction(ctx, (JSCFunction*)js_image_get_onload, "get onload", 0),
-            JS_NewCFunction(ctx, (JSCFunction*)js_image_set_onload, "set onload", 1),
+            JS_NewCFunction(ctx, js_image_set_onload, "set onload", 1),
             JS_PROP_CONFIGURABLE);
         JS_DefinePropertyGetSet(ctx, img_proto, JS_NewAtom(ctx, "onerror"),
             JS_NewCFunction(ctx, (JSCFunction*)js_image_get_onerror, "get onerror", 0),
-            JS_NewCFunction(ctx, (JSCFunction*)js_image_set_onerror, "set onerror", 1),
+            JS_NewCFunction(ctx, js_image_set_onerror, "set onerror", 1),
             JS_PROP_CONFIGURABLE);
         JS_SetClassProto(ctx, js_image_class_id, img_proto);
 
