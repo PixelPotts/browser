@@ -2346,15 +2346,16 @@ if (typeof HTMLLabelElement !== 'undefined') {
     });
 })();
 
-// details element: open property
+// details element: open property bridges to DOM attribute
 if (typeof HTMLDetailsElement !== 'undefined') {
-    if (!('open' in HTMLDetailsElement.prototype)) {
-        Object.defineProperty(HTMLDetailsElement.prototype, 'open', {
-            get: function() { return this._open || false; },
-            set: function(v) { this._open = !!v; },
-            configurable: true
-        });
-    }
+    Object.defineProperty(HTMLDetailsElement.prototype, 'open', {
+        get: function() { return this.hasAttribute ? this.hasAttribute('open') : false; },
+        set: function(v) {
+            if (v) { if (this.setAttribute) this.setAttribute('open', ''); }
+            else { if (this.removeAttribute) this.removeAttribute('open'); }
+        },
+        configurable: true
+    });
 }
 
 // Fullscreen API stubs
