@@ -205,6 +205,44 @@ static std::string decode_html_entities(const std::string& s) {
     return r;
 }
 
+// HTML5 tree construction helpers
+static bool is_formatting_element(const std::string& tag) {
+    return tag == "a" || tag == "b" || tag == "big" || tag == "code" ||
+           tag == "em" || tag == "font" || tag == "i" || tag == "nobr" ||
+           tag == "s" || tag == "small" || tag == "strike" || tag == "strong" ||
+           tag == "tt" || tag == "u";
+}
+
+static bool is_special_element(const std::string& tag) {
+    return tag == "address" || tag == "applet" || tag == "area" || tag == "article" ||
+           tag == "aside" || tag == "base" || tag == "basefont" || tag == "bgsound" ||
+           tag == "blockquote" || tag == "body" || tag == "br" || tag == "button" ||
+           tag == "caption" || tag == "center" || tag == "col" || tag == "colgroup" ||
+           tag == "dd" || tag == "details" || tag == "dir" || tag == "div" ||
+           tag == "dl" || tag == "dt" || tag == "embed" || tag == "fieldset" ||
+           tag == "figcaption" || tag == "figure" || tag == "footer" || tag == "form" ||
+           tag == "frame" || tag == "frameset" || tag == "h1" || tag == "h2" ||
+           tag == "h3" || tag == "h4" || tag == "h5" || tag == "h6" ||
+           tag == "head" || tag == "header" || tag == "hgroup" || tag == "hr" ||
+           tag == "html" || tag == "iframe" || tag == "img" || tag == "input" ||
+           tag == "li" || tag == "link" || tag == "listing" || tag == "main" ||
+           tag == "marquee" || tag == "menu" || tag == "meta" || tag == "nav" ||
+           tag == "noembed" || tag == "noframes" || tag == "noscript" || tag == "object" ||
+           tag == "ol" || tag == "p" || tag == "param" || tag == "pre" ||
+           tag == "script" || tag == "section" || tag == "select" || tag == "source" ||
+           tag == "style" || tag == "summary" || tag == "table" || tag == "tbody" ||
+           tag == "td" || tag == "template" || tag == "textarea" || tag == "tfoot" ||
+           tag == "th" || tag == "thead" || tag == "title" || tag == "tr" ||
+           tag == "track" || tag == "ul" || tag == "wbr" || tag == "xmp";
+}
+
+static bool is_table_child_element(const std::string& tag) {
+    return tag == "caption" || tag == "colgroup" || tag == "col" ||
+           tag == "thead" || tag == "tfoot" || tag == "tbody" ||
+           tag == "tr" || tag == "th" || tag == "td" ||
+           tag == "script" || tag == "template" || tag == "style";
+}
+
 void DOMNode::setInnerHTML(const std::string& html, uint32_t& next_id,
                            std::unordered_map<uint32_t, DOMNode*>& node_map,
                            std::unordered_map<std::string, DOMNode*>& id_map) {
@@ -221,7 +259,6 @@ void DOMNode::setInnerHTML(const std::string& html, uint32_t& next_id,
     children.clear();
 
     if (html.empty()) {
-        // Special case: setting innerHTML="" on <html> creates HEAD + BODY
         if (tag_name == "html") {
             auto head = std::make_shared<DOMNode>();
             head->node_id = next_id++;
@@ -241,8 +278,225 @@ void DOMNode::setInnerHTML(const std::string& html, uint32_t& next_id,
         markDirty(); return;
     }
 
-    // Simple HTML fragment parser
+    // HTML5 tree construction state
+    std::vector<DOMNode*> open_elements;
+    std::vector<DOMNode*> active_formatting;
+    std::unordered_map<DOMNode*, std::shared_ptr<DOMNode>> ptr_map;
+
     DOMNode* cur = this;
+    open_elements.push_back(this);
+
+    // Helper: find node in a vector, return index or -1
+    auto find_in = [](const std::vector<DOMNode*>& v, DOMNode* n) -> int {
+        for (int i = (int)v.size() - 1; i >= 0; i--)
+            if (v[i] == n) return i;
+        return -1;
+    };
+
+    // Helper: detach node from its parent's children vector
+    auto detach_from_parent = [&](DOMNode* node) {
+        if (!node->parent) return;
+        auto& siblings = node->parent->children;
+        for (auto it = siblings.begin(); it != siblings.end(); ++it) {
+            if (it->get() == node) { siblings.erase(it); break; }
+        }
+        node->parent = nullptr;
+    };
+
+    // Helper: get or create shared_ptr for a node
+    auto get_sp = [&](DOMNode* node) -> std::shared_ptr<DOMNode> {
+        auto it = ptr_map.find(node);
+        if (it != ptr_map.end()) return it->second;
+        return nullptr;
+    };
+
+    // Helper: append child (with shared_ptr) to parent
+    auto append_child = [&](DOMNode* child, DOMNode* parent) {
+        auto sp = get_sp(child);
+        if (!sp) return;
+        detach_from_parent(child);
+        child->parent = parent;
+        parent->children.push_back(sp);
+    };
+
+    // Helper: create a clone of an element (for adoption agency)
+    auto clone_elem = [&](DOMNode* orig) -> std::shared_ptr<DOMNode> {
+        auto elem = std::make_shared<DOMNode>();
+        elem->node_id = next_id++;
+        elem->node_type = DOMNode::ELEMENT;
+        elem->tag_name = orig->tag_name;
+        elem->attributes = orig->attributes;
+        elem->fw_computed = orig->fw_computed;
+        elem->fi_computed = orig->fi_computed;
+        elem->fs_computed = orig->fs_computed;
+        node_map[elem->node_id] = elem.get();
+        ptr_map[elem.get()] = elem;
+        return elem;
+    };
+
+    // Helper: insert element before table for foster parenting
+    auto foster_parent_elem = [&](std::shared_ptr<DOMNode>& elem) {
+        DOMNode* table = nullptr;
+        for (int i = (int)open_elements.size() - 1; i >= 0; i--) {
+            if (open_elements[i]->tag_name == "table") { table = open_elements[i]; break; }
+        }
+        if (!table || !table->parent) {
+            elem->parent = cur;
+            cur->children.push_back(elem);
+            return;
+        }
+        DOMNode* tp = table->parent;
+        auto& sibs = tp->children;
+        auto it = std::find_if(sibs.begin(), sibs.end(),
+                               [table](const auto& sp) { return sp.get() == table; });
+        elem->parent = tp;
+        if (it != sibs.end()) sibs.insert(it, elem);
+        else sibs.push_back(elem);
+    };
+
+    // Check if currently inside a table element in the open elements stack
+    auto in_table_scope = [&]() -> bool {
+        for (int i = (int)open_elements.size() - 1; i > 0; i--) {
+            const auto& t = open_elements[i]->tag_name;
+            if (t == "table") return true;
+            if (t == "td" || t == "th" || t == "caption" || t == "template") return false;
+        }
+        return false;
+    };
+
+    // Adoption agency algorithm
+    auto run_adoption_agency = [&](const std::string& subject) {
+        // Quick check: if current node has the tag and is NOT in active formatting, just pop
+        if (!open_elements.empty() && open_elements.back()->tag_name == subject) {
+            if (find_in(active_formatting, open_elements.back()) < 0) {
+                open_elements.pop_back();
+                cur = open_elements.empty() ? this : open_elements.back();
+                return;
+            }
+        }
+
+        for (int outer = 0; outer < 8; outer++) {
+            // Find formatting element (last in active_formatting with matching tag)
+            DOMNode* fmt_elem = nullptr;
+            int fmt_idx = -1;
+            for (int i = (int)active_formatting.size() - 1; i >= 0; i--) {
+                if (active_formatting[i] && active_formatting[i]->tag_name == subject) {
+                    fmt_elem = active_formatting[i]; fmt_idx = i; break;
+                }
+            }
+            if (!fmt_elem) {
+                // "Any other end tag": walk up and pop if found
+                for (int i = (int)open_elements.size() - 1; i > 0; i--) {
+                    if (open_elements[i]->tag_name == subject) {
+                        open_elements.erase(open_elements.begin() + i);
+                        cur = open_elements.empty() ? this : open_elements.back();
+                        return;
+                    }
+                    if (is_special_element(open_elements[i]->tag_name)) break;
+                }
+                return;
+            }
+
+            int stack_idx = find_in(open_elements, fmt_elem);
+            if (stack_idx < 0) {
+                active_formatting.erase(active_formatting.begin() + fmt_idx);
+                return;
+            }
+
+            // Find furthest block (first special element after fmt_elem in stack)
+            DOMNode* furthest_block = nullptr;
+            int furthest_idx = -1;
+            for (int i = stack_idx + 1; i < (int)open_elements.size(); i++) {
+                if (is_special_element(open_elements[i]->tag_name)) {
+                    furthest_block = open_elements[i]; furthest_idx = i; break;
+                }
+            }
+
+            if (!furthest_block) {
+                // Pop everything including fmt_elem
+                while ((int)open_elements.size() > stack_idx)
+                    open_elements.pop_back();
+                active_formatting.erase(active_formatting.begin() + fmt_idx);
+                cur = open_elements.empty() ? this : open_elements.back();
+                return;
+            }
+
+            DOMNode* common_ancestor = (stack_idx > 0) ? open_elements[stack_idx - 1] : this;
+            int bookmark = fmt_idx;
+
+            DOMNode* last_node = furthest_block;
+            int node_idx = furthest_idx;
+
+            for (int inner = 1; inner <= 3; inner++) {
+                node_idx--;
+                if (node_idx <= 0) break;
+                DOMNode* node = open_elements[node_idx];
+
+                if (node == fmt_elem) break;
+
+                int node_fmt_idx = find_in(active_formatting, node);
+                if (node_fmt_idx < 0) {
+                    // Remove from stack, adjust indices
+                    open_elements.erase(open_elements.begin() + node_idx);
+                    furthest_idx--;
+                    continue;
+                }
+
+                // Create new element clone
+                auto new_elem = clone_elem(node);
+                active_formatting[node_fmt_idx] = new_elem.get();
+                open_elements[node_idx] = new_elem.get();
+                node = new_elem.get();
+
+                if (last_node == furthest_block)
+                    bookmark = node_fmt_idx + 1;
+
+                // Append last_node to node
+                append_child(last_node, node);
+                last_node = node;
+            }
+
+            // Insert last_node into common ancestor
+            append_child(last_node, common_ancestor);
+
+            // Create new element for fmt_elem's token
+            auto new_fmt = clone_elem(fmt_elem);
+
+            // Move all children of furthest_block to new_fmt
+            while (!furthest_block->children.empty()) {
+                auto child_sp = furthest_block->children[0];
+                furthest_block->children.erase(furthest_block->children.begin());
+                child_sp->parent = new_fmt.get();
+                new_fmt->children.push_back(child_sp);
+            }
+
+            // Append new_fmt to furthest_block
+            new_fmt->parent = furthest_block;
+            furthest_block->children.push_back(new_fmt);
+
+            // Update formatting list
+            active_formatting.erase(active_formatting.begin() + fmt_idx);
+            int ins_pos = bookmark;
+            if (fmt_idx < bookmark) ins_pos--;
+            if (ins_pos < 0) ins_pos = 0;
+            if (ins_pos > (int)active_formatting.size()) ins_pos = active_formatting.size();
+            active_formatting.insert(active_formatting.begin() + ins_pos, new_fmt.get());
+
+            // Update stack: remove fmt_elem, insert new_fmt after furthest_block
+            int fmt_si = find_in(open_elements, fmt_elem);
+            if (fmt_si >= 0) {
+                open_elements.erase(open_elements.begin() + fmt_si);
+                // Recalculate furthest_block position after removal
+                int fb_si = find_in(open_elements, furthest_block);
+                if (fb_si >= 0 && fb_si + 1 <= (int)open_elements.size())
+                    open_elements.insert(open_elements.begin() + fb_si + 1, new_fmt.get());
+            }
+
+            cur = open_elements.empty() ? this : open_elements.back();
+        }
+    };
+
+    // Main tokenizer + tree construction loop
     size_t i = 0;
     size_t len = html.size();
 
@@ -265,6 +519,7 @@ void DOMNode::setInnerHTML(const std::string& html, uint32_t& next_id,
                 cn->text_content = ctext;
                 cn->parent = cur;
                 node_map[cn->node_id] = cn.get();
+                ptr_map[cn.get()] = cn;
                 cur->children.push_back(cn);
                 continue;
             }
@@ -276,9 +531,9 @@ void DOMNode::setInnerHTML(const std::string& html, uint32_t& next_id,
                 continue;
             }
 
-            // CDATA: <![CDATA[...]]> → comment node in HTML context
+            // CDATA: <![CDATA[...]]> → comment node
             if (i + 6 < len && html.substr(i, 7) == "![CDATA") {
-                size_t start = i + 1; // skip '!'
+                size_t start = i + 1;
                 size_t end = html.find(">", i);
                 std::string content;
                 if (end != std::string::npos) { content = html.substr(start, end - start); i = end + 1; }
@@ -290,13 +545,14 @@ void DOMNode::setInnerHTML(const std::string& html, uint32_t& next_id,
                 cn->text_content = content;
                 cn->parent = cur;
                 node_map[cn->node_id] = cn.get();
+                ptr_map[cn.get()] = cn;
                 cur->children.push_back(cn);
                 continue;
             }
 
-            // Processing instruction: <?...> → comment node in HTML context
+            // Processing instruction: <?...> → comment node
             if (html[i] == '?') {
-                size_t start = i; // include the '?'
+                size_t start = i;
                 size_t end = html.find(">", i);
                 std::string content;
                 if (end != std::string::npos) { content = html.substr(start, end - start); i = end + 1; }
@@ -308,6 +564,7 @@ void DOMNode::setInnerHTML(const std::string& html, uint32_t& next_id,
                 cn->text_content = content;
                 cn->parent = cur;
                 node_map[cn->node_id] = cn.get();
+                ptr_map[cn.get()] = cn;
                 cur->children.push_back(cn);
                 continue;
             }
@@ -318,58 +575,100 @@ void DOMNode::setInnerHTML(const std::string& html, uint32_t& next_id,
                 size_t ns = i;
                 while (i < len && html[i] != '>') i++;
                 std::string close_tag = str_lower(html.substr(ns, i - ns));
-                // Trim whitespace
                 while (!close_tag.empty() && isspace((unsigned char)close_tag.back()))
                     close_tag.pop_back();
-                if (i < len) i++; // skip >
+                if (i < len) i++;
                 fprintf(stderr, "[DEBUG setInnerHTML]   close </%s> cur now=<%s>\n",
                         close_tag.c_str(), cur->tag_name.c_str());
-                // Walk up to find matching open tag
-                DOMNode* p = cur;
-                while (p && p != this && p->tag_name != close_tag)
-                    p = p->parent;
-                if (p && p != this)
-                    cur = p->parent ? p->parent : this;
+
+                if (is_formatting_element(close_tag)) {
+                    // Run adoption agency algorithm
+                    run_adoption_agency(close_tag);
+                } else if (close_tag == "form" && in_table_scope()) {
+                    // Ignore </form> in table context
+                } else {
+                    // Walk up stack to find matching element, pop everything above it
+                    for (int si = (int)open_elements.size() - 1; si > 0; si--) {
+                        if (open_elements[si]->tag_name == close_tag) {
+                            open_elements.erase(open_elements.begin() + si, open_elements.end());
+                            cur = open_elements.empty() ? this : open_elements.back();
+                            break;
+                        }
+                    }
+                }
                 continue;
             }
 
             // Opening tag
             size_t ts = i;
             while (i < len && html[i] != '>' && !isspace((unsigned char)html[i])) i++;
-            std::string tag_name = str_lower(html.substr(ts, i - ts));
+            std::string otag = str_lower(html.substr(ts, i - ts));
 
             // Collect full tag body until >
             while (i < len && html[i] != '>') i++;
             std::string tag_body = html.substr(ts, i - ts);
             bool self_close = (!tag_body.empty() && tag_body.back() == '/');
             if (self_close) tag_body.pop_back();
-            if (i < len) i++; // skip >
+            if (i < len) i++;
 
             auto elem = std::make_shared<DOMNode>();
             elem->node_id = next_id++;
             elem->node_type = ELEMENT;
-            elem->tag_name = tag_name;
+            elem->tag_name = otag;
             elem->parent = cur;
             parse_tag_attrs(tag_body, elem.get());
 
-            // Apply UA defaults for bold/italic/heading tags
-            if (is_bold_tag(tag_name)) {
-                elem->fw_computed = 700; // PANGO_WEIGHT_BOLD
-                fprintf(stderr, "[DEBUG setInnerHTML]   <%s> -> fw_computed=700 (bold)\n", tag_name.c_str());
+            if (is_bold_tag(otag)) {
+                elem->fw_computed = 700;
+                fprintf(stderr, "[DEBUG setInnerHTML]   <%s> -> fw_computed=700 (bold)\n", otag.c_str());
             }
-            if (is_italic_tag(tag_name)) {
-                elem->fi_computed = 2; // PANGO_STYLE_ITALIC
-                fprintf(stderr, "[DEBUG setInnerHTML]   <%s> -> fi_computed=2 (italic)\n", tag_name.c_str());
+            if (is_italic_tag(otag)) {
+                elem->fi_computed = 2;
+                fprintf(stderr, "[DEBUG setInnerHTML]   <%s> -> fi_computed=2 (italic)\n", otag.c_str());
             }
-            int hsz = heading_font_size(tag_name);
+            int hsz = heading_font_size(otag);
             if (hsz > 0) elem->fs_computed = hsz;
 
             node_map[elem->node_id] = elem.get();
             if (!elem->id.empty()) id_map[elem->id] = elem.get();
+            ptr_map[elem.get()] = elem;
 
             fprintf(stderr, "[DEBUG setInnerHTML]   open <%s> id=%u fw=%d fs=%d parent=<%s>\n",
-                    tag_name.c_str(), elem->node_id, elem->fw_computed, elem->fs_computed,
+                    otag.c_str(), elem->node_id, elem->fw_computed, elem->fs_computed,
                     cur->tag_name.c_str());
+
+            // Foster parenting: if in table context and element is not table-compatible
+            if (cur->tag_name == "table" && in_table_scope()) {
+                if (otag == "form") {
+                    // Add form to table, don't push to stack
+                    elem->parent = cur;
+                    cur->children.push_back(elem);
+                    continue;
+                }
+                if (otag == "input") {
+                    auto type_it = elem->attributes.find("type");
+                    bool is_hidden = (type_it != elem->attributes.end() &&
+                                      str_lower(type_it->second) == "hidden");
+                    if (is_hidden) {
+                        // Hidden input stays in table
+                        elem->parent = cur;
+                        cur->children.push_back(elem);
+                        continue;
+                    }
+                    // Non-hidden input: foster parent
+                    foster_parent_elem(elem);
+                    continue;
+                }
+                if (!is_table_child_element(otag) && otag != "table") {
+                    // Foster parent this element
+                    foster_parent_elem(elem);
+                    if (!self_close && !is_void_element(otag)) {
+                        open_elements.push_back(elem.get());
+                        cur = elem.get();
+                    }
+                    continue;
+                }
+            }
 
             // Implicit closing: certain elements close an open <p>
             static const char* p_closers[] = {
@@ -383,22 +682,30 @@ void DOMNode::setInnerHTML(const std::string& html, uint32_t& next_id,
             if (cur->tag_name == "p") {
                 bool closes_p = false;
                 for (int ci = 0; p_closers[ci]; ci++) {
-                    if (tag_name == p_closers[ci]) { closes_p = true; break; }
+                    if (otag == p_closers[ci]) { closes_p = true; break; }
                 }
-                if (closes_p && cur->parent) {
-                    cur = cur->parent; // close the <p>
+                if (closes_p) {
+                    // Pop <p> from stack
+                    int p_idx = find_in(open_elements, cur);
+                    if (p_idx > 0) {
+                        open_elements.erase(open_elements.begin() + p_idx, open_elements.end());
+                        cur = open_elements.empty() ? this : open_elements.back();
+                    } else if (cur->parent) {
+                        cur = cur->parent;
+                    }
                     elem->parent = cur;
                 }
             }
 
             // Table: auto-wrap <col> in <colgroup>
-            if (tag_name == "col" && cur->tag_name == "table") {
+            if (otag == "col" && cur->tag_name == "table") {
                 auto colgroup = std::make_shared<DOMNode>();
                 colgroup->node_id = next_id++;
                 colgroup->node_type = ELEMENT;
                 colgroup->tag_name = "colgroup";
                 colgroup->parent = cur;
                 node_map[colgroup->node_id] = colgroup.get();
+                ptr_map[colgroup.get()] = colgroup;
                 cur->children.push_back(colgroup);
                 elem->parent = colgroup.get();
                 colgroup->children.push_back(elem);
@@ -407,11 +714,11 @@ void DOMNode::setInnerHTML(const std::string& html, uint32_t& next_id,
 
             cur->children.push_back(elem);
 
-            if (!self_close && !is_void_element(tag_name)) {
+            if (!self_close && !is_void_element(otag)) {
                 // Raw text elements: content until matching close tag is not parsed
-                if (tag_name == "textarea" || tag_name == "style" || tag_name == "script" ||
-                    tag_name == "title" || tag_name == "xmp") {
-                    std::string close_pat = "</" + tag_name;
+                if (otag == "textarea" || otag == "style" || otag == "script" ||
+                    otag == "title" || otag == "xmp") {
+                    std::string close_pat = "</" + otag;
                     size_t end = std::string::npos;
                     for (size_t s = i; s + close_pat.size() <= len; s++) {
                         bool match = true;
@@ -440,10 +747,17 @@ void DOMNode::setInnerHTML(const std::string& html, uint32_t& next_id,
                         tn->text_content = raw;
                         tn->parent = elem.get();
                         node_map[tn->node_id] = tn.get();
+                        ptr_map[tn.get()] = tn;
                         elem->children.push_back(tn);
                     }
                 } else {
+                    open_elements.push_back(elem.get());
                     cur = elem.get();
+
+                    // If formatting element, add to active formatting list
+                    if (is_formatting_element(otag)) {
+                        active_formatting.push_back(elem.get());
+                    }
                 }
             }
         } else {
@@ -470,6 +784,7 @@ void DOMNode::setInnerHTML(const std::string& html, uint32_t& next_id,
                 tn->text_content = text;
                 tn->parent = cur;
                 node_map[tn->node_id] = tn.get();
+                ptr_map[tn.get()] = tn;
                 cur->children.push_back(tn);
                 fprintf(stderr, "[DEBUG setInnerHTML]   text '%s' parent=<%s> parent_fw=%d\n",
                         text.c_str(), cur->tag_name.c_str(), cur->fw_computed);

@@ -257,6 +257,26 @@ static JSValue js_element_get_tagName(JSContext* ctx, JSValueConst this_val) {
     return JS_NewString(ctx, upper.c_str());
 }
 
+static JSValue js_element_get_namespaceURI(JSContext* ctx, JSValueConst this_val) {
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node || node->node_type != DOMNode::ELEMENT) return JS_NULL;
+    // SVG elements
+    if (node->tag_name == "svg" || node->tag_name == "path" || node->tag_name == "circle" ||
+        node->tag_name == "rect" || node->tag_name == "line" || node->tag_name == "polyline" ||
+        node->tag_name == "polygon" || node->tag_name == "text" || node->tag_name == "g" ||
+        node->tag_name == "defs" || node->tag_name == "use" || node->tag_name == "clippath" ||
+        node->tag_name == "mask" || node->tag_name == "filter" || node->tag_name == "image" ||
+        node->tag_name == "foreignobject")
+        return JS_NewString(ctx, "http://www.w3.org/2000/svg");
+    // MathML elements
+    if (node->tag_name == "math" || node->tag_name == "mspace" || node->tag_name == "mrow" ||
+        node->tag_name == "mi" || node->tag_name == "mn" || node->tag_name == "mo" ||
+        node->tag_name == "msup" || node->tag_name == "msub" || node->tag_name == "mfrac")
+        return JS_NewString(ctx, "http://www.w3.org/1998/Math/MathML");
+    // All other elements are HTML
+    return JS_NewString(ctx, "http://www.w3.org/1999/xhtml");
+}
+
 static JSValue js_element_get_nodeName(JSContext* ctx, JSValueConst this_val) {
     DOMNode* node = js_get_node(ctx, this_val);
     if (!node) return JS_UNDEFINED;
@@ -2202,6 +2222,10 @@ void js_bindings_init(JSEngine* engine) {
         JS_NewAtom(ctx, "tagName"),
         JS_NewCFunction(ctx, (JSCFunction*)js_element_get_tagName, "get tagName", 0),
         JS_NewCFunction(ctx, js_noop_setter, "set tagName", 1), JS_PROP_CONFIGURABLE);
+    JS_DefinePropertyGetSet(ctx, elem_proto,
+        JS_NewAtom(ctx, "namespaceURI"),
+        JS_NewCFunction(ctx, (JSCFunction*)js_element_get_namespaceURI, "get namespaceURI", 0),
+        JS_NewCFunction(ctx, js_noop_setter, "set namespaceURI", 1), JS_PROP_CONFIGURABLE);
     JS_DefinePropertyGetSet(ctx, elem_proto,
         JS_NewAtom(ctx, "nodeName"),
         JS_NewCFunction(ctx, (JSCFunction*)js_element_get_nodeName, "get nodeName", 0),
