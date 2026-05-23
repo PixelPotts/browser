@@ -4,6 +4,13 @@
 #include "dom.h"
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
+#include <thread>
+#include <string>
+#include <unordered_map>
+#include <curl/curl.h>
+#include <cairo/cairo.h>
+#include <gdk/gdk.h>
 
 extern "C" {
 #include "quickjs.h"
@@ -15,6 +22,8 @@ static JSClassID js_element_class_id = 0;
 static JSClassID js_nodelist_class_id = 0;
 static JSClassID js_style_class_id = 0;
 static JSClassID js_classlist_class_id = 0;
+static JSClassID js_image_class_id = 0;
+static JSClassID js_canvas_ctx_class_id = 0;
 
 // Opaque: store node_id (not raw pointer) for safety
 struct ElementOpaque {
@@ -721,6 +730,7 @@ static const char* STYLE_PROPS[] = {
     "textDecorationColor", "textDecorationStyle", "textDecorationLine",
     "fontVariant", "whiteSpace", "textIndent", "textOverflow",
     "textShadow", "fontStretch",
+    "backgroundPosition", "backgroundImage", "backgroundSize", "backgroundRepeat",
     nullptr
 };
 
@@ -1096,6 +1106,467 @@ static JSValue js_element_dispatchEvent(JSContext* ctx, JSValueConst this_val,
     return JS_TRUE;
 }
 
+// ---- Image class ----
+
+struct ImageOpaque {
+    std::string src;
+    int width = 0;
+    int height = 0;
+    bool complete = false;
+    cairo_surface_t* surface = nullptr;
+    JSValue onload = JS_UNDEFINED;
+    JSValue onerror = JS_UNDEFINED;
+};
+
+static void js_image_finalizer(JSRuntime* rt, JSValue val) {
+    auto* op = (ImageOpaque*)JS_GetOpaque(val, js_image_class_id);
+    if (!op) return;
+    if (op->surface) cairo_surface_destroy(op->surface);
+    JS_FreeValueRT(rt, op->onload);
+    JS_FreeValueRT(rt, op->onerror);
+    delete op;
+}
+
+static JSValue js_image_constructor(JSContext* ctx, JSValueConst new_target,
+                                     int argc, JSValueConst* argv) {
+    JSValue obj = JS_NewObjectClass(ctx, js_image_class_id);
+    auto* op = new ImageOpaque;
+    if (argc >= 1) JS_ToInt32(ctx, &op->width, argv[0]);
+    if (argc >= 2) JS_ToInt32(ctx, &op->height, argv[1]);
+    JS_SetOpaque(obj, op);
+    return obj;
+}
+
+// Curl fetch helper local to js_bindings
+static bool img_fetch(const std::string& url, std::string& out) {
+    CURL* c = curl_easy_init(); if (!c) return false;
+    curl_easy_setopt(c, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(c, CURLOPT_WRITEFUNCTION,
+        +[](char* p, size_t s, size_t n, void* ud) -> size_t {
+            static_cast<std::string*>(ud)->append(p, s*n); return s*n; });
+    curl_easy_setopt(c, CURLOPT_WRITEDATA, &out);
+    curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(c, CURLOPT_USERAGENT, "Mozilla/5.0");
+    curl_easy_setopt(c, CURLOPT_TIMEOUT, 15L);
+    curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, 0L);
+    CURLcode rc = curl_easy_perform(c); curl_easy_cleanup(c);
+    return rc == CURLE_OK;
+}
+
+static JSValue js_image_get_src(JSContext* ctx, JSValueConst this_val) {
+    auto* op = (ImageOpaque*)JS_GetOpaque(this_val, js_image_class_id);
+    if (!op) return JS_UNDEFINED;
+    return JS_NewString(ctx, op->src.c_str());
+}
+
+static JSValue js_image_set_src(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+    auto* op = (ImageOpaque*)JS_GetOpaque(this_val, js_image_class_id);
+    if (!op) return JS_UNDEFINED;
+    const char* s = JS_ToCString(ctx, val);
+    if (!s) return JS_UNDEFINED;
+    op->src = s;
+    JS_FreeCString(ctx, s);
+
+    // Resolve relative URL
+    std::string url = op->src;
+    if (!url.empty() && url[0] != 'h' && url[0] != 'f' && url[0] != 'd') {
+        // Relative URL — resolve against page URL
+        if (g_js_engine && !g_js_engine->page_url.empty()) {
+            std::string base = g_js_engine->page_url;
+            size_t last_slash = base.rfind('/');
+            if (last_slash != std::string::npos)
+                url = base.substr(0, last_slash + 1) + url;
+        }
+    }
+
+    // Keep a ref to JS object for the callback
+    JSValue obj_ref = JS_DupValue(ctx, this_val);
+    JSEngine* engine = g_js_engine;
+
+    std::thread([op, url, obj_ref, engine]() {
+        std::string data;
+        bool ok = false;
+
+        // Try local file first
+        if (url.substr(0, 7) == "file://" || url[0] == '/') {
+            std::string path = (url.substr(0, 7) == "file://") ? url.substr(7) : url;
+            FILE* f = fopen(path.c_str(), "rb");
+            if (f) {
+                fseek(f, 0, SEEK_END);
+                long sz = ftell(f);
+                fseek(f, 0, SEEK_SET);
+                data.resize(sz);
+                fread(&data[0], 1, sz, f);
+                fclose(f);
+                ok = true;
+            }
+        } else {
+            ok = img_fetch(url, data);
+        }
+
+        if (ok && !data.empty()) {
+            GdkPixbufLoader* loader = gdk_pixbuf_loader_new();
+            GError* err = nullptr;
+            gdk_pixbuf_loader_write(loader, (const guchar*)data.data(), data.size(), &err);
+            gdk_pixbuf_loader_close(loader, nullptr);
+            if (!err) {
+                GdkPixbuf* pb = gdk_pixbuf_loader_get_pixbuf(loader);
+                if (pb) {
+                    int w = gdk_pixbuf_get_width(pb);
+                    int h = gdk_pixbuf_get_height(pb);
+                    op->width = w;
+                    op->height = h;
+                    // Convert to cairo surface
+                    cairo_surface_t* surf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
+                    cairo_t* cr = cairo_create(surf);
+                    gdk_cairo_set_source_pixbuf(cr, pb, 0, 0);
+                    cairo_paint(cr);
+                    cairo_destroy(cr);
+                    if (op->surface) cairo_surface_destroy(op->surface);
+                    op->surface = surf;
+                    op->complete = true;
+                }
+            }
+            if (err) g_error_free(err);
+            g_object_unref(loader);
+        }
+
+        // Fire onload/onerror on main thread
+        g_idle_add([](gpointer data) -> gboolean {
+            auto* info = static_cast<std::pair<ImageOpaque*, std::pair<JSValue, JSEngine*>>*>(data);
+            auto* op = info->first;
+            JSValue obj_ref = info->second.first;
+            JSEngine* engine = info->second.second;
+            if (engine && engine->ctx) {
+                JSContext* ctx = engine->ctx;
+                if (op->complete && !JS_IsUndefined(op->onload)) {
+                    JSValue ret = JS_Call(ctx, op->onload, obj_ref, 0, nullptr);
+                    JS_FreeValue(ctx, ret);
+                    engine->executePendingJobs();
+                } else if (!op->complete && !JS_IsUndefined(op->onerror)) {
+                    JSValue ret = JS_Call(ctx, op->onerror, obj_ref, 0, nullptr);
+                    JS_FreeValue(ctx, ret);
+                    engine->executePendingJobs();
+                }
+                JS_FreeValue(ctx, obj_ref);
+            }
+            delete info;
+            return G_SOURCE_REMOVE;
+        }, new std::pair<ImageOpaque*, std::pair<JSValue, JSEngine*>>(op, {obj_ref, engine}));
+    }).detach();
+
+    return JS_UNDEFINED;
+}
+
+static JSValue js_image_get_width(JSContext* ctx, JSValueConst this_val) {
+    auto* op = (ImageOpaque*)JS_GetOpaque(this_val, js_image_class_id);
+    return op ? JS_NewInt32(ctx, op->width) : JS_UNDEFINED;
+}
+
+static JSValue js_image_get_height(JSContext* ctx, JSValueConst this_val) {
+    auto* op = (ImageOpaque*)JS_GetOpaque(this_val, js_image_class_id);
+    return op ? JS_NewInt32(ctx, op->height) : JS_UNDEFINED;
+}
+
+static JSValue js_image_get_complete(JSContext* ctx, JSValueConst this_val) {
+    auto* op = (ImageOpaque*)JS_GetOpaque(this_val, js_image_class_id);
+    return op ? JS_NewBool(ctx, op->complete) : JS_UNDEFINED;
+}
+
+static JSValue js_image_get_onload(JSContext* ctx, JSValueConst this_val) {
+    auto* op = (ImageOpaque*)JS_GetOpaque(this_val, js_image_class_id);
+    return op ? JS_DupValue(ctx, op->onload) : JS_UNDEFINED;
+}
+
+static JSValue js_image_set_onload(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+    auto* op = (ImageOpaque*)JS_GetOpaque(this_val, js_image_class_id);
+    if (!op) return JS_UNDEFINED;
+    JS_FreeValue(ctx, op->onload);
+    op->onload = JS_DupValue(ctx, val);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_image_get_onerror(JSContext* ctx, JSValueConst this_val) {
+    auto* op = (ImageOpaque*)JS_GetOpaque(this_val, js_image_class_id);
+    return op ? JS_DupValue(ctx, op->onerror) : JS_UNDEFINED;
+}
+
+static JSValue js_image_set_onerror(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+    auto* op = (ImageOpaque*)JS_GetOpaque(this_val, js_image_class_id);
+    if (!op) return JS_UNDEFINED;
+    JS_FreeValue(ctx, op->onerror);
+    op->onerror = JS_DupValue(ctx, val);
+    return JS_UNDEFINED;
+}
+
+static const JSClassDef js_image_class_def = {
+    "Image", js_image_finalizer, nullptr, nullptr, nullptr
+};
+
+// ---- Canvas 2D Context ----
+
+// Global canvas state map (declared extern in browser.cpp too)
+struct CanvasState {
+    cairo_surface_t* surface = nullptr;
+    GtkWidget* drawing_area = nullptr;
+    int width = 300, height = 150;
+};
+std::unordered_map<uint32_t, CanvasState> g_canvas_map;
+
+struct CanvasCtxOpaque {
+    uint32_t node_id;
+};
+
+static void js_canvas_ctx_finalizer(JSRuntime* rt, JSValue val) {
+    auto* op = (CanvasCtxOpaque*)JS_GetOpaque(val, js_canvas_ctx_class_id);
+    delete op;
+}
+
+static cairo_t* canvas_get_cr(uint32_t node_id) {
+    auto it = g_canvas_map.find(node_id);
+    if (it == g_canvas_map.end() || !it->second.surface) return nullptr;
+    return cairo_create(it->second.surface);
+}
+
+static void canvas_queue_draw(uint32_t node_id) {
+    auto it = g_canvas_map.find(node_id);
+    if (it != g_canvas_map.end() && it->second.drawing_area)
+        gtk_widget_queue_draw(it->second.drawing_area);
+}
+
+static bool parse_css_color(const char* str, double& r, double& g, double& b, double& a) {
+    if (!str || !str[0]) { r = 0; g = 0; b = 0; a = 1; return true; }
+    GdkRGBA rgba = {0,0,0,1};
+    if (gdk_rgba_parse(&rgba, str)) {
+        r = rgba.red; g = rgba.green; b = rgba.blue; a = rgba.alpha;
+        return true;
+    }
+    return false;
+}
+
+static JSValue js_ctx_clearRect(JSContext* ctx, JSValueConst this_val,
+                                 int argc, JSValueConst* argv) {
+    auto* op = (CanvasCtxOpaque*)JS_GetOpaque(this_val, js_canvas_ctx_class_id);
+    if (!op || argc < 4) return JS_UNDEFINED;
+    double x, y, w, h;
+    JS_ToFloat64(ctx, &x, argv[0]);
+    JS_ToFloat64(ctx, &y, argv[1]);
+    JS_ToFloat64(ctx, &w, argv[2]);
+    JS_ToFloat64(ctx, &h, argv[3]);
+    cairo_t* cr = canvas_get_cr(op->node_id);
+    if (!cr) return JS_UNDEFINED;
+    cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
+    cairo_rectangle(cr, x, y, w, h);
+    cairo_fill(cr);
+    cairo_destroy(cr);
+    canvas_queue_draw(op->node_id);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_ctx_fillRect(JSContext* ctx, JSValueConst this_val,
+                                int argc, JSValueConst* argv) {
+    auto* op = (CanvasCtxOpaque*)JS_GetOpaque(this_val, js_canvas_ctx_class_id);
+    if (!op || argc < 4) return JS_UNDEFINED;
+    double x, y, w, h;
+    JS_ToFloat64(ctx, &x, argv[0]);
+    JS_ToFloat64(ctx, &y, argv[1]);
+    JS_ToFloat64(ctx, &w, argv[2]);
+    JS_ToFloat64(ctx, &h, argv[3]);
+    cairo_t* cr = canvas_get_cr(op->node_id);
+    if (!cr) return JS_UNDEFINED;
+    // Read fillStyle
+    JSValue fs = JS_GetPropertyStr(ctx, this_val, "_fillStyle");
+    const char* fill_str = JS_ToCString(ctx, fs);
+    double r = 0, g = 0, b = 0, a = 1;
+    if (fill_str) { parse_css_color(fill_str, r, g, b, a); JS_FreeCString(ctx, fill_str); }
+    JS_FreeValue(ctx, fs);
+    cairo_set_source_rgba(cr, r, g, b, a);
+    cairo_rectangle(cr, x, y, w, h);
+    cairo_fill(cr);
+    cairo_destroy(cr);
+    canvas_queue_draw(op->node_id);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_ctx_strokeRect(JSContext* ctx, JSValueConst this_val,
+                                  int argc, JSValueConst* argv) {
+    auto* op = (CanvasCtxOpaque*)JS_GetOpaque(this_val, js_canvas_ctx_class_id);
+    if (!op || argc < 4) return JS_UNDEFINED;
+    double x, y, w, h;
+    JS_ToFloat64(ctx, &x, argv[0]);
+    JS_ToFloat64(ctx, &y, argv[1]);
+    JS_ToFloat64(ctx, &w, argv[2]);
+    JS_ToFloat64(ctx, &h, argv[3]);
+    cairo_t* cr = canvas_get_cr(op->node_id);
+    if (!cr) return JS_UNDEFINED;
+    JSValue ss = JS_GetPropertyStr(ctx, this_val, "_strokeStyle");
+    const char* stroke_str = JS_ToCString(ctx, ss);
+    double r = 0, g = 0, b = 0, a = 1;
+    if (stroke_str) { parse_css_color(stroke_str, r, g, b, a); JS_FreeCString(ctx, stroke_str); }
+    JS_FreeValue(ctx, ss);
+    cairo_set_source_rgba(cr, r, g, b, a);
+    cairo_rectangle(cr, x, y, w, h);
+    cairo_stroke(cr);
+    cairo_destroy(cr);
+    canvas_queue_draw(op->node_id);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_ctx_drawImage(JSContext* ctx, JSValueConst this_val,
+                                 int argc, JSValueConst* argv) {
+    auto* op = (CanvasCtxOpaque*)JS_GetOpaque(this_val, js_canvas_ctx_class_id);
+    if (!op || argc < 3) return JS_UNDEFINED;
+
+    // Get image surface from Image object
+    auto* img = (ImageOpaque*)JS_GetOpaque(argv[0], js_image_class_id);
+    if (!img || !img->surface) return JS_UNDEFINED;
+
+    cairo_t* cr = canvas_get_cr(op->node_id);
+    if (!cr) return JS_UNDEFINED;
+
+    int img_w = img->width;
+    int img_h = img->height;
+
+    if (argc >= 9) {
+        // drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh) — sprite clipping
+        double sx, sy, sw, sh, dx, dy, dw, dh;
+        JS_ToFloat64(ctx, &sx, argv[1]);
+        JS_ToFloat64(ctx, &sy, argv[2]);
+        JS_ToFloat64(ctx, &sw, argv[3]);
+        JS_ToFloat64(ctx, &sh, argv[4]);
+        JS_ToFloat64(ctx, &dx, argv[5]);
+        JS_ToFloat64(ctx, &dy, argv[6]);
+        JS_ToFloat64(ctx, &dw, argv[7]);
+        JS_ToFloat64(ctx, &dh, argv[8]);
+
+        cairo_save(cr);
+        cairo_rectangle(cr, dx, dy, dw, dh);
+        cairo_clip(cr);
+        // Scale source rect to dest rect
+        double scale_x = dw / sw;
+        double scale_y = dh / sh;
+        cairo_translate(cr, dx - sx * scale_x, dy - sy * scale_y);
+        cairo_scale(cr, scale_x, scale_y);
+        cairo_set_source_surface(cr, img->surface, 0, 0);
+        cairo_paint(cr);
+        cairo_restore(cr);
+    } else if (argc >= 5) {
+        // drawImage(img, dx, dy, dw, dh) — draw scaled
+        double dx, dy, dw, dh;
+        JS_ToFloat64(ctx, &dx, argv[1]);
+        JS_ToFloat64(ctx, &dy, argv[2]);
+        JS_ToFloat64(ctx, &dw, argv[3]);
+        JS_ToFloat64(ctx, &dh, argv[4]);
+
+        cairo_save(cr);
+        cairo_translate(cr, dx, dy);
+        cairo_scale(cr, dw / img_w, dh / img_h);
+        cairo_set_source_surface(cr, img->surface, 0, 0);
+        cairo_paint(cr);
+        cairo_restore(cr);
+    } else {
+        // drawImage(img, dx, dy) — draw at position
+        double dx, dy;
+        JS_ToFloat64(ctx, &dx, argv[1]);
+        JS_ToFloat64(ctx, &dy, argv[2]);
+
+        cairo_set_source_surface(cr, img->surface, dx, dy);
+        cairo_paint(cr);
+    }
+
+    cairo_destroy(cr);
+    canvas_queue_draw(op->node_id);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_ctx_get_fillStyle(JSContext* ctx, JSValueConst this_val) {
+    JSValue v = JS_GetPropertyStr(ctx, this_val, "_fillStyle");
+    if (JS_IsUndefined(v)) return JS_NewString(ctx, "#000000");
+    return v;
+}
+
+static JSValue js_ctx_set_fillStyle(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+    JS_SetPropertyStr(ctx, JS_DupValue(ctx, this_val), "_fillStyle", JS_DupValue(ctx, val));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_ctx_get_strokeStyle(JSContext* ctx, JSValueConst this_val) {
+    JSValue v = JS_GetPropertyStr(ctx, this_val, "_strokeStyle");
+    if (JS_IsUndefined(v)) return JS_NewString(ctx, "#000000");
+    return v;
+}
+
+static JSValue js_ctx_set_strokeStyle(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+    JS_SetPropertyStr(ctx, JS_DupValue(ctx, this_val), "_strokeStyle", JS_DupValue(ctx, val));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_ctx_get_canvas(JSContext* ctx, JSValueConst this_val) {
+    auto* op = (CanvasCtxOpaque*)JS_GetOpaque(this_val, js_canvas_ctx_class_id);
+    if (!op) return JS_UNDEFINED;
+    DOMNode* node = get_node_by_id(op->node_id);
+    if (!node) return JS_UNDEFINED;
+    return js_wrap_node(ctx, node);
+}
+
+static const JSClassDef js_canvas_ctx_class_def = {
+    "CanvasRenderingContext2D", js_canvas_ctx_finalizer, nullptr, nullptr, nullptr
+};
+
+// getContext('2d') — returns a 2D context for canvas elements
+static JSValue js_element_getContext(JSContext* ctx, JSValueConst this_val,
+                                      int argc, JSValueConst* argv) {
+    auto* eop = (ElementOpaque*)JS_GetOpaque(this_val, js_element_class_id);
+    if (!eop) return JS_NULL;
+    DOMNode* node = get_node_by_id(eop->node_id);
+    if (!node || node->tag_name != "canvas") return JS_NULL;
+    if (argc < 1) return JS_NULL;
+    const char* type = JS_ToCString(ctx, argv[0]);
+    if (!type) return JS_NULL;
+    bool is_2d = (strcmp(type, "2d") == 0);
+    JS_FreeCString(ctx, type);
+    if (!is_2d) return JS_NULL;
+
+    // Create context object
+    JSValue obj = JS_NewObjectClass(ctx, js_canvas_ctx_class_id);
+    auto* cop = new CanvasCtxOpaque{eop->node_id};
+    JS_SetOpaque(obj, cop);
+
+    // Set default styles
+    JS_SetPropertyStr(ctx, obj, "_fillStyle", JS_NewString(ctx, "#000000"));
+    JS_SetPropertyStr(ctx, obj, "_strokeStyle", JS_NewString(ctx, "#000000"));
+
+    // Methods
+    JS_SetPropertyStr(ctx, obj, "clearRect",
+        JS_NewCFunction(ctx, js_ctx_clearRect, "clearRect", 4));
+    JS_SetPropertyStr(ctx, obj, "fillRect",
+        JS_NewCFunction(ctx, js_ctx_fillRect, "fillRect", 4));
+    JS_SetPropertyStr(ctx, obj, "strokeRect",
+        JS_NewCFunction(ctx, js_ctx_strokeRect, "strokeRect", 4));
+    JS_SetPropertyStr(ctx, obj, "drawImage",
+        JS_NewCFunction(ctx, js_ctx_drawImage, "drawImage", 9));
+
+    // fillStyle / strokeStyle properties
+    JS_DefinePropertyGetSet(ctx, obj,
+        JS_NewAtom(ctx, "fillStyle"),
+        JS_NewCFunction(ctx, (JSCFunction*)js_ctx_get_fillStyle, "get fillStyle", 0),
+        JS_NewCFunction(ctx, (JSCFunction*)js_ctx_set_fillStyle, "set fillStyle", 1),
+        JS_PROP_CONFIGURABLE);
+    JS_DefinePropertyGetSet(ctx, obj,
+        JS_NewAtom(ctx, "strokeStyle"),
+        JS_NewCFunction(ctx, (JSCFunction*)js_ctx_get_strokeStyle, "get strokeStyle", 0),
+        JS_NewCFunction(ctx, (JSCFunction*)js_ctx_set_strokeStyle, "set strokeStyle", 1),
+        JS_PROP_CONFIGURABLE);
+
+    // canvas reference
+    JS_DefinePropertyGetSet(ctx, obj,
+        JS_NewAtom(ctx, "canvas"),
+        JS_NewCFunction(ctx, (JSCFunction*)js_ctx_get_canvas, "get canvas", 0),
+        JS_UNDEFINED, JS_PROP_CONFIGURABLE);
+
+    return obj;
+}
+
 // ---- Class definitions and prototypes ----
 
 static const JSClassDef js_element_class_def = {
@@ -1125,11 +1596,15 @@ void js_bindings_init(JSEngine* engine) {
     JS_NewClassID(&js_nodelist_class_id);
     JS_NewClassID(&js_style_class_id);
     JS_NewClassID(&js_classlist_class_id);
+    JS_NewClassID(&js_image_class_id);
+    JS_NewClassID(&js_canvas_ctx_class_id);
 
     JS_NewClass(rt, js_element_class_id, &js_element_class_def);
     JS_NewClass(rt, js_nodelist_class_id, &js_nodelist_class_def);
     JS_NewClass(rt, js_style_class_id, &js_style_class_def);
     JS_NewClass(rt, js_classlist_class_id, &js_classlist_class_def);
+    JS_NewClass(rt, js_image_class_id, &js_image_class_def);
+    JS_NewClass(rt, js_canvas_ctx_class_id, &js_canvas_ctx_class_def);
 
     // Element prototype
     JSValue elem_proto = JS_NewObject(ctx);
@@ -1277,6 +1752,8 @@ void js_bindings_init(JSEngine* engine) {
         JS_NewCFunction(ctx, js_element_cloneNode, "cloneNode", 1));
     JS_SetPropertyStr(ctx, elem_proto, "dispatchEvent",
         JS_NewCFunction(ctx, js_element_dispatchEvent, "dispatchEvent", 1));
+    JS_SetPropertyStr(ctx, elem_proto, "getContext",
+        JS_NewCFunction(ctx, js_element_getContext, "getContext", 1));
 
     // offset* getters (native layout geometry)
     JS_DefinePropertyGetSet(ctx, elem_proto,
@@ -1384,6 +1861,44 @@ void js_bindings_init(JSEngine* engine) {
 
     // window === globalThis
     JS_SetPropertyStr(ctx, global, "window", JS_DupValue(ctx, global));
+
+    // Image constructor
+    {
+        JSValue img_proto = JS_NewObject(ctx);
+        JS_DefinePropertyGetSet(ctx, img_proto, JS_NewAtom(ctx, "src"),
+            JS_NewCFunction(ctx, (JSCFunction*)js_image_get_src, "get src", 0),
+            JS_NewCFunction(ctx, (JSCFunction*)js_image_set_src, "set src", 1),
+            JS_PROP_CONFIGURABLE);
+        JS_DefinePropertyGetSet(ctx, img_proto, JS_NewAtom(ctx, "width"),
+            JS_NewCFunction(ctx, (JSCFunction*)js_image_get_width, "get width", 0),
+            JS_UNDEFINED, JS_PROP_CONFIGURABLE);
+        JS_DefinePropertyGetSet(ctx, img_proto, JS_NewAtom(ctx, "height"),
+            JS_NewCFunction(ctx, (JSCFunction*)js_image_get_height, "get height", 0),
+            JS_UNDEFINED, JS_PROP_CONFIGURABLE);
+        JS_DefinePropertyGetSet(ctx, img_proto, JS_NewAtom(ctx, "naturalWidth"),
+            JS_NewCFunction(ctx, (JSCFunction*)js_image_get_width, "get naturalWidth", 0),
+            JS_UNDEFINED, JS_PROP_CONFIGURABLE);
+        JS_DefinePropertyGetSet(ctx, img_proto, JS_NewAtom(ctx, "naturalHeight"),
+            JS_NewCFunction(ctx, (JSCFunction*)js_image_get_height, "get naturalHeight", 0),
+            JS_UNDEFINED, JS_PROP_CONFIGURABLE);
+        JS_DefinePropertyGetSet(ctx, img_proto, JS_NewAtom(ctx, "complete"),
+            JS_NewCFunction(ctx, (JSCFunction*)js_image_get_complete, "get complete", 0),
+            JS_UNDEFINED, JS_PROP_CONFIGURABLE);
+        JS_DefinePropertyGetSet(ctx, img_proto, JS_NewAtom(ctx, "onload"),
+            JS_NewCFunction(ctx, (JSCFunction*)js_image_get_onload, "get onload", 0),
+            JS_NewCFunction(ctx, (JSCFunction*)js_image_set_onload, "set onload", 1),
+            JS_PROP_CONFIGURABLE);
+        JS_DefinePropertyGetSet(ctx, img_proto, JS_NewAtom(ctx, "onerror"),
+            JS_NewCFunction(ctx, (JSCFunction*)js_image_get_onerror, "get onerror", 0),
+            JS_NewCFunction(ctx, (JSCFunction*)js_image_set_onerror, "set onerror", 1),
+            JS_PROP_CONFIGURABLE);
+        JS_SetClassProto(ctx, js_image_class_id, img_proto);
+
+        JSValue img_ctor = JS_NewCFunction2(ctx, js_image_constructor, "Image", 0,
+            JS_CFUNC_constructor, 0);
+        JS_SetConstructor(ctx, img_ctor, img_proto);
+        JS_SetPropertyStr(ctx, global, "Image", img_ctor);
+    }
 
     JS_FreeValue(ctx, global);
 }

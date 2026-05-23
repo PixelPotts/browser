@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Sprite Test</title>
+<style>
+body {
+    font-family: sans-serif;
+    background-color: #222;
+    color: #eee;
+    padding: 20px;
+}
+h2 { margin-top: 24px; }
+
+.sprite {
+    width: 32px;
+    height: 32px;
+    display: inline-block;
+    background-image: url('spritesheet.png');
+    background-repeat: no-repeat;
+    margin: 4px;
+}
+
+.frame0 { background-position: 0px 0px; }
+.frame1 { background-position: -32px 0px; }
+.frame2 { background-position: -64px 0px; }
+.frame3 { background-position: -96px 0px; }
+
+.sprite-label {
+    display: inline-block;
+    text-align: center;
+    margin: 4px;
+    vertical-align: top;
+}
+</style>
+</head>
+<body>
+
+<h2>1. CSS Sprites (background-position)</h2>
+<div style="display: flex; gap: 10px;">
+    <div class="sprite-label">
+        <div class="sprite frame0"></div>
+        <div>Red</div>
+    </div>
+    <div class="sprite-label">
+        <div class="sprite frame1"></div>
+        <div>Green</div>
+    </div>
+    <div class="sprite-label">
+        <div class="sprite frame2"></div>
+        <div>Blue</div>
+    </div>
+    <div class="sprite-label">
+        <div class="sprite frame3"></div>
+        <div>Yellow</div>
+    </div>
+</div>
+
+<h2>2. Canvas Basics (fillRect, strokeRect, clearRect)</h2>
+<canvas id="basics" width="200" height="60"></canvas>
+
+<h2>3. Canvas Sprites (drawImage with source rect)</h2>
+<canvas id="sprites" width="200" height="40"></canvas>
+
+<h2>4. Animated Sprite (requestAnimationFrame)</h2>
+<canvas id="anim" width="64" height="64"></canvas>
+<div id="frame-info">Frame: 0</div>
+
+<h2>5. JS Style backgroundPosition</h2>
+<div id="js-sprite" style="width: 32px; height: 32px; background-image: url('spritesheet.png'); background-repeat: no-repeat; background-position: 0px 0px;"></div>
+<button id="cycle-btn">Cycle Frame</button>
+
+<script>
+// 2. Canvas basics
+var basicsCanvas = document.getElementById('basics');
+if (basicsCanvas) {
+    var ctx = basicsCanvas.getContext('2d');
+    if (ctx) {
+        // Red filled rect
+        ctx.fillStyle = 'red';
+        ctx.fillRect(10, 10, 40, 40);
+
+        // Green filled rect
+        ctx.fillStyle = '#00ff00';
+        ctx.fillRect(60, 10, 40, 40);
+
+        // Blue stroked rect
+        ctx.strokeStyle = 'blue';
+        ctx.strokeRect(110, 10, 40, 40);
+
+        // Clear a hole in the red rect
+        ctx.clearRect(20, 20, 20, 20);
+
+        console.log('Canvas basics rendered');
+    }
+}
+
+// 3. Canvas sprites with Image()
+var spritesCanvas = document.getElementById('sprites');
+if (spritesCanvas) {
+    var ctx2 = spritesCanvas.getContext('2d');
+    var sheet = new Image();
+    sheet.onload = function() {
+        console.log('Sprite sheet loaded: ' + sheet.width + 'x' + sheet.height);
+        // Draw each 32x32 frame side by side with spacing
+        ctx2.drawImage(sheet, 0, 0, 32, 32, 0, 4, 32, 32);   // red
+        ctx2.drawImage(sheet, 32, 0, 32, 32, 42, 4, 32, 32);  // green
+        ctx2.drawImage(sheet, 64, 0, 32, 32, 84, 4, 32, 32);  // blue
+        ctx2.drawImage(sheet, 96, 0, 32, 32, 126, 4, 32, 32); // yellow
+        console.log('Canvas sprites rendered');
+    };
+    sheet.src = 'spritesheet.png';
+}
+
+// 4. Animated sprite
+var animCanvas = document.getElementById('anim');
+if (animCanvas) {
+    var actx = animCanvas.getContext('2d');
+    var animSheet = new Image();
+    var currentFrame = 0;
+    var frameCount = 4;
+    var frameInfo = document.getElementById('frame-info');
+
+    animSheet.onload = function() {
+        function animate() {
+            actx.clearRect(0, 0, 64, 64);
+            // Draw current frame scaled to 64x64
+            actx.drawImage(animSheet,
+                currentFrame * 32, 0, 32, 32,  // source
+                0, 0, 64, 64);                   // dest
+            if (frameInfo) frameInfo.textContent = 'Frame: ' + currentFrame;
+            currentFrame = (currentFrame + 1) % frameCount;
+            setTimeout(function() {
+                requestAnimationFrame(animate);
+            }, 500);
+        }
+        requestAnimationFrame(animate);
+    };
+    animSheet.src = 'spritesheet.png';
+}
+
+// 5. JS style.backgroundPosition cycling
+var jsSprite = document.getElementById('js-sprite');
+var cycleBtn = document.getElementById('cycle-btn');
+var jsFrame = 0;
+if (cycleBtn) {
+    cycleBtn.addEventListener('click', function() {
+        jsFrame = (jsFrame + 1) % 4;
+        var offset = -(jsFrame * 32);
+        jsSprite.style.backgroundPosition = offset + 'px 0px';
+        console.log('Set backgroundPosition to: ' + offset + 'px 0px');
+    });
+}
+</script>
+
+</body>
+</html>

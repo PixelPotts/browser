@@ -14,6 +14,24 @@
 #include "dom.h"
 #include "js_engine.h"
 #include "js_event.h"
+#include <unordered_map>
+
+// ---- Canvas state (shared with js_bindings.cpp) ----
+struct CanvasState {
+    cairo_surface_t* surface = nullptr;
+    GtkWidget* drawing_area = nullptr;
+    int width = 300, height = 150;
+};
+extern std::unordered_map<uint32_t, CanvasState> g_canvas_map;
+
+static gboolean draw_canvas(GtkWidget* w, cairo_t* cr, gpointer data) {
+    uint32_t node_id = GPOINTER_TO_UINT(data);
+    auto it = g_canvas_map.find(node_id);
+    if (it == g_canvas_map.end() || !it->second.surface) return FALSE;
+    cairo_set_source_surface(cr, it->second.surface, 0, 0);
+    cairo_paint(cr);
+    return FALSE;
+}
 
 // ---- curl ----
 
@@ -577,6 +595,7 @@ struct BoxModel {
     int overflow = -1;      // -1=inherit, 0=visible, 1=hidden, 2=scroll, 3=auto
     std::string bg_repeat;  // background-repeat (default "repeat")
     std::string bg_size;    // background-size (e.g. "contain", "cover", "100px 50px")
+    std::string bg_position; // background-position (e.g. "0px 0px", "center", "-32px 0px")
 };
 
 static bool is_block_element(const std::string& t) {
@@ -678,6 +697,8 @@ static void apply_box(const std::string& decls, BoxModel& bm) {
       if (!s.empty()) bm.bg_repeat=s; }
     { auto s=tolower_s(prop_val(decls,"background-size"));
       if (!s.empty()) bm.bg_size=s; }
+    { auto s=prop_val(decls,"background-position");
+      if (!s.empty()) bm.bg_position=s; }
 }
 
 // ---- Element stack ----
@@ -2415,10 +2436,11 @@ static gboolean draw_bg(GtkWidget* w, cairo_t* cr, gpointer) {
     const char* bgc  = (const char*)g_object_get_data(G_OBJECT(w), "bg_color_str");
     const char* rep  = (const char*)g_object_get_data(G_OBJECT(w), "bg_repeat");
     const char* bsz  = (const char*)g_object_get_data(G_OBJECT(w), "bg_size");
+    const char* bpos = (const char*)g_object_get_data(G_OBJECT(w), "bg_position");
     {
         FILE* f = fopen("/tmp/browser_debug.log","a");
-        if (f) { fprintf(f,"draw_bg called: pb=%s bgc=%s rep=%s bsz=%s\n",
-                 pb?"ok":"null", bgc?bgc:"none", rep?rep:"(default)", bsz?bsz:"(default)"); fclose(f); }
+        if (f) { fprintf(f,"draw_bg called: pb=%s bgc=%s rep=%s bsz=%s bpos=%s\n",
+                 pb?"ok":"null", bgc?bgc:"none", rep?rep:"(default)", bsz?bsz:"(default)", bpos?bpos:"(default)"); fclose(f); }
     }
     // fill background color first (so it shows through transparent parts of image)
     if (bgc && bgc[0]) {
@@ -2436,10 +2458,48 @@ static gboolean draw_bg(GtkWidget* w, cairo_t* cr, gpointer) {
     bool is_contain = bsz && (strcmp(bsz, "contain") == 0);
     bool is_cover   = bsz && (strcmp(bsz, "cover") == 0);
 
+    // Parse background-position: "Xpx Ypx" or "X% Y%" or keywords
+    double pos_x = 0.0, pos_y = 0.0;
+    if (bpos && bpos[0]) {
+        int ww = gtk_widget_get_allocated_width(w);
+        int wh = gtk_widget_get_allocated_height(w);
+        // Try parsing "Xpx Ypx" or "X Y"
+        double vx = 0, vy = 0;
+        char* end = nullptr;
+        vx = strtod(bpos, &end);
+        if (end && end != bpos) {
+            // skip "px" or whitespace
+            while (*end && (*end == 'p' || *end == 'x' || *end == ' ' || *end == ',')) end++;
+            if (*end) {
+                char* end2 = nullptr;
+                vy = strtod(end, &end2);
+            }
+            // Check for percentage
+            const char* pct = strchr(bpos, '%');
+            if (pct) {
+                pos_x = vx / 100.0 * (ww - pw);
+                // find second value
+                const char* sp = strchr(bpos, ' ');
+                if (sp) {
+                    double vy2 = strtod(sp + 1, nullptr);
+                    pos_y = vy2 / 100.0 * (wh - ph);
+                }
+            } else {
+                pos_x = vx;
+                pos_y = vy;
+            }
+        } else {
+            // keyword parsing
+            std::string p(bpos);
+            if (p.find("center") != std::string::npos) { pos_x = (ww - pw) / 2.0; pos_y = (wh - ph) / 2.0; }
+            if (p.find("right") != std::string::npos) pos_x = ww - pw;
+            if (p.find("bottom") != std::string::npos) pos_y = wh - ph;
+        }
+    }
+
     cairo_save(cr);
 
     if (is_contain || is_cover) {
-        // Scale image to fit (contain) or fill (cover) the widget
         int ww = gtk_widget_get_allocated_width(w);
         int wh = gtk_widget_get_allocated_height(w);
         if (ww <= 0 || wh <= 0) { cairo_restore(cr); return FALSE; }
@@ -2448,9 +2508,8 @@ static gboolean draw_bg(GtkWidget* w, cairo_t* cr, gpointer) {
         double scale = is_contain ? std::min(sx, sy) : std::max(sx, sy);
         double dw = pw * scale;
         double dh = ph * scale;
-        // Center the image
-        double dx = (ww - dw) / 2.0;
-        double dy = (wh - dh) / 2.0;
+        double dx = (ww - dw) / 2.0 + pos_x;
+        double dy = (wh - dh) / 2.0 + pos_y;
         GdkPixbuf* scaled = gdk_pixbuf_scale_simple(pb, (int)dw, (int)dh, GDK_INTERP_BILINEAR);
         if (scaled) {
             gdk_cairo_set_source_pixbuf(cr, scaled, dx, dy);
@@ -2458,11 +2517,10 @@ static gboolean draw_bg(GtkWidget* w, cairo_t* cr, gpointer) {
             g_object_unref(scaled);
         }
     } else if (no_repeat) {
-        // Draw once at top-left, no tiling
-        gdk_cairo_set_source_pixbuf(cr, pb, 0, 0);
+        gdk_cairo_set_source_pixbuf(cr, pb, pos_x, pos_y);
         cairo_paint(cr);
     } else {
-        // Default: tile the image (background-repeat: repeat)
+        // Tile with position offset
         cairo_surface_t* surf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, pw, ph);
         cairo_t* tc = cairo_create(surf);
         gdk_cairo_set_source_pixbuf(tc, pb, 0, 0);
@@ -2470,6 +2528,9 @@ static gboolean draw_bg(GtkWidget* w, cairo_t* cr, gpointer) {
         cairo_destroy(tc);
         cairo_pattern_t* pat = cairo_pattern_create_for_surface(surf);
         cairo_pattern_set_extend(pat, CAIRO_EXTEND_REPEAT);
+        cairo_matrix_t mat;
+        cairo_matrix_init_translate(&mat, -pos_x, -pos_y);
+        cairo_pattern_set_matrix(pat, &mat);
         cairo_set_source(cr, pat);
         cairo_paint(cr);
         cairo_pattern_destroy(pat);
@@ -3146,6 +3207,8 @@ static BoxModel dom_node_to_boxmodel(DOMNode* node) {
       if (it != node->style_props.end()) bm.bg_repeat = it->second; }
     { auto it = node->style_props.find("background-size");
       if (it != node->style_props.end()) bm.bg_size = it->second; }
+    { auto it = node->style_props.find("background-position");
+      if (it != node->style_props.end()) bm.bg_position = it->second; }
 
     // Overlay JS-set style_props on top of parsed values
     if (!node->style_props.empty()) {
@@ -3384,6 +3447,52 @@ static void render_node(AppState* st, TabState* tab, DOMNode* node, int gen,
         g_signal_connect(da, "draw", G_CALLBACK(draw_svg), (gpointer)node);
         gtk_box_pack_start(GTK_BOX(cur), da, FALSE, FALSE, 2);
         gtk_widget_show(da);
+        return;
+    }
+
+    // <canvas> — render with Cairo backing surface
+    if (node->tag_name == "canvas") {
+        float_rows.back() = nullptr;
+        GtkWidget* cur = cstack.back();
+        int cw = 300, ch = 150; // canvas defaults
+        auto w_it = node->attributes.find("width");
+        auto h_it = node->attributes.find("height");
+        if (w_it != node->attributes.end()) {
+            try { cw = (int)std::stod(w_it->second); } catch (...) {}
+        }
+        if (h_it != node->attributes.end()) {
+            try { ch = (int)std::stod(h_it->second); } catch (...) {}
+        }
+        // Also check style_props for width/height
+        {
+            auto sit = node->style_props.find("width");
+            if (sit != node->style_props.end()) {
+                int px = atoi(sit->second.c_str());
+                if (px > 0) cw = px;
+            }
+            sit = node->style_props.find("height");
+            if (sit != node->style_props.end()) {
+                int px = atoi(sit->second.c_str());
+                if (px > 0) ch = px;
+            }
+        }
+        // Create backing surface
+        cairo_surface_t* surf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, cw, ch);
+        GtkWidget* da = gtk_drawing_area_new();
+        gtk_widget_set_size_request(da, cw, ch);
+        g_signal_connect(da, "draw", G_CALLBACK(draw_canvas), GUINT_TO_POINTER(node->node_id));
+        gtk_box_pack_start(GTK_BOX(cur), da, FALSE, FALSE, 2);
+        gtk_widget_show(da);
+        // Store in canvas map
+        CanvasState cs;
+        cs.surface = surf;
+        cs.drawing_area = da;
+        cs.width = cw;
+        cs.height = ch;
+        g_canvas_map[node->node_id] = cs;
+        // Store node_id on widget
+        g_object_set_data(G_OBJECT(da), "dom_node_id", GUINT_TO_POINTER(node->node_id));
+        tab->node_widget_map[node->node_id] = da;
         return;
     }
 
@@ -3744,6 +3853,8 @@ static void render_node(AppState* st, TabState* tab, DOMNode* node, int gen,
                 g_object_set_data_full(G_OBJECT(tab->content_box), "bg_repeat", g_strdup(bm.bg_repeat.c_str()), g_free);
             if (!bm.bg_size.empty())
                 g_object_set_data_full(G_OBJECT(tab->content_box), "bg_size", g_strdup(bm.bg_size.c_str()), g_free);
+            if (!bm.bg_position.empty())
+                g_object_set_data_full(G_OBJECT(tab->content_box), "bg_position", g_strdup(bm.bg_position.c_str()), g_free);
             std::string bg_url = bm.bg_image;
             std::thread([st, tab, bg_url, gen]() {
                 Buf ibuf;
@@ -3826,6 +3937,8 @@ static void render_node(AppState* st, TabState* tab, DOMNode* node, int gen,
                 g_object_set_data_full(G_OBJECT(new_blk), "bg_repeat", g_strdup(bm.bg_repeat.c_str()), g_free);
             if (!bm.bg_size.empty())
                 g_object_set_data_full(G_OBJECT(new_blk), "bg_size", g_strdup(bm.bg_size.c_str()), g_free);
+            if (!bm.bg_position.empty())
+                g_object_set_data_full(G_OBJECT(new_blk), "bg_position", g_strdup(bm.bg_position.c_str()), g_free);
             g_object_ref(new_blk);
             std::string bg_url = bm.bg_image;
             std::thread([st, tab, new_blk, bg_url, gen]() {
@@ -4222,6 +4335,12 @@ static void load_url(AppState* st, const std::string& url) {
         tab->js_engine = nullptr;
     }
     tab->document.reset();
+
+    // Clean up canvas surfaces
+    for (auto& [nid, cs] : g_canvas_map) {
+        if (cs.surface) cairo_surface_destroy(cs.surface);
+    }
+    g_canvas_map.clear();
 
     // clean up previous body styles from content_box
     if (tab->body_draw_signal) {
