@@ -521,6 +521,33 @@ void js_dispatch_to_window_listeners(JSEngine* engine, const std::string& type, 
     JS_FreeValue(engine->ctx, global);
 }
 
+// ---- window.postMessage ----
+static JSValue js_window_postMessage(JSContext* ctx, JSValueConst this_val,
+                                      int argc, JSValueConst* argv) {
+    if (argc < 1 || !g_js_engine) return JS_UNDEFINED;
+    // Create a MessageEvent-like object
+    JSValue event = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, event, "type", JS_NewString(ctx, "message"));
+    JS_SetPropertyStr(ctx, event, "data", JS_DupValue(ctx, argv[0]));
+    if (argc >= 2) {
+        JS_SetPropertyStr(ctx, event, "origin", JS_DupValue(ctx, argv[1]));
+    } else {
+        JS_SetPropertyStr(ctx, event, "origin", JS_NewString(ctx, "*"));
+    }
+    JS_SetPropertyStr(ctx, event, "source", JS_NULL);
+    JS_SetPropertyStr(ctx, event, "preventDefault", JS_NewCFunction(ctx,
+        [](JSContext* cx, JSValueConst, int, JSValueConst*) -> JSValue { return JS_UNDEFINED; },
+        "preventDefault", 0));
+    JS_SetPropertyStr(ctx, event, "stopPropagation", JS_NewCFunction(ctx,
+        [](JSContext* cx, JSValueConst, int, JSValueConst*) -> JSValue { return JS_UNDEFINED; },
+        "stopPropagation", 0));
+
+    fprintf(stderr, "[postMessage] dispatching message event\n");
+    js_dispatch_to_window_listeners(g_js_engine, "message", event);
+    JS_FreeValue(ctx, event);
+    return JS_UNDEFINED;
+}
+
 // No-op stub for properties that don't need implementation
 static JSValue js_noop_func(JSContext* ctx, JSValueConst this_val,
                              int argc, JSValueConst* argv) {
@@ -816,7 +843,7 @@ void JSEngine::setupGlobals() {
     JS_SetPropertyStr(ctx, global, "stop", JS_NewCFunction(ctx, js_noop_func, "stop", 0));
     JS_SetPropertyStr(ctx, global, "open", JS_NewCFunction(ctx, js_noop_func, "open", 1));
     JS_SetPropertyStr(ctx, global, "close", JS_NewCFunction(ctx, js_noop_func, "close", 0));
-    JS_SetPropertyStr(ctx, global, "postMessage", JS_NewCFunction(ctx, js_noop_func, "postMessage", 1));
+    JS_SetPropertyStr(ctx, global, "postMessage", JS_NewCFunction(ctx, js_window_postMessage, "postMessage", 2));
     JS_SetPropertyStr(ctx, global, "dispatchEvent",
         JS_NewCFunction(ctx, [](JSContext* cx, JSValueConst, int, JSValueConst*) -> JSValue {
             return JS_TRUE;

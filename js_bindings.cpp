@@ -942,6 +942,119 @@ static JSValue js_element_appendChild(JSContext* ctx, JSValueConst this_val,
                 }
             }
         }
+
+        // Dynamic iframe loading: if appending an <iframe> with src, fetch & execute
+        if (child->tag_name == "iframe") {
+            auto src_it = child->attributes.find("src");
+            if (src_it != child->attributes.end() && !src_it->second.empty()) {
+                std::string iframe_url = src_it->second;
+                // Resolve relative URLs
+                if (!iframe_url.empty() && iframe_url[0] == '/' && iframe_url.find("://") == std::string::npos) {
+                    if (g_js_engine && !g_js_engine->page_url.empty()) {
+                        std::string base = g_js_engine->page_url;
+                        if (base.substr(0, 7) == "file://") {
+                            auto last_slash = base.rfind('/');
+                            if (last_slash > 6) iframe_url = base.substr(0, last_slash) + iframe_url;
+                        } else {
+                            auto p = base.find("://");
+                            if (p != std::string::npos) {
+                                auto q = base.find('/', p + 3);
+                                iframe_url = (q != std::string::npos ? base.substr(0, q) : base) + iframe_url;
+                            }
+                        }
+                    }
+                }
+                if (iframe_url.substr(0, 7) == "file://" && iframe_url.find('?') != std::string::npos)
+                    iframe_url = iframe_url.substr(0, iframe_url.find('?'));
+
+                fprintf(stderr, "[iframe] Loading iframe src: %s\n", iframe_url.c_str());
+                std::string iframe_html;
+                if (img_fetch(iframe_url, iframe_html)) {
+                    fprintf(stderr, "[iframe] Fetched %zu bytes\n", iframe_html.size());
+
+                    // Parse CSP meta tag
+                    bool csp_blocks_eval = false;
+                    {
+                        std::string lh = iframe_html;
+                        for (auto& c : lh) c = tolower((unsigned char)c);
+                        auto mp = lh.find("content-security-policy");
+                        if (mp != std::string::npos) {
+                            auto cp = lh.find("content=", mp);
+                            if (cp != std::string::npos) {
+                                cp += 8;
+                                char q = iframe_html[cp];
+                                if (q == '"' || q == '\'') {
+                                    cp++;
+                                    auto ep = iframe_html.find(q, cp);
+                                    if (ep != std::string::npos) {
+                                        std::string csp = iframe_html.substr(cp, ep - cp);
+                                        fprintf(stderr, "[iframe] CSP: %s\n", csp.c_str());
+                                        auto ss = csp.find("script-src");
+                                        if (ss != std::string::npos) {
+                                            auto semi = csp.find(';', ss);
+                                            std::string sd = (semi != std::string::npos)
+                                                ? csp.substr(ss, semi - ss) : csp.substr(ss);
+                                            if (sd.find("unsafe-eval") == std::string::npos) {
+                                                csp_blocks_eval = true;
+                                                fprintf(stderr, "[iframe] CSP blocks eval()\n");
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Extract inline scripts
+                    std::vector<std::string> scripts;
+                    {
+                        std::string lh = iframe_html;
+                        for (auto& c : lh) c = tolower((unsigned char)c);
+                        size_t pos = 0;
+                        while (pos < lh.size()) {
+                            auto ss = lh.find("<script", pos);
+                            if (ss == std::string::npos) break;
+                            auto te = lh.find('>', ss);
+                            if (te == std::string::npos) break;
+                            te++;
+                            auto se = lh.find("</script", te);
+                            if (se == std::string::npos) break;
+                            scripts.push_back(iframe_html.substr(te, se - te));
+                            pos = se + 9;
+                            auto cl = lh.find('>', pos);
+                            if (cl != std::string::npos) pos = cl + 1;
+                        }
+                    }
+
+                    for (auto& script : scripts) {
+                        if (script.empty()) continue;
+                        fprintf(stderr, "[iframe] Exec script (%zu bytes) csp_blocks_eval=%d\n",
+                                script.size(), csp_blocks_eval);
+                        if (csp_blocks_eval) {
+                            std::string wrapped =
+                                "(function() {\n"
+                                "  var __orig_eval = eval;\n"
+                                "  var parent = window;\n"
+                                "  eval = function() { throw new EvalError("
+                                "'Refused to evaluate a string as JavaScript because "
+                                "\\'unsafe-eval\\' is not an allowed source.'); };\n"
+                                "  try {\n" +
+                                script +
+                                "\n  } finally { eval = __orig_eval; }\n"
+                                "})();\n";
+                            g_js_engine->eval(wrapped, iframe_url);
+                        } else {
+                            std::string wrapped =
+                                "(function() { var parent = window;\n" +
+                                script + "\n})();\n";
+                            g_js_engine->eval(wrapped, iframe_url);
+                        }
+                    }
+                } else {
+                    fprintf(stderr, "[iframe] Failed to fetch: %s\n", iframe_url.c_str());
+                }
+            }
+        }
     }
 
     return JS_DupValue(ctx, argv[0]);
