@@ -1225,6 +1225,7 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
         }
         if (!closing && tname == "style") { state = STYLE_SKIP; continue; }
         if (!closing && tname == "noscript") { state = NOSCRIPT_SKIP; continue; }
+        if (closing && tname == "noscript") continue;
         // Skip <!DOCTYPE>, <!-- -->, and other !-prefixed declarations
         if (!tname.empty() && tname[0] == '!') continue;
 

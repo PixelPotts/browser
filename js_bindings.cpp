@@ -12,6 +12,9 @@
 #include <cairo/cairo.h>
 #include <gdk/gdk.h>
 
+// Forward declaration
+static bool img_fetch(const std::string& url, std::string& out);
+
 extern "C" {
 #include "quickjs.h"
 }
@@ -549,6 +552,51 @@ static JSValue js_element_appendChild(JSContext* ctx, JSValueConst this_val,
 
     if (child_ptr) {
         doc->appendChild(parent, child_ptr);
+
+        // Dynamic script loading: if appending a <script> with src, fetch & execute it
+        if (child->tag_name == "script") {
+            auto it = child->attributes.find("src");
+            if (it != child->attributes.end() && !it->second.empty()) {
+                std::string src_url = it->second;
+                // Resolve relative URLs
+                if (!src_url.empty() && src_url[0] != 'h' && src_url[0] != 'f' && src_url[0] != 'd') {
+                    if (g_js_engine && !g_js_engine->page_url.empty()) {
+                        std::string base = g_js_engine->page_url;
+                        if (src_url[0] == '/') {
+                            // Absolute path - use origin
+                            auto p = base.find("://");
+                            if (p != std::string::npos) {
+                                auto q = base.find('/', p + 3);
+                                src_url = (q != std::string::npos ? base.substr(0, q) : base) + src_url;
+                            }
+                        } else {
+                            size_t last_slash = base.rfind('/');
+                            if (last_slash != std::string::npos)
+                                src_url = base.substr(0, last_slash + 1) + src_url;
+                        }
+                    }
+                } else if (src_url.size() >= 2 && src_url[0] == '/' && src_url[1] == '/') {
+                    src_url = "https:" + src_url;
+                }
+                std::string script_body;
+                bool fetched = false;
+                // Handle data: URLs inline
+                if (src_url.size() > 5 && src_url.substr(0, 5) == "data:") {
+                    auto comma = src_url.find(',');
+                    if (comma != std::string::npos) {
+                        script_body = src_url.substr(comma + 1);
+                        fetched = true;
+                    }
+                } else {
+                    fetched = img_fetch(src_url, script_body);
+                }
+                if (fetched) {
+                    g_js_engine->eval(script_body, src_url);
+                } else {
+                    fprintf(stderr, "[script] Failed to fetch dynamic script: %s\n", src_url.c_str());
+                }
+            }
+        }
     }
 
     return JS_DupValue(ctx, argv[0]);
