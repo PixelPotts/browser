@@ -614,33 +614,107 @@ bool dom_simple_match(const std::string& raw, DOMNode* node) {
 bool dom_sel_matches(const std::string& sel, DOMNode* node) {
     if (sel.empty()) return false;
 
-    // Split selector into tokens
-    std::vector<std::string> parts;
+    // Tokenize: selectors and combinators
+    // Combinators: ' ' (descendant), '>' (child), '+' (adjacent sibling), '~' (general sibling)
+    enum Comb { DESC, CHILD, ADJ_SIB, GEN_SIB };
+    struct Token { std::string selector; Comb combinator; };
+    std::vector<Token> tokens;
     size_t i = 0, n = sel.size();
     while (i < n) {
         while (i < n && sel[i] == ' ') ++i;
+        if (i >= n) break;
+        // Check for combinator
+        if (!tokens.empty() && (sel[i] == '>' || sel[i] == '+' || sel[i] == '~')) {
+            Comb c = (sel[i] == '>') ? CHILD : (sel[i] == '+') ? ADJ_SIB : GEN_SIB;
+            tokens.back().combinator = c;
+            ++i;
+            continue;
+        }
+        // Read selector part (may contain . # [ : etc but not whitespace)
         size_t j = i;
-        while (j < n && sel[j] != ' ') ++j;
+        while (j < n && sel[j] != ' ' && sel[j] != '>' && sel[j] != '+' && sel[j] != '~') {
+            if (sel[j] == '[') { // skip inside brackets
+                while (j < n && sel[j] != ']') ++j;
+                if (j < n) ++j;
+            } else {
+                ++j;
+            }
+        }
         if (j > i) {
-            std::string p = sel.substr(i, j - i);
-            if (p != ">") parts.push_back(p);
+            tokens.push_back({sel.substr(i, j - i), DESC});
         }
         i = j;
     }
-    if (parts.empty()) return false;
+    if (tokens.empty()) return false;
 
-    // Last part must match current node
-    if (!dom_simple_match(parts.back(), node)) return false;
-    if (parts.size() == 1) return true;
+    // Last token must match the node itself
+    if (!dom_simple_match(tokens.back().selector, node)) return false;
+    if (tokens.size() == 1) return true;
 
-    // Remaining parts match ancestors (right-to-left greedy)
-    int pi = (int)parts.size() - 2;
-    DOMNode* ancestor = node->parent;
-    while (pi >= 0 && ancestor) {
-        if (dom_simple_match(parts[pi], ancestor)) --pi;
-        ancestor = ancestor->parent;
+    // Match right-to-left using combinators
+    int ti = (int)tokens.size() - 2;
+    DOMNode* cur = node;
+
+    while (ti >= 0 && cur) {
+        Comb comb = tokens[ti + 1].combinator; // combinator between tokens[ti] and tokens[ti+1]
+        // Actually combinator is stored on the LEFT token (between it and the next)
+        // tokens[ti].combinator tells how to traverse FROM tokens[ti] TO tokens[ti+1]
+        // We stored combinator on tokens.back() as the one coming before token (to the right)
+        // Let me re-think: tokens are left-to-right [A desc B child C]
+        // tokens[0]={A, DESC}, tokens[1]={B, CHILD}, tokens[2]={C, DESC}
+        // So to match C (the node), we look at tokens[1].combinator=CHILD
+        // meaning B must be direct parent of C
+        comb = tokens[ti].combinator;
+
+        if (comb == DESC) {
+            // Ancestor: walk up parents
+            DOMNode* p = cur->parent;
+            bool found = false;
+            while (p) {
+                if (dom_simple_match(tokens[ti].selector, p)) {
+                    cur = p;
+                    found = true;
+                    break;
+                }
+                p = p->parent;
+            }
+            if (!found) return false;
+        } else if (comb == CHILD) {
+            // Direct parent only
+            DOMNode* p = cur->parent;
+            if (!p || !dom_simple_match(tokens[ti].selector, p)) return false;
+            cur = p;
+        } else if (comb == ADJ_SIB) {
+            // Immediately preceding sibling element
+            if (!cur->parent) return false;
+            auto& siblings = cur->parent->children;
+            DOMNode* prev = nullptr;
+            for (size_t si = 0; si < siblings.size(); si++) {
+                if (siblings[si].get() == cur) break;
+                if (siblings[si]->node_type == DOMNode::ELEMENT)
+                    prev = siblings[si].get();
+            }
+            if (!prev || !dom_simple_match(tokens[ti].selector, prev)) return false;
+            cur = prev;
+        } else if (comb == GEN_SIB) {
+            // Any preceding sibling element
+            if (!cur->parent) return false;
+            auto& siblings = cur->parent->children;
+            bool found = false;
+            for (size_t si = 0; si < siblings.size(); si++) {
+                if (siblings[si].get() == cur) break;
+                if (siblings[si]->node_type == DOMNode::ELEMENT &&
+                    dom_simple_match(tokens[ti].selector, siblings[si].get())) {
+                    cur = siblings[si].get();
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) return false;
+        }
+        --ti;
     }
-    return pi < 0;
+    return ti < 0;
 }
 
 DOMNode* Document::querySelector(const std::string& selector) const {
