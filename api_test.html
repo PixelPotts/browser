@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>API Test Suite</title>
+<style>
+body { font-family: sans-serif; padding: 20px; background: #1a1a2e; color: #eee; }
+h1 { color: #e94560; }
+.test { padding: 8px 12px; margin: 4px 0; border-radius: 4px; }
+.pass { background: #16213e; border-left: 4px solid #0f3460; color: #4ecca3; }
+.fail { background: #2d1b2e; border-left: 4px solid #e94560; color: #e94560; }
+#results { margin-top: 20px; }
+#summary { font-size: 1.2em; margin-top: 16px; padding: 12px; border-radius: 6px; }
+.container { padding: 20px; background: #16213e; margin: 10px 0; }
+.container > .child { padding: 10px; background: #0f3460; }
+.container > .child + .sibling { background: #e94560; }
+input, textarea, select, button { margin: 4px; }
+</style>
+</head>
+<body>
+<h1>Browser JS API Test Suite</h1>
+<div id="test-div" class="container" style="width:200px;height:100px;">
+  <div class="child" id="child1">Child 1</div>
+  <div class="child sibling" id="child2">Child 2</div>
+  <p id="para1">Paragraph</p>
+</div>
+<input type="text" id="test-input" value="hello">
+<textarea id="test-textarea">initial text</textarea>
+<select id="test-select"><option value="a">A</option><option value="b">B</option></select>
+<button id="test-btn">Click Me</button>
+<div id="clone-target"><span>Clone me</span></div>
+<div id="remove-target">Remove me</div>
+<div id="mutation-target">Watch me</div>
+<div id="results"></div>
+<div id="summary"></div>
+
+<script>
+var results = [];
+var passed = 0, failed = 0;
+
+function test(name, fn) {
+    try {
+        var result = fn();
+        if (result) {
+            results.push({ name: name, pass: true });
+            passed++;
+        } else {
+            results.push({ name: name, pass: false, reason: 'returned false' });
+            failed++;
+        }
+    } catch (e) {
+        results.push({ name: name, pass: false, reason: e.message || String(e) });
+        failed++;
+    }
+}
+
+// ---- Step 1: getBoundingClientRect + offset* ----
+test('getBoundingClientRect returns object', function() {
+    var div = document.getElementById('test-div');
+    var rect = div.getBoundingClientRect();
+    return rect && typeof rect.width === 'number' && typeof rect.height === 'number'
+        && typeof rect.x === 'number' && typeof rect.y === 'number';
+});
+
+test('offsetWidth returns number', function() {
+    var div = document.getElementById('test-div');
+    return typeof div.offsetWidth === 'number';
+});
+
+test('offsetHeight returns number', function() {
+    var div = document.getElementById('test-div');
+    return typeof div.offsetHeight === 'number';
+});
+
+test('clientWidth returns number', function() {
+    var div = document.getElementById('test-div');
+    return typeof div.clientWidth === 'number';
+});
+
+// ---- Step 2: Keyboard events ----
+var keydownFired = false;
+window.addEventListener('keydown', function(e) {
+    keydownFired = true;
+});
+
+// ---- Step 3: input/change events ----
+var inputFired = false;
+var inputEl = document.getElementById('test-input');
+inputEl.addEventListener('input', function(e) {
+    inputFired = true;
+});
+
+// ---- Step 4: element.remove() ----
+test('element.remove() exists as function', function() {
+    var el = document.getElementById('remove-target');
+    return typeof el.remove === 'function';
+});
+
+test('element.remove() removes from DOM', function() {
+    var el = document.getElementById('remove-target');
+    var parent = el.parentNode;
+    el.remove();
+    // Check it's gone
+    var found = document.getElementById('remove-target');
+    return found === null;
+});
+
+// ---- Step 5: window.addEventListener ----
+var loadFired = false;
+window.addEventListener('load', function() {
+    loadFired = true;
+});
+
+test('window.addEventListener is a function', function() {
+    return typeof window.addEventListener === 'function';
+});
+
+test('window.removeEventListener is a function', function() {
+    return typeof window.removeEventListener === 'function';
+});
+
+// ---- Step 6: CSS selector combinators ----
+test('querySelector with > (child combinator)', function() {
+    var result = document.querySelector('.container > .child');
+    return result !== null && result.id === 'child1';
+});
+
+test('querySelector with + (adjacent sibling)', function() {
+    var result = document.querySelector('#child1 + .sibling');
+    return result !== null && result.id === 'child2';
+});
+
+test('querySelector with ~ (general sibling)', function() {
+    var result = document.querySelector('.child ~ p');
+    return result !== null && result.id === 'para1';
+});
+
+test('querySelectorAll with > returns correct count', function() {
+    var results = document.querySelectorAll('.container > .child');
+    return results.length === 2;
+});
+
+// ---- Step 7: cloneNode ----
+test('cloneNode(false) creates shallow copy', function() {
+    var el = document.getElementById('clone-target');
+    var clone = el.cloneNode(false);
+    return clone !== null && clone.tagName === 'DIV' && clone.children.length === 0;
+});
+
+test('cloneNode(true) creates deep copy', function() {
+    var el = document.getElementById('clone-target');
+    var clone = el.cloneNode(true);
+    return clone !== null && clone.children.length > 0;
+});
+
+test('cloneNode does not copy id', function() {
+    var el = document.getElementById('clone-target');
+    var clone = el.cloneNode(true);
+    return clone.id === '' || clone.id === undefined;
+});
+
+// ---- Step 8: dispatchEvent ----
+test('dispatchEvent fires listeners', function() {
+    var div = document.getElementById('test-div');
+    var dispatched = false;
+    div.addEventListener('custom-test', function(e) {
+        dispatched = true;
+    });
+    div.dispatchEvent(new Event('custom-test'));
+    return dispatched;
+});
+
+// ---- Step 9: MutationObserver ----
+test('MutationObserver constructor exists', function() {
+    return typeof MutationObserver === 'function';
+});
+
+test('MutationObserver has observe/disconnect/takeRecords', function() {
+    var mo = new MutationObserver(function() {});
+    return typeof mo.observe === 'function'
+        && typeof mo.disconnect === 'function'
+        && typeof mo.takeRecords === 'function';
+});
+
+// Async MutationObserver test
+var mutationObserved = false;
+var mo = new MutationObserver(function(records) {
+    mutationObserved = true;
+});
+var mutTarget = document.getElementById('mutation-target');
+mo.observe(mutTarget, { childList: true, subtree: true });
+// Trigger mutation
+var newChild = document.createElement('span');
+newChild.textContent = 'added';
+mutTarget.appendChild(newChild);
+
+// ---- Step 10: Event object enhancements ----
+test('Event has bubbles property', function() {
+    var e = new Event('test', { bubbles: true });
+    return e.bubbles === true;
+});
+
+test('Event has cancelable property', function() {
+    var e = new Event('test', { cancelable: true });
+    return e.cancelable === true;
+});
+
+test('Event has timeStamp', function() {
+    var e = new Event('test');
+    return typeof e.timeStamp === 'number' && e.timeStamp > 0;
+});
+
+// ---- Render results ----
+setTimeout(function() {
+    // Deferred tests
+    test('window load event fired', function() {
+        return loadFired;
+    });
+
+    test('MutationObserver callback fired', function() {
+        return mutationObserved;
+    });
+
+    // Render all results
+    var html = '';
+    for (var i = 0; i < results.length; i++) {
+        var r = results[i];
+        var cls = r.pass ? 'pass' : 'fail';
+        var icon = r.pass ? 'PASS' : 'FAIL';
+        var detail = r.reason ? ' - ' + r.reason : '';
+        html += '<div class="test ' + cls + '">' + icon + ': ' + r.name + detail + '</div>';
+    }
+    document.getElementById('results').innerHTML = html;
+
+    var total = passed + failed;
+    var summaryEl = document.getElementById('summary');
+    summaryEl.textContent = passed + '/' + total + ' tests passed (' + failed + ' failed)';
+    summaryEl.style.backgroundColor = failed === 0 ? '#0f3460' : '#2d1b2e';
+    summaryEl.style.color = failed === 0 ? '#4ecca3' : '#e94560';
+
+    console.log('API Test Results: ' + passed + '/' + total + ' passed');
+}, 200);
+</script>
+</body>
+</html>
