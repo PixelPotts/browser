@@ -3371,6 +3371,25 @@ bool JSEngine::eval(const std::string& code, const std::string& filename) {
     return true;
 }
 
+bool JSEngine::evalModule(const std::string& code, const std::string& filename) {
+    JSValue result = JS_Eval(ctx, code.c_str(), code.size(),
+                              filename.c_str(), JS_EVAL_TYPE_MODULE);
+    if (JS_IsException(result)) {
+        JSValue exc = JS_GetException(ctx);
+        const char* str = JS_ToCString(ctx, exc);
+        if (str) {
+            fprintf(stderr, "[JS Module Error] %s\n", str);
+            JS_FreeCString(ctx, str);
+        }
+        JS_FreeValue(ctx, exc);
+        JS_FreeValue(ctx, result);
+        return false;
+    }
+    JS_FreeValue(ctx, result);
+    executePendingJobs();
+    return true;
+}
+
 void JSEngine::executePendingJobs() {
     JSContext* pctx;
     while (JS_ExecutePendingJob(rt, &pctx) > 0) {}

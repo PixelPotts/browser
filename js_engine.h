@@ -35,6 +35,9 @@ public:
     // Evaluate JavaScript code
     bool eval(const std::string& code, const std::string& filename = "<script>");
 
+    // Evaluate as ES6 module (variables are scoped, not global)
+    bool evalModule(const std::string& code, const std::string& filename = "<module>");
+
     // Execute pending microtasks/promises
     void executePendingJobs();
 

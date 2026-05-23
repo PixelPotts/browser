@@ -688,6 +688,18 @@ static JSValue js_element_get_type(JSContext* ctx, JSValueConst this_val) {
     return JS_NewString(ctx, "");
 }
 
+static JSValue js_element_set_type(JSContext* ctx, JSValueConst this_val,
+                                    int argc, JSValueConst* argv) {
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node || argc < 1) return JS_UNDEFINED;
+    const char* s = JS_ToCString(ctx, argv[0]);
+    if (s) {
+        node->attributes["type"] = s;
+        JS_FreeCString(ctx, s);
+    }
+    return JS_UNDEFINED;
+}
+
 // ---- src / href property getters (IDL reflected attributes) ----
 
 static JSValue js_element_get_src(JSContext* ctx, JSValueConst this_val) {
@@ -863,11 +875,16 @@ static JSValue js_element_appendChild(JSContext* ctx, JSValueConst this_val,
                     if (g_js_engine && !g_js_engine->page_url.empty()) {
                         std::string base = g_js_engine->page_url;
                         if (src_url[0] == '/') {
-                            // Absolute path - use origin
-                            auto p = base.find("://");
-                            if (p != std::string::npos) {
-                                auto q = base.find('/', p + 3);
-                                src_url = (q != std::string::npos ? base.substr(0, q) : base) + src_url;
+                            // For file:// URLs, resolve against page directory
+                            if (base.substr(0, 7) == "file://") {
+                                auto last_slash = base.rfind('/');
+                                if (last_slash > 6) src_url = base.substr(0, last_slash) + src_url;
+                            } else {
+                                auto p = base.find("://");
+                                if (p != std::string::npos) {
+                                    auto q = base.find('/', p + 3);
+                                    src_url = (q != std::string::npos ? base.substr(0, q) : base) + src_url;
+                                }
                             }
                         } else {
                             size_t last_slash = base.rfind('/');
@@ -891,7 +908,15 @@ static JSValue js_element_appendChild(JSContext* ctx, JSValueConst this_val,
                     fetched = img_fetch(src_url, script_body);
                 }
                 if (fetched) {
-                    g_js_engine->eval(script_body, src_url);
+                    // Check if this is a module script
+                    auto type_it = child->attributes.find("type");
+                    bool is_module = (type_it != child->attributes.end() && type_it->second == "module");
+                    if (is_module) {
+                        fprintf(stderr, "[script] Evaluating as ES6 module: %s\n", src_url.c_str());
+                        g_js_engine->evalModule(script_body, src_url);
+                    } else {
+                        g_js_engine->eval(script_body, src_url);
+                    }
                 } else {
                     fprintf(stderr, "[script] Failed to fetch dynamic script: %s\n", src_url.c_str());
                 }
@@ -2269,7 +2294,7 @@ void js_bindings_init(JSEngine* engine) {
     JS_DefinePropertyGetSet(ctx, elem_proto,
         JS_NewAtom(ctx, "type"),
         JS_NewCFunction(ctx, (JSCFunction*)js_element_get_type, "get type", 0),
-        JS_NewCFunction(ctx, js_noop_setter, "set type", 1), JS_PROP_CONFIGURABLE);
+        JS_NewCFunction(ctx, js_element_set_type, "set type", 1), JS_PROP_CONFIGURABLE);
     JS_DefinePropertyGetSet(ctx, elem_proto,
         JS_NewAtom(ctx, "src"),
         JS_NewCFunction(ctx, (JSCFunction*)js_element_get_src, "get src", 0),
