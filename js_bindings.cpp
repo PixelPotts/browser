@@ -261,6 +261,7 @@ static JSValue js_element_get_nodeName(JSContext* ctx, JSValueConst this_val) {
     DOMNode* node = js_get_node(ctx, this_val);
     if (!node) return JS_UNDEFINED;
     if (node->node_type == DOMNode::TEXT) return JS_NewString(ctx, "#text");
+    if (node->node_type == DOMNode::COMMENT) return JS_NewString(ctx, "#comment");
     std::string upper = node->tag_name;
     for (auto& c : upper) c = (char)toupper((unsigned char)c);
     return JS_NewString(ctx, upper.c_str());
@@ -270,6 +271,28 @@ static JSValue js_element_get_nodeType(JSContext* ctx, JSValueConst this_val) {
     DOMNode* node = js_get_node(ctx, this_val);
     if (!node) return JS_UNDEFINED;
     return JS_NewInt32(ctx, (int)node->node_type);
+}
+
+static JSValue js_element_get_nodeValue(JSContext* ctx, JSValueConst this_val) {
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node) return JS_UNDEFINED;
+    // nodeValue: text content for TEXT(3) and COMMENT(8) nodes, null for elements
+    if (node->node_type == DOMNode::TEXT || node->node_type == DOMNode::COMMENT)
+        return JS_NewString(ctx, node->text_content.c_str());
+    return JS_NULL;
+}
+
+static JSValue js_element_set_nodeValue(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node || argc < 1) return JS_UNDEFINED;
+    if (node->node_type == DOMNode::TEXT || node->node_type == DOMNode::COMMENT) {
+        const char* s = JS_ToCString(ctx, argv[0]);
+        if (s) {
+            node->text_content = s;
+            JS_FreeCString(ctx, s);
+        }
+    }
+    return JS_UNDEFINED;
 }
 
 static JSValue js_element_get_textContent(JSContext* ctx, JSValueConst this_val) {
@@ -2132,6 +2155,10 @@ void js_bindings_init(JSEngine* engine) {
         JS_NewAtom(ctx, "nodeType"),
         JS_NewCFunction(ctx, (JSCFunction*)js_element_get_nodeType, "get nodeType", 0),
         JS_NewCFunction(ctx, js_noop_setter, "set nodeType", 1), JS_PROP_CONFIGURABLE);
+    JS_DefinePropertyGetSet(ctx, elem_proto,
+        JS_NewAtom(ctx, "nodeValue"),
+        JS_NewCFunction(ctx, (JSCFunction*)js_element_get_nodeValue, "get nodeValue", 0),
+        JS_NewCFunction(ctx, js_element_set_nodeValue, "set nodeValue", 1), JS_PROP_CONFIGURABLE);
     JS_DefinePropertyGetSet(ctx, elem_proto,
         JS_NewAtom(ctx, "textContent"),
         JS_NewCFunction(ctx, (JSCFunction*)js_element_get_textContent, "get textContent", 0),

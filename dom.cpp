@@ -139,6 +139,71 @@ static int heading_font_size(const std::string& tag) {
     return 0;
 }
 
+// Encode a Unicode code point as UTF-8
+static std::string utf8_encode(uint32_t cp) {
+    std::string r;
+    if (cp < 0x80) {
+        r += (char)cp;
+    } else if (cp < 0x800) {
+        r += (char)(0xC0 | (cp >> 6));
+        r += (char)(0x80 | (cp & 0x3F));
+    } else if (cp < 0x10000) {
+        r += (char)(0xE0 | (cp >> 12));
+        r += (char)(0x80 | ((cp >> 6) & 0x3F));
+        r += (char)(0x80 | (cp & 0x3F));
+    } else if (cp < 0x110000) {
+        r += (char)(0xF0 | (cp >> 18));
+        r += (char)(0x80 | ((cp >> 12) & 0x3F));
+        r += (char)(0x80 | ((cp >> 6) & 0x3F));
+        r += (char)(0x80 | (cp & 0x3F));
+    }
+    return r;
+}
+
+// Decode HTML character references in text
+static std::string decode_html_entities(const std::string& s) {
+    static const std::unordered_map<std::string, uint32_t> named = {
+        {"amp", 0x26}, {"lt", 0x3C}, {"gt", 0x3E}, {"quot", 0x22}, {"apos", 0x27},
+        {"nbsp", 0xA0}, {"copy", 0xA9}, {"reg", 0xAE}, {"trade", 0x2122},
+        {"laquo", 0xAB}, {"raquo", 0xBB}, {"bull", 0x2022}, {"hellip", 0x2026},
+        {"mdash", 0x2014}, {"ndash", 0x2013}, {"lsquo", 0x2018}, {"rsquo", 0x2019},
+        {"ldquo", 0x201C}, {"rdquo", 0x201D}, {"euro", 0x20AC}, {"pound", 0xA3},
+        {"yen", 0xA5}, {"cent", 0xA2}, {"sect", 0xA7}, {"para", 0xB6},
+        {"deg", 0xB0}, {"plusmn", 0xB1}, {"micro", 0xB5}, {"frac14", 0xBC},
+        {"frac12", 0xBD}, {"frac34", 0xBE}, {"times", 0xD7}, {"divide", 0xF7},
+        {"alpha", 0x3B1}, {"beta", 0x3B2}, {"gamma", 0x3B3}, {"delta", 0x3B4},
+        {"pi", 0x3C0}, {"sigma", 0x3C3}, {"omega", 0x3C9},
+        {"larr", 0x2190}, {"uarr", 0x2191}, {"rarr", 0x2192}, {"darr", 0x2193},
+        {"hearts", 0x2665}, {"diams", 0x2666}, {"clubs", 0x2663}, {"spades", 0x2660},
+        {"ImaginaryI", 0x2148}, {"notinva", 0x2209},
+        {"notin", 0x2209}, {"isin", 0x2208}, {"exist", 0x2203}, {"forall", 0x2200},
+        {"empty", 0x2205}, {"nabla", 0x2207}, {"prod", 0x220F}, {"sum", 0x2211},
+        {"infin", 0x221E}, {"radic", 0x221A}, {"prop", 0x221D},
+    };
+    std::string r;
+    r.reserve(s.size());
+    for (size_t i = 0; i < s.size(); ) {
+        if (s[i] != '&') { r += s[i++]; continue; }
+        size_t semi = s.find(';', i + 1);
+        if (semi == std::string::npos || semi - i > 32) { r += s[i++]; continue; }
+        std::string e = s.substr(i + 1, semi - i - 1);
+        if (!e.empty() && e[0] == '#') {
+            try {
+                uint32_t cp = (e.size() > 1 && (e[1] == 'x' || e[1] == 'X'))
+                    ? (uint32_t)std::stoul(e.substr(2), nullptr, 16)
+                    : (uint32_t)std::stoul(e.substr(1));
+                r += utf8_encode(cp);
+            } catch (...) { r += s[i++]; continue; }
+        } else {
+            auto it = named.find(e);
+            if (it != named.end()) r += utf8_encode(it->second);
+            else { r += s[i++]; continue; }
+        }
+        i = semi + 1;
+    }
+    return r;
+}
+
 void DOMNode::setInnerHTML(const std::string& html, uint32_t& next_id,
                            std::unordered_map<uint32_t, DOMNode*>& node_map,
                            std::unordered_map<std::string, DOMNode*>& id_map) {
@@ -154,7 +219,26 @@ void DOMNode::setInnerHTML(const std::string& html, uint32_t& next_id,
     for (auto& c : children) unreg(c.get());
     children.clear();
 
-    if (html.empty()) { markDirty(); return; }
+    if (html.empty()) {
+        // Special case: setting innerHTML="" on <html> creates HEAD + BODY
+        if (tag_name == "html") {
+            auto head = std::make_shared<DOMNode>();
+            head->node_id = next_id++;
+            head->node_type = ELEMENT;
+            head->tag_name = "head";
+            head->parent = this;
+            node_map[head->node_id] = head.get();
+            children.push_back(head);
+            auto body = std::make_shared<DOMNode>();
+            body->node_id = next_id++;
+            body->node_type = ELEMENT;
+            body->tag_name = "body";
+            body->parent = this;
+            node_map[body->node_id] = body.get();
+            children.push_back(body);
+        }
+        markDirty(); return;
+    }
 
     // Simple HTML fragment parser
     DOMNode* cur = this;
@@ -163,9 +247,62 @@ void DOMNode::setInnerHTML(const std::string& html, uint32_t& next_id,
 
     while (i < len) {
         if (html[i] == '<') {
-            size_t tag_start = i;
             i++;
             if (i >= len) break;
+
+            // Comment: <!-- ... -->
+            if (i + 2 < len && html[i] == '!' && html[i+1] == '-' && html[i+2] == '-') {
+                i += 3;
+                size_t end = html.find("-->", i);
+                std::string ctext;
+                if (end != std::string::npos) { ctext = html.substr(i, end - i); i = end + 3; }
+                else { ctext = html.substr(i); i = len; }
+                auto cn = std::make_shared<DOMNode>();
+                cn->node_id = next_id++;
+                cn->node_type = COMMENT;
+                cn->tag_name = "";
+                cn->text_content = ctext;
+                cn->parent = cur;
+                node_map[cn->node_id] = cn.get();
+                cur->children.push_back(cn);
+                continue;
+            }
+
+            // CDATA: <![CDATA[...]]> → comment node in HTML context
+            if (i + 6 < len && html.substr(i, 7) == "![CDATA") {
+                size_t start = i + 1; // skip '!'
+                size_t end = html.find(">", i);
+                std::string content;
+                if (end != std::string::npos) { content = html.substr(start, end - start); i = end + 1; }
+                else { content = html.substr(start); i = len; }
+                auto cn = std::make_shared<DOMNode>();
+                cn->node_id = next_id++;
+                cn->node_type = COMMENT;
+                cn->tag_name = "";
+                cn->text_content = content;
+                cn->parent = cur;
+                node_map[cn->node_id] = cn.get();
+                cur->children.push_back(cn);
+                continue;
+            }
+
+            // Processing instruction: <?...> → comment node in HTML context
+            if (html[i] == '?') {
+                size_t start = i; // include the '?'
+                size_t end = html.find(">", i);
+                std::string content;
+                if (end != std::string::npos) { content = html.substr(start, end - start); i = end + 1; }
+                else { content = html.substr(start); i = len; }
+                auto cn = std::make_shared<DOMNode>();
+                cn->node_id = next_id++;
+                cn->node_type = COMMENT;
+                cn->tag_name = "";
+                cn->text_content = content;
+                cn->parent = cur;
+                node_map[cn->node_id] = cn.get();
+                cur->children.push_back(cn);
+                continue;
+            }
 
             // Closing tag
             if (html[i] == '/') {
@@ -246,16 +383,66 @@ void DOMNode::setInnerHTML(const std::string& html, uint32_t& next_id,
                 }
             }
 
+            // Table: auto-wrap <col> in <colgroup>
+            if (tag_name == "col" && cur->tag_name == "table") {
+                auto colgroup = std::make_shared<DOMNode>();
+                colgroup->node_id = next_id++;
+                colgroup->node_type = ELEMENT;
+                colgroup->tag_name = "colgroup";
+                colgroup->parent = cur;
+                node_map[colgroup->node_id] = colgroup.get();
+                cur->children.push_back(colgroup);
+                elem->parent = colgroup.get();
+                colgroup->children.push_back(elem);
+                continue;
+            }
+
             cur->children.push_back(elem);
 
             if (!self_close && !is_void_element(tag_name)) {
-                cur = elem.get();
+                // Raw text elements: content until matching close tag is not parsed
+                if (tag_name == "textarea" || tag_name == "style" || tag_name == "script" ||
+                    tag_name == "title" || tag_name == "xmp") {
+                    std::string close_pat = "</" + tag_name;
+                    size_t end = std::string::npos;
+                    for (size_t s = i; s + close_pat.size() <= len; s++) {
+                        bool match = true;
+                        for (size_t j = 0; j < close_pat.size(); j++) {
+                            if (tolower((unsigned char)html[s+j]) != close_pat[j]) {
+                                match = false; break;
+                            }
+                        }
+                        if (match && (s + close_pat.size() >= len ||
+                                      html[s + close_pat.size()] == '>' ||
+                                      isspace((unsigned char)html[s + close_pat.size()]))) {
+                            end = s; break;
+                        }
+                    }
+                    std::string raw;
+                    if (end != std::string::npos) {
+                        raw = html.substr(i, end - i);
+                        i = end + close_pat.size();
+                        while (i < len && html[i] != '>') i++;
+                        if (i < len) i++;
+                    } else { raw = html.substr(i); i = len; }
+                    if (!raw.empty()) {
+                        auto tn = std::make_shared<DOMNode>();
+                        tn->node_id = next_id++;
+                        tn->node_type = TEXT;
+                        tn->text_content = raw;
+                        tn->parent = elem.get();
+                        node_map[tn->node_id] = tn.get();
+                        elem->children.push_back(tn);
+                    }
+                } else {
+                    cur = elem.get();
+                }
             }
         } else {
-            // Text content
+            // Text content - decode HTML entities
             size_t ts = i;
             while (i < len && html[i] != '<') i++;
-            std::string text = html.substr(ts, i - ts);
+            std::string text = decode_html_entities(html.substr(ts, i - ts));
             if (!text.empty()) {
                 auto tn = std::make_shared<DOMNode>();
                 tn->node_id = next_id++;
@@ -291,6 +478,8 @@ std::string DOMNode::getInnerHTML() const {
     for (auto& child : children) {
         if (child->node_type == TEXT) {
             result += child->text_content;
+        } else if (child->node_type == COMMENT) {
+            result += "<!--" + child->text_content + "-->";
         } else {
             result += "<" + child->tag_name;
             if (!child->id.empty())
