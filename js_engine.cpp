@@ -783,6 +783,65 @@ globalThis.CustomEvent = function CustomEvent(type, opts) {
     this.detail = (opts && opts.detail) || null;
 };
 
+// DOM type constructors — must be defined before extending prototypes
+globalThis.Node = function Node() {};
+Node.ELEMENT_NODE = 1; Node.TEXT_NODE = 3; Node.COMMENT_NODE = 8; Node.DOCUMENT_NODE = 9;
+Node.DOCUMENT_FRAGMENT_NODE = 11;
+Node.prototype = {
+    nodeType: 1, nodeName: '', parentNode: null, childNodes: [], children: [],
+    firstChild: null, lastChild: null, nextSibling: null, previousSibling: null,
+    ownerDocument: null, textContent: '',
+    appendChild: function(c) { return c; },
+    removeChild: function(c) { return c; },
+    insertBefore: function(n, r) { return n; },
+    replaceChild: function(n, o) { return o; },
+    cloneNode: function() { return new Node(); },
+    contains: function(o) { return false; },
+    hasChildNodes: function() { return false; },
+    addEventListener: function() {},
+    removeEventListener: function() {},
+    dispatchEvent: function() { return true; }
+};
+globalThis.EventTarget = function EventTarget() {};
+EventTarget.prototype = {
+    addEventListener: function() {},
+    removeEventListener: function() {},
+    dispatchEvent: function() { return true; }
+};
+globalThis.Element = function Element() {};
+Element.prototype = Object.create(Node.prototype);
+Element.prototype.constructor = Element;
+Element.prototype.matches = function(sel) { return false; };
+Element.prototype.closest = function(sel) { return null; };
+Element.prototype.getAttribute = function() { return null; };
+Element.prototype.setAttribute = function() {};
+Element.prototype.removeAttribute = function() {};
+Element.prototype.hasAttribute = function() { return false; };
+Element.prototype.getElementsByTagName = function() { return []; };
+Element.prototype.getElementsByClassName = function() { return []; };
+Element.prototype.querySelector = function() { return null; };
+Element.prototype.querySelectorAll = function() { return []; };
+Element.prototype.getBoundingClientRect = function() {
+    return { top: 0, left: 0, bottom: 0, right: 0, width: 0, height: 0, x: 0, y: 0 };
+};
+Element.prototype.scrollIntoView = function() {};
+Element.prototype.focus = function() {};
+Element.prototype.blur = function() {};
+Element.prototype.click = function() {};
+Element.prototype.remove = function() { if (this.parentNode) this.parentNode.removeChild(this); };
+globalThis.HTMLElement = function HTMLElement() {};
+HTMLElement.prototype = Object.create(Element.prototype);
+HTMLElement.prototype.constructor = HTMLElement;
+HTMLElement.prototype.style = {};
+HTMLElement.prototype.offsetWidth = 0;
+HTMLElement.prototype.offsetHeight = 0;
+HTMLElement.prototype.offsetTop = 0;
+HTMLElement.prototype.offsetLeft = 0;
+HTMLElement.prototype.scrollWidth = 0;
+HTMLElement.prototype.scrollHeight = 0;
+HTMLElement.prototype.clientWidth = 0;
+HTMLElement.prototype.clientHeight = 0;
+
 // Web Components API stubs (prevents webcomponents-loader from crashing)
 Element.prototype.attachShadow = function(opts) {
     var shadow = { host: this, mode: (opts && opts.mode) || 'open', childNodes: [], children: [],
@@ -1117,68 +1176,7 @@ globalThis.XMLHttpRequest = function XMLHttpRequest() {
     this.removeEventListener = function() {};
 };
 
-// DOM type constructors with prototypes (needed by polyfill libraries)
-globalThis.Node = function Node() {};
-Node.ELEMENT_NODE = 1; Node.TEXT_NODE = 3; Node.COMMENT_NODE = 8; Node.DOCUMENT_NODE = 9;
-Node.DOCUMENT_FRAGMENT_NODE = 11;
-Node.prototype = {
-    nodeType: 1, nodeName: '', parentNode: null, childNodes: [], children: [],
-    firstChild: null, lastChild: null, nextSibling: null, previousSibling: null,
-    ownerDocument: null, textContent: '',
-    appendChild: function(c) { return c; },
-    removeChild: function(c) { return c; },
-    insertBefore: function(n, r) { return n; },
-    replaceChild: function(n, o) { return o; },
-    cloneNode: function() { return new Node(); },
-    contains: function(o) { return false; },
-    hasChildNodes: function() { return false; },
-    addEventListener: function() {},
-    removeEventListener: function() {},
-    dispatchEvent: function() { return true; }
-};
-
-globalThis.EventTarget = function EventTarget() {};
-EventTarget.prototype = {
-    addEventListener: function() {},
-    removeEventListener: function() {},
-    dispatchEvent: function() { return true; }
-};
-
-globalThis.Element = function Element() {};
-Element.prototype = Object.create(Node.prototype);
-Element.prototype.constructor = Element;
-Element.prototype.matches = function(sel) { return false; };
-Element.prototype.closest = function(sel) { return null; };
-Element.prototype.getAttribute = function() { return null; };
-Element.prototype.setAttribute = function() {};
-Element.prototype.removeAttribute = function() {};
-Element.prototype.hasAttribute = function() { return false; };
-Element.prototype.getElementsByTagName = function() { return []; };
-Element.prototype.getElementsByClassName = function() { return []; };
-Element.prototype.querySelector = function() { return null; };
-Element.prototype.querySelectorAll = function() { return []; };
-Element.prototype.getBoundingClientRect = function() {
-    return { top: 0, left: 0, bottom: 0, right: 0, width: 0, height: 0, x: 0, y: 0 };
-};
-Element.prototype.scrollIntoView = function() {};
-Element.prototype.focus = function() {};
-Element.prototype.blur = function() {};
-Element.prototype.click = function() {};
-Element.prototype.remove = function() { if (this.parentNode) this.parentNode.removeChild(this); };
-
-globalThis.HTMLElement = function HTMLElement() {};
-HTMLElement.prototype = Object.create(Element.prototype);
-HTMLElement.prototype.constructor = HTMLElement;
-HTMLElement.prototype.style = {};
-HTMLElement.prototype.offsetWidth = 0;
-HTMLElement.prototype.offsetHeight = 0;
-HTMLElement.prototype.offsetTop = 0;
-HTMLElement.prototype.offsetLeft = 0;
-HTMLElement.prototype.scrollWidth = 0;
-HTMLElement.prototype.scrollHeight = 0;
-HTMLElement.prototype.clientWidth = 0;
-HTMLElement.prototype.clientHeight = 0;
-
+// HTMLDocument and remaining constructors (Node/Element/HTMLElement defined earlier)
 globalThis.HTMLDocument = function HTMLDocument() {};
 HTMLDocument.prototype = Object.create(Node.prototype);
 HTMLDocument.prototype.constructor = HTMLDocument;
