@@ -1,5 +1,6 @@
 #include "js_bindings.h"
 #include "js_engine.h"
+#include "js_event.h"
 #include "dom.h"
 #include <cstdio>
 #include <cstring>
@@ -964,6 +965,128 @@ static JSValue js_element_removeEventListener(JSContext* ctx, JSValueConst this_
     return JS_UNDEFINED;
 }
 
+// ---- getBoundingClientRect (native) ----
+
+// Forward declare AppState for widget lookup (defined in browser.cpp)
+struct AppState;
+
+static JSValue js_element_getBoundingClientRect(JSContext* ctx, JSValueConst this_val,
+                                                  int argc, JSValueConst* argv) {
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node || !g_js_engine || !g_js_engine->app_state) {
+        JSValue r = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, r, "x", JS_NewInt32(ctx, 0));
+        JS_SetPropertyStr(ctx, r, "y", JS_NewInt32(ctx, 0));
+        JS_SetPropertyStr(ctx, r, "width", JS_NewInt32(ctx, 0));
+        JS_SetPropertyStr(ctx, r, "height", JS_NewInt32(ctx, 0));
+        JS_SetPropertyStr(ctx, r, "top", JS_NewInt32(ctx, 0));
+        JS_SetPropertyStr(ctx, r, "right", JS_NewInt32(ctx, 0));
+        JS_SetPropertyStr(ctx, r, "bottom", JS_NewInt32(ctx, 0));
+        JS_SetPropertyStr(ctx, r, "left", JS_NewInt32(ctx, 0));
+        return r;
+    }
+
+    // Look up widget from node_widget_map (declared as extern in browser.cpp AppState)
+    // We access it via g_js_engine->app_state which is AppState*
+    // We need to include the map — but AppState is defined in browser.cpp
+    // Use a helper function declared in browser.cpp
+    int x = 0, y = 0, w = 0, h = 0;
+    extern void js_get_node_geometry(AppState* st, uint32_t node_id, int& x, int& y, int& w, int& h);
+    js_get_node_geometry(g_js_engine->app_state, node->node_id, x, y, w, h);
+
+    JSValue r = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, r, "x", JS_NewInt32(ctx, x));
+    JS_SetPropertyStr(ctx, r, "y", JS_NewInt32(ctx, y));
+    JS_SetPropertyStr(ctx, r, "width", JS_NewInt32(ctx, w));
+    JS_SetPropertyStr(ctx, r, "height", JS_NewInt32(ctx, h));
+    JS_SetPropertyStr(ctx, r, "top", JS_NewInt32(ctx, y));
+    JS_SetPropertyStr(ctx, r, "right", JS_NewInt32(ctx, x + w));
+    JS_SetPropertyStr(ctx, r, "bottom", JS_NewInt32(ctx, y + h));
+    JS_SetPropertyStr(ctx, r, "left", JS_NewInt32(ctx, x));
+    return r;
+}
+
+// ---- offset* getters (native) ----
+
+static JSValue js_element_get_offsetWidth(JSContext* ctx, JSValueConst this_val) {
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node || !g_js_engine || !g_js_engine->app_state) return JS_NewInt32(ctx, 0);
+    int x, y, w, h;
+    extern void js_get_node_geometry(AppState* st, uint32_t node_id, int& x, int& y, int& w, int& h);
+    js_get_node_geometry(g_js_engine->app_state, node->node_id, x, y, w, h);
+    return JS_NewInt32(ctx, w);
+}
+
+static JSValue js_element_get_offsetHeight(JSContext* ctx, JSValueConst this_val) {
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node || !g_js_engine || !g_js_engine->app_state) return JS_NewInt32(ctx, 0);
+    int x, y, w, h;
+    extern void js_get_node_geometry(AppState* st, uint32_t node_id, int& x, int& y, int& w, int& h);
+    js_get_node_geometry(g_js_engine->app_state, node->node_id, x, y, w, h);
+    return JS_NewInt32(ctx, h);
+}
+
+static JSValue js_element_get_offsetTop(JSContext* ctx, JSValueConst this_val) {
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node || !g_js_engine || !g_js_engine->app_state) return JS_NewInt32(ctx, 0);
+    int x, y, w, h;
+    extern void js_get_node_geometry(AppState* st, uint32_t node_id, int& x, int& y, int& w, int& h);
+    js_get_node_geometry(g_js_engine->app_state, node->node_id, x, y, w, h);
+    return JS_NewInt32(ctx, y);
+}
+
+static JSValue js_element_get_offsetLeft(JSContext* ctx, JSValueConst this_val) {
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node || !g_js_engine || !g_js_engine->app_state) return JS_NewInt32(ctx, 0);
+    int x, y, w, h;
+    extern void js_get_node_geometry(AppState* st, uint32_t node_id, int& x, int& y, int& w, int& h);
+    js_get_node_geometry(g_js_engine->app_state, node->node_id, x, y, w, h);
+    return JS_NewInt32(ctx, x);
+}
+
+// ---- element.remove() (native) ----
+
+static JSValue js_element_remove(JSContext* ctx, JSValueConst this_val,
+                                   int argc, JSValueConst* argv) {
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node || !node->parent || !g_js_engine || !g_js_engine->document) return JS_UNDEFINED;
+    g_js_engine->document->removeChild(node->parent, node);
+    if (g_js_engine->document->body) g_js_engine->document->body->markDirty();
+    g_js_engine->scheduleRerender();
+    return JS_UNDEFINED;
+}
+
+// ---- element.cloneNode(deep) (native) ----
+
+static JSValue js_element_cloneNode(JSContext* ctx, JSValueConst this_val,
+                                      int argc, JSValueConst* argv) {
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node || !g_js_engine || !g_js_engine->document) return JS_NULL;
+    bool deep = (argc > 0 && JS_ToBool(ctx, argv[0]));
+    Document* doc = g_js_engine->document;
+    auto clone = node->cloneNode(deep, doc->next_id, doc->node_map);
+    if (!clone) return JS_NULL;
+    doc->orphans.push_back(clone);
+    return js_wrap_node(ctx, clone.get());
+}
+
+// ---- element.dispatchEvent(event) (native) ----
+
+static JSValue js_element_dispatchEvent(JSContext* ctx, JSValueConst this_val,
+                                          int argc, JSValueConst* argv) {
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node || argc < 1 || !g_js_engine) return JS_TRUE;
+    // Get event type from JS Event object
+    JSValue type_val = JS_GetPropertyStr(ctx, argv[0], "type");
+    const char* type_str = JS_ToCString(ctx, type_val);
+    JS_FreeValue(ctx, type_val);
+    if (!type_str) return JS_TRUE;
+    std::string type(type_str);
+    JS_FreeCString(ctx, type_str);
+    js_dispatch_event(g_js_engine, node->node_id, type, 0, 0);
+    return JS_TRUE;
+}
+
 // ---- Class definitions and prototypes ----
 
 static const JSClassDef js_element_class_def = {
@@ -1137,6 +1260,50 @@ void js_bindings_init(JSEngine* engine) {
         JS_NewCFunction(ctx, js_element_addEventListener, "addEventListener", 2));
     JS_SetPropertyStr(ctx, elem_proto, "removeEventListener",
         JS_NewCFunction(ctx, js_element_removeEventListener, "removeEventListener", 2));
+    JS_SetPropertyStr(ctx, elem_proto, "getBoundingClientRect",
+        JS_NewCFunction(ctx, js_element_getBoundingClientRect, "getBoundingClientRect", 0));
+    JS_SetPropertyStr(ctx, elem_proto, "remove",
+        JS_NewCFunction(ctx, js_element_remove, "remove", 0));
+    JS_SetPropertyStr(ctx, elem_proto, "cloneNode",
+        JS_NewCFunction(ctx, js_element_cloneNode, "cloneNode", 1));
+    JS_SetPropertyStr(ctx, elem_proto, "dispatchEvent",
+        JS_NewCFunction(ctx, js_element_dispatchEvent, "dispatchEvent", 1));
+
+    // offset* getters (native layout geometry)
+    JS_DefinePropertyGetSet(ctx, elem_proto,
+        JS_NewAtom(ctx, "offsetWidth"),
+        JS_NewCFunction(ctx, (JSCFunction*)js_element_get_offsetWidth, "get offsetWidth", 0),
+        JS_NewCFunction(ctx, js_noop_setter, "set offsetWidth", 1), JS_PROP_CONFIGURABLE);
+    JS_DefinePropertyGetSet(ctx, elem_proto,
+        JS_NewAtom(ctx, "offsetHeight"),
+        JS_NewCFunction(ctx, (JSCFunction*)js_element_get_offsetHeight, "get offsetHeight", 0),
+        JS_NewCFunction(ctx, js_noop_setter, "set offsetHeight", 1), JS_PROP_CONFIGURABLE);
+    JS_DefinePropertyGetSet(ctx, elem_proto,
+        JS_NewAtom(ctx, "offsetTop"),
+        JS_NewCFunction(ctx, (JSCFunction*)js_element_get_offsetTop, "get offsetTop", 0),
+        JS_NewCFunction(ctx, js_noop_setter, "set offsetTop", 1), JS_PROP_CONFIGURABLE);
+    JS_DefinePropertyGetSet(ctx, elem_proto,
+        JS_NewAtom(ctx, "offsetLeft"),
+        JS_NewCFunction(ctx, (JSCFunction*)js_element_get_offsetLeft, "get offsetLeft", 0),
+        JS_NewCFunction(ctx, js_noop_setter, "set offsetLeft", 1), JS_PROP_CONFIGURABLE);
+    // clientWidth/clientHeight same as offset*
+    JS_DefinePropertyGetSet(ctx, elem_proto,
+        JS_NewAtom(ctx, "clientWidth"),
+        JS_NewCFunction(ctx, (JSCFunction*)js_element_get_offsetWidth, "get clientWidth", 0),
+        JS_NewCFunction(ctx, js_noop_setter, "set clientWidth", 1), JS_PROP_CONFIGURABLE);
+    JS_DefinePropertyGetSet(ctx, elem_proto,
+        JS_NewAtom(ctx, "clientHeight"),
+        JS_NewCFunction(ctx, (JSCFunction*)js_element_get_offsetHeight, "get clientHeight", 0),
+        JS_NewCFunction(ctx, js_noop_setter, "set clientHeight", 1), JS_PROP_CONFIGURABLE);
+    // scrollWidth/scrollHeight same as offset*
+    JS_DefinePropertyGetSet(ctx, elem_proto,
+        JS_NewAtom(ctx, "scrollWidth"),
+        JS_NewCFunction(ctx, (JSCFunction*)js_element_get_offsetWidth, "get scrollWidth", 0),
+        JS_NewCFunction(ctx, js_noop_setter, "set scrollWidth", 1), JS_PROP_CONFIGURABLE);
+    JS_DefinePropertyGetSet(ctx, elem_proto,
+        JS_NewAtom(ctx, "scrollHeight"),
+        JS_NewCFunction(ctx, (JSCFunction*)js_element_get_offsetHeight, "get scrollHeight", 0),
+        JS_NewCFunction(ctx, js_noop_setter, "set scrollHeight", 1), JS_PROP_CONFIGURABLE);
 
     JS_SetClassProto(ctx, js_element_class_id, elem_proto);
 

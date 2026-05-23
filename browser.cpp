@@ -1697,6 +1697,12 @@ struct AppState {
     std::vector<std::string> fwd_stack;
     gulong body_draw_signal = 0;
 
+    // Node-to-widget map for getBoundingClientRect / offset*
+    std::unordered_map<uint32_t, GtkWidget*> node_widget_map;
+
+    // Currently focused DOM node (for keyboard event routing)
+    uint32_t focused_node_id = 0;
+
     // DOM tree for current page
     std::shared_ptr<Document> document;
 
@@ -1715,6 +1721,30 @@ struct AppState {
     bool inspector_visible = false;
     int inspector_width = 500;
 };
+
+// ---- geometry helper for js_bindings (getBoundingClientRect / offset*) ----
+
+void js_get_node_geometry(AppState* st, uint32_t node_id, int& x, int& y, int& w, int& h) {
+    x = y = w = h = 0;
+    auto it = st->node_widget_map.find(node_id);
+    if (it == st->node_widget_map.end()) return;
+    GtkWidget* widget = it->second;
+    if (!gtk_widget_get_realized(widget)) return;
+    GtkAllocation alloc;
+    gtk_widget_get_allocation(widget, &alloc);
+    w = alloc.width;
+    h = alloc.height;
+    // Translate to viewport-relative coordinates
+    if (st->viewport && gtk_widget_get_realized(st->viewport)) {
+        int vx = 0, vy = 0;
+        gtk_widget_translate_coordinates(widget, st->viewport, 0, 0, &vx, &vy);
+        x = vx;
+        y = vy;
+    } else {
+        x = alloc.x;
+        y = alloc.y;
+    }
+}
 
 // ---- block container builder (main thread only) ----
 
@@ -2962,6 +2992,7 @@ static void render_node(AppState* st, DOMNode* node, int gen,
                 }), st);
             gtk_box_pack_start(GTK_BOX(cur), cb, FALSE, FALSE, 2);
             gtk_widget_show(cb);
+            st->node_widget_map[nid] = cb;
         } else if (type == "radio") {
             GtkWidget* rb = gtk_radio_button_new(nullptr);
             if (node->attributes.count("checked")) gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(rb), TRUE);
@@ -2980,6 +3011,7 @@ static void render_node(AppState* st, DOMNode* node, int gen,
                 }), st);
             gtk_box_pack_start(GTK_BOX(cur), rb, FALSE, FALSE, 2);
             gtk_widget_show(rb);
+            st->node_widget_map[nid] = rb;
         } else if (type == "submit" || type == "reset") {
             std::string label = init_val.empty() ? (type == "submit" ? "Submit" : "Reset") : init_val;
             GtkWidget* btn = gtk_button_new_with_label(label.c_str());
@@ -2994,6 +3026,7 @@ static void render_node(AppState* st, DOMNode* node, int gen,
                 }), st);
             gtk_box_pack_start(GTK_BOX(cur), btn, FALSE, FALSE, 2);
             gtk_widget_show(btn);
+            st->node_widget_map[nid] = btn;
         } else {
             // text, password, email, number, search, etc.
             GtkWidget* entry = gtk_entry_new();
@@ -3014,6 +3047,7 @@ static void render_node(AppState* st, DOMNode* node, int gen,
                 }), st);
             gtk_box_pack_start(GTK_BOX(cur), entry, FALSE, FALSE, 2);
             gtk_widget_show(entry);
+            st->node_widget_map[nid] = entry;
         }
         return;
     }
@@ -3046,6 +3080,7 @@ static void render_node(AppState* st, DOMNode* node, int gen,
             }), st);
         gtk_box_pack_start(GTK_BOX(cur), scroll, FALSE, FALSE, 2);
         gtk_widget_show_all(scroll);
+        st->node_widget_map[nid] = scroll;
         return;
     }
 
@@ -3108,6 +3143,7 @@ static void render_node(AppState* st, DOMNode* node, int gen,
             }), st);
         gtk_box_pack_start(GTK_BOX(cur), combo, FALSE, FALSE, 2);
         gtk_widget_show(combo);
+        st->node_widget_map[nid] = combo;
         return;
     }
 
@@ -3146,6 +3182,7 @@ static void render_node(AppState* st, DOMNode* node, int gen,
 
         gtk_box_pack_start(GTK_BOX(cur), btn, FALSE, FALSE, 2);
         gtk_widget_show(btn);
+        st->node_widget_map[nid] = btn;
         fprintf(stderr, "[DEBUG render_node] <button id='%s'> label='%s' node_id=%u\n",
                 node->id.c_str(), label.c_str(), node->node_id);
         return;
@@ -3326,6 +3363,7 @@ static void render_node(AppState* st, DOMNode* node, int gen,
         // Store node_id on widget for click dispatch
         g_object_set_data(G_OBJECT(new_blk), "dom_node_id",
             GUINT_TO_POINTER(node->node_id));
+        st->node_widget_map[node->node_id] = new_blk;
 
         // Add click event handling if node has listeners
         if (!node->listeners.empty()) {
@@ -3446,6 +3484,9 @@ void do_rerender(AppState* st) {
     gtk_widget_set_margin_end(st->content_box, 0);
     gtk_widget_set_margin_bottom(st->content_box, 0);
     gtk_widget_set_margin_start(st->content_box, 0);
+
+    // Clear node-to-widget map
+    st->node_widget_map.clear();
 
     // Remove all children
     GList* ch = gtk_container_get_children(GTK_CONTAINER(st->content_box));

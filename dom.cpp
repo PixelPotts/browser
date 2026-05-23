@@ -322,6 +322,85 @@ bool DOMNode::toggleClass(const std::string& cls) {
     return true;
 }
 
+// ---- cloneNode ----
+
+std::shared_ptr<DOMNode> DOMNode::cloneNode(bool deep, uint32_t& next_id,
+                                              std::unordered_map<uint32_t, DOMNode*>& node_map) const {
+    auto clone = std::make_shared<DOMNode>();
+    clone->node_id = next_id++;
+    clone->node_type = node_type;
+    clone->tag_name = tag_name;
+    // Don't copy id — clones shouldn't duplicate IDs
+    clone->class_list = class_list;
+    clone->attributes = attributes;
+    clone->attributes.erase("id"); // remove id from attributes too
+    clone->text_content = text_content;
+    clone->style_props = style_props;
+    clone->inline_style_raw = inline_style_raw;
+    // Copy computed style fields
+    clone->fw_computed = fw_computed;
+    clone->fi_computed = fi_computed;
+    clone->fs_computed = fs_computed;
+    clone->lh_computed = lh_computed;
+    clone->color_computed = color_computed;
+    clone->text_align_computed = text_align_computed;
+    clone->text_transform = text_transform;
+    clone->font_family = font_family;
+    clone->box_shadow = box_shadow;
+    clone->opacity = opacity;
+    clone->overflow = overflow;
+    clone->href = href;
+    clone->text_decoration = text_decoration;
+    clone->text_decoration_color = text_decoration_color;
+    clone->text_decoration_style = text_decoration_style;
+    clone->letter_spacing = letter_spacing;
+    clone->word_spacing = word_spacing;
+    clone->font_variant = font_variant;
+    clone->white_space = white_space;
+    clone->text_indent = text_indent;
+    clone->text_overflow = text_overflow;
+    clone->font_stretch = font_stretch;
+    clone->text_shadow = text_shadow;
+    clone->flex_direction = flex_direction;
+    clone->justify_content = justify_content;
+    clone->align_items = align_items;
+    clone->flex_wrap = flex_wrap;
+    clone->gap = gap;
+    clone->position = position;
+    clone->pos_top = pos_top;
+    clone->pos_left = pos_left;
+    clone->pos_right = pos_right;
+    clone->pos_bottom = pos_bottom;
+    clone->z_index = z_index;
+    for (int i = 0; i < 4; i++) {
+        clone->margin[i] = margin[i];
+        clone->padding[i] = padding[i];
+        clone->border_width[i] = border_width[i];
+    }
+    clone->width = width;
+    clone->max_width = max_width;
+    clone->height = height;
+    clone->border_radius = border_radius;
+    clone->border_color = border_color;
+    clone->border_style = border_style;
+    clone->halign_center = halign_center;
+    clone->display = display;
+    clone->floatdir = floatdir;
+    clone->bg_image = bg_image;
+    clone->bg_color = bg_color;
+
+    node_map[clone->node_id] = clone.get();
+
+    if (deep) {
+        for (const auto& child : children) {
+            auto child_clone = child->cloneNode(true, next_id, node_map);
+            child_clone->parent = clone.get();
+            clone->children.push_back(child_clone);
+        }
+    }
+    return clone;
+}
+
 // ---- Document ----
 
 Document::Document() {

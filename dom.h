@@ -97,6 +97,9 @@ struct DOMNode {
     };
     std::vector<Listener> listeners;
 
+    // Layout geometry (filled by GTK after render)
+    int layout_x = 0, layout_y = 0, layout_w = 0, layout_h = 0;
+
     // Dirty flag for re-render
     bool dirty = false;
     bool is_body = false;
@@ -119,6 +122,10 @@ struct DOMNode {
     void setInnerHTML(const std::string& html, uint32_t& next_id,
                       std::unordered_map<uint32_t, DOMNode*>& node_map,
                       std::unordered_map<std::string, DOMNode*>& id_map);
+
+    // Clone this node (and optionally children)
+    std::shared_ptr<DOMNode> cloneNode(bool deep, uint32_t& next_id,
+                                        std::unordered_map<uint32_t, DOMNode*>& node_map) const;
 
     // Add/remove class
     void addClass(const std::string& cls);
