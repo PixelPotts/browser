@@ -12,6 +12,7 @@ extern "C" {
 
 class Document;
 struct AppState;
+struct TabState;
 struct DOMNode;
 
 // ---- Console log entry (for inspector Console tab) ----
@@ -28,7 +29,7 @@ public:
     JSEngine();
     ~JSEngine();
 
-    void init(AppState* app_state, Document* doc);
+    void init(AppState* app_state, TabState* tab_state, Document* doc);
     void shutdown();
 
     // Evaluate JavaScript code
@@ -58,6 +59,7 @@ public:
     JSRuntime* rt = nullptr;
     JSContext* ctx = nullptr;
     AppState* app_state = nullptr;
+    TabState* tab_state = nullptr;
     Document* document = nullptr;
     std::string page_url; // current page URL for location object
 

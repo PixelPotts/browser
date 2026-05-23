@@ -1681,53 +1681,94 @@ static void idle_add(std::function<void()> fn) {
     g_idle_add(idle_trampoline, new std::function<void()>(std::move(fn)));
 }
 
-// ---- AppState ----
+// ---- TabState (per-tab page state) ----
+
+struct TabState {
+    // Per-page navigation
+    std::string current_url;
+    std::vector<std::string> back_stack;
+    std::vector<std::string> fwd_stack;
+
+    // Page content
+    std::shared_ptr<Document> document;
+    JSEngine* js_engine = nullptr;
+    std::string page_source;
+    std::string title = "New Tab";
+
+    // Async cancellation
+    std::mutex mu;
+    int generation = 0;
+
+    // Per-tab widget tree
+    GtkWidget* paned = nullptr;          // horizontal pane: content | inspector
+    GtkWidget* scroll = nullptr;         // scrolled window
+    GtkWidget* viewport = nullptr;       // viewport inside scroll
+    GtkWidget* content_box = nullptr;    // main content container
+
+    // Node-to-widget map for getBoundingClientRect / offset*
+    std::unordered_map<uint32_t, GtkWidget*> node_widget_map;
+    uint32_t focused_node_id = 0;
+    gulong body_draw_signal = 0;
+
+    // Inspector panel
+    GtkWidget* inspector_box = nullptr;
+    GtkWidget* inspector_notebook = nullptr;
+    GtkWidget* console_text_view = nullptr;
+    GtkWidget* elements_text_view = nullptr;
+    bool inspector_visible = false;
+    int inspector_width = 500;
+
+    ~TabState() {
+        if (js_engine) { delete js_engine; js_engine = nullptr; }
+    }
+};
+
+struct ClosedTabInfo {
+    std::string url;
+    std::vector<std::string> back_stack;
+    std::vector<std::string> fwd_stack;
+};
+
+// ---- AppState (browser-level container) ----
 
 struct AppState {
     GtkWidget* window;
     GtkWidget* address_bar;
-    GtkWidget* content_box;
-    GtkWidget* viewport;
     GtkWidget* btn_back;
     GtkWidget* btn_fwd;
-    std::mutex mu;
-    int generation = 0;
-    std::string current_url;
-    std::vector<std::string> back_stack;
-    std::vector<std::string> fwd_stack;
-    gulong body_draw_signal = 0;
 
-    // Node-to-widget map for getBoundingClientRect / offset*
-    std::unordered_map<uint32_t, GtkWidget*> node_widget_map;
+    // Tab management
+    std::vector<std::shared_ptr<TabState>> tabs;
+    int active_tab_idx = 0;
+    std::vector<ClosedTabInfo> closed_tabs;
 
-    // Currently focused DOM node (for keyboard event routing)
-    uint32_t focused_node_id = 0;
+    // Tab bar (Cairo-drawn)
+    GtkWidget* tab_bar_area = nullptr;
 
-    // DOM tree for current page
-    std::shared_ptr<Document> document;
+    // Content stack (GtkStack for tab switching)
+    GtkWidget* content_stack = nullptr;
 
-    // JS engine for current page
-    JSEngine* js_engine = nullptr;
+    // Tab bar interaction state
+    int tab_bar_hover = -1;
+    int tab_bar_close_hover = -1;
+    bool tab_bar_dragging = false;
+    int tab_bar_drag_idx = -1;
+    double tab_bar_drag_x = 0;
+    double tab_bar_drag_start_x = 0;
 
-    // Raw page source for inspector Elements tab
-    std::string page_source;
-
-    // Inspector panel
-    GtkWidget* paned = nullptr;          // main horizontal pane
-    GtkWidget* inspector_box = nullptr;  // the right panel container
-    GtkWidget* inspector_notebook = nullptr; // tabs: Console, Elements
-    GtkWidget* console_text_view = nullptr;  // Console tab text view
-    GtkWidget* elements_text_view = nullptr; // Elements tab text view
-    bool inspector_visible = false;
-    int inspector_width = 500;
+    // Convenience: current tab pointer (always valid when tabs non-empty)
+    TabState* ct = nullptr;
+    TabState* current_tab() { return tabs.empty() ? nullptr : tabs[active_tab_idx].get(); }
+    void sync_ct() { ct = current_tab(); }
 };
 
 // ---- geometry helper for js_bindings (getBoundingClientRect / offset*) ----
 
-void js_get_node_geometry(AppState* st, uint32_t node_id, int& x, int& y, int& w, int& h) {
+void js_get_node_geometry(TabState* tab, uint32_t node_id, int& x, int& y, int& w, int& h) {
     x = y = w = h = 0;
-    auto it = st->node_widget_map.find(node_id);
-    if (it == st->node_widget_map.end()) return;
+    if (!tab) return;
+    auto it = tab->node_widget_map.find(node_id);
+    if (it == tab->node_widget_map.end()) return;
     GtkWidget* widget = it->second;
     if (!gtk_widget_get_realized(widget)) return;
     GtkAllocation alloc;
@@ -1735,9 +1776,9 @@ void js_get_node_geometry(AppState* st, uint32_t node_id, int& x, int& y, int& w
     w = alloc.width;
     h = alloc.height;
     // Translate to viewport-relative coordinates
-    if (st->viewport && gtk_widget_get_realized(st->viewport)) {
+    if (tab->viewport && gtk_widget_get_realized(tab->viewport)) {
         int vx = 0, vy = 0;
-        gtk_widget_translate_coordinates(widget, st->viewport, 0, 0, &vx, &vy);
+        gtk_widget_translate_coordinates(widget, tab->viewport, 0, 0, &vx, &vy);
         x = vx;
         y = vy;
     } else {
@@ -2442,14 +2483,16 @@ static gboolean draw_bg(GtkWidget* w, cairo_t* cr, gpointer) {
 // ---- Inspector panel helpers ----
 
 static void inspector_update_elements(AppState* st) {
-    if (!st->elements_text_view) return;
-    GtkTextBuffer* buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(st->elements_text_view));
-    gtk_text_buffer_set_text(buf, st->page_source.c_str(), (gint)st->page_source.size());
+    auto* tab = st->ct;
+    if (!tab || !tab->elements_text_view) return;
+    GtkTextBuffer* buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(tab->elements_text_view));
+    gtk_text_buffer_set_text(buf, tab->page_source.c_str(), (gint)tab->page_source.size());
 }
 
 static void inspector_append_console_entry(AppState* st, const ConsoleEntry& entry) {
-    if (!st->console_text_view) return;
-    GtkTextBuffer* buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(st->console_text_view));
+    auto* tab = st->ct;
+    if (!tab || !tab->console_text_view) return;
+    GtkTextBuffer* buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(tab->console_text_view));
     GtkTextIter end;
     gtk_text_buffer_get_end_iter(buf, &end);
 
@@ -2484,24 +2527,26 @@ static void inspector_append_console_entry(AppState* st, const ConsoleEntry& ent
     } else {
         gtk_text_buffer_move_mark(buf, mark, &end);
     }
-    gtk_text_view_scroll_mark_onscreen(GTK_TEXT_VIEW(st->console_text_view), mark);
+    gtk_text_view_scroll_mark_onscreen(GTK_TEXT_VIEW(tab->console_text_view), mark);
 }
 
 static void inspector_refresh_console(AppState* st) {
-    if (!st->console_text_view) return;
-    GtkTextBuffer* buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(st->console_text_view));
+    auto* tab = st->ct;
+    if (!tab || !tab->console_text_view) return;
+    GtkTextBuffer* buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(tab->console_text_view));
     gtk_text_buffer_set_text(buf, "", 0);
-    if (st->js_engine) {
-        for (const auto& entry : st->js_engine->console_log) {
+    if (tab->js_engine) {
+        for (const auto& entry : tab->js_engine->console_log) {
             inspector_append_console_entry(st, entry);
         }
     }
 }
 
 static void inspector_create_panel(AppState* st) {
+    auto* tab = st->ct;
     // Create the inspector container
-    st->inspector_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-    gtk_widget_set_size_request(st->inspector_box, 200, -1); // minimum width
+    tab->inspector_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_widget_set_size_request(tab->inspector_box, 200, -1); // minimum width
 
     // Apply dark background style
     GtkCssProvider* css = gtk_css_provider_new();
@@ -2510,117 +2555,123 @@ static void inspector_create_panel(AppState* st) {
         "notebook tab:checked { background: #2d2d2d; color: #fff; }"
         "textview, textview text { background-color: #1e1e1e; color: #d4d4d4; "
         "  font-family: monospace; font-size: 9pt; }", -1, nullptr);
-    gtk_style_context_add_provider(gtk_widget_get_style_context(st->inspector_box),
+    gtk_style_context_add_provider(gtk_widget_get_style_context(tab->inspector_box),
         GTK_STYLE_PROVIDER(css), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
 
     // Create notebook (tabs)
-    st->inspector_notebook = gtk_notebook_new();
-    gtk_notebook_set_tab_pos(GTK_NOTEBOOK(st->inspector_notebook), GTK_POS_TOP);
+    tab->inspector_notebook = gtk_notebook_new();
+    gtk_notebook_set_tab_pos(GTK_NOTEBOOK(tab->inspector_notebook), GTK_POS_TOP);
     gtk_style_context_add_provider(
-        gtk_widget_get_style_context(st->inspector_notebook),
+        gtk_widget_get_style_context(tab->inspector_notebook),
         GTK_STYLE_PROVIDER(css), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
 
     // ---- Console tab ----
     GtkWidget* console_scroll = gtk_scrolled_window_new(nullptr, nullptr);
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(console_scroll),
         GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
-    st->console_text_view = gtk_text_view_new();
-    gtk_text_view_set_editable(GTK_TEXT_VIEW(st->console_text_view), FALSE);
-    gtk_text_view_set_cursor_visible(GTK_TEXT_VIEW(st->console_text_view), FALSE);
-    gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(st->console_text_view), GTK_WRAP_WORD_CHAR);
-    gtk_text_view_set_left_margin(GTK_TEXT_VIEW(st->console_text_view), 6);
-    gtk_text_view_set_top_margin(GTK_TEXT_VIEW(st->console_text_view), 4);
+    tab->console_text_view = gtk_text_view_new();
+    gtk_text_view_set_editable(GTK_TEXT_VIEW(tab->console_text_view), FALSE);
+    gtk_text_view_set_cursor_visible(GTK_TEXT_VIEW(tab->console_text_view), FALSE);
+    gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(tab->console_text_view), GTK_WRAP_WORD_CHAR);
+    gtk_text_view_set_left_margin(GTK_TEXT_VIEW(tab->console_text_view), 6);
+    gtk_text_view_set_top_margin(GTK_TEXT_VIEW(tab->console_text_view), 4);
 
     // Apply style to console text view
-    gtk_style_context_add_provider(gtk_widget_get_style_context(st->console_text_view),
+    gtk_style_context_add_provider(gtk_widget_get_style_context(tab->console_text_view),
         GTK_STYLE_PROVIDER(css), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
 
     // Create text tags for different log levels
-    GtkTextBuffer* cbuf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(st->console_text_view));
+    GtkTextBuffer* cbuf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(tab->console_text_view));
     gtk_text_buffer_create_tag(cbuf, "error", "foreground", "#f44747", nullptr);
     gtk_text_buffer_create_tag(cbuf, "warn", "foreground", "#cca700", nullptr);
     gtk_text_buffer_create_tag(cbuf, "info", "foreground", "#3794ff", nullptr);
     gtk_text_buffer_create_tag(cbuf, "log", "foreground", "#d4d4d4", nullptr);
 
-    gtk_container_add(GTK_CONTAINER(console_scroll), st->console_text_view);
-    gtk_notebook_append_page(GTK_NOTEBOOK(st->inspector_notebook),
+    gtk_container_add(GTK_CONTAINER(console_scroll), tab->console_text_view);
+    gtk_notebook_append_page(GTK_NOTEBOOK(tab->inspector_notebook),
         console_scroll, gtk_label_new("Console"));
 
     // ---- Elements tab ----
     GtkWidget* elements_scroll = gtk_scrolled_window_new(nullptr, nullptr);
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(elements_scroll),
         GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
-    st->elements_text_view = gtk_text_view_new();
-    gtk_text_view_set_editable(GTK_TEXT_VIEW(st->elements_text_view), FALSE);
-    gtk_text_view_set_cursor_visible(GTK_TEXT_VIEW(st->elements_text_view), FALSE);
-    gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(st->elements_text_view), GTK_WRAP_WORD_CHAR);
-    gtk_text_view_set_left_margin(GTK_TEXT_VIEW(st->elements_text_view), 6);
-    gtk_text_view_set_top_margin(GTK_TEXT_VIEW(st->elements_text_view), 4);
+    tab->elements_text_view = gtk_text_view_new();
+    gtk_text_view_set_editable(GTK_TEXT_VIEW(tab->elements_text_view), FALSE);
+    gtk_text_view_set_cursor_visible(GTK_TEXT_VIEW(tab->elements_text_view), FALSE);
+    gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(tab->elements_text_view), GTK_WRAP_WORD_CHAR);
+    gtk_text_view_set_left_margin(GTK_TEXT_VIEW(tab->elements_text_view), 6);
+    gtk_text_view_set_top_margin(GTK_TEXT_VIEW(tab->elements_text_view), 4);
 
     // Apply style to elements text view
-    gtk_style_context_add_provider(gtk_widget_get_style_context(st->elements_text_view),
+    gtk_style_context_add_provider(gtk_widget_get_style_context(tab->elements_text_view),
         GTK_STYLE_PROVIDER(css), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
 
-    gtk_container_add(GTK_CONTAINER(elements_scroll), st->elements_text_view);
-    gtk_notebook_append_page(GTK_NOTEBOOK(st->inspector_notebook),
+    gtk_container_add(GTK_CONTAINER(elements_scroll), tab->elements_text_view);
+    gtk_notebook_append_page(GTK_NOTEBOOK(tab->inspector_notebook),
         elements_scroll, gtk_label_new("Elements"));
 
     g_object_unref(css);
 
-    gtk_box_pack_start(GTK_BOX(st->inspector_box), st->inspector_notebook, TRUE, TRUE, 0);
+    gtk_box_pack_start(GTK_BOX(tab->inspector_box), tab->inspector_notebook, TRUE, TRUE, 0);
 }
 
 static void inspector_show(AppState* st) {
-    if (st->inspector_visible) return;
-    if (!st->inspector_box) inspector_create_panel(st);
+    auto* tab = st->ct;
+    if (!tab) return;
+    if (tab->inspector_visible) return;
+    if (!tab->inspector_box) inspector_create_panel(st);
 
     // Add inspector to right side of paned
-    gtk_paned_pack2(GTK_PANED(st->paned), st->inspector_box, FALSE, FALSE);
+    gtk_paned_pack2(GTK_PANED(tab->paned), tab->inspector_box, FALSE, FALSE);
 
     // Set the divider position (window width - inspector width)
     int win_w;
     gtk_window_get_size(GTK_WINDOW(st->window), &win_w, nullptr);
-    gtk_paned_set_position(GTK_PANED(st->paned), win_w - st->inspector_width);
+    gtk_paned_set_position(GTK_PANED(tab->paned), win_w - tab->inspector_width);
 
-    gtk_widget_show_all(st->inspector_box);
-    st->inspector_visible = true;
+    gtk_widget_show_all(tab->inspector_box);
+    tab->inspector_visible = true;
 
     // Populate content
     inspector_update_elements(st);
     inspector_refresh_console(st);
 
     // Wire up console entry callback
-    if (st->js_engine) {
-        st->js_engine->on_console_entry = [st]() {
-            if (st->js_engine && !st->js_engine->console_log.empty()) {
-                inspector_append_console_entry(st, st->js_engine->console_log.back());
+    if (tab->js_engine) {
+        tab->js_engine->on_console_entry = [st]() {
+            auto* tab = st->ct;
+            if (tab && tab->js_engine && !tab->js_engine->console_log.empty()) {
+                inspector_append_console_entry(st, tab->js_engine->console_log.back());
             }
         };
     }
 }
 
 static void inspector_hide(AppState* st) {
-    if (!st->inspector_visible) return;
+    auto* tab = st->ct;
+    if (!tab || !tab->inspector_visible) return;
 
     // Save current width
     int win_w;
     gtk_window_get_size(GTK_WINDOW(st->window), &win_w, nullptr);
-    int pos = gtk_paned_get_position(GTK_PANED(st->paned));
-    st->inspector_width = win_w - pos;
-    if (st->inspector_width < 200) st->inspector_width = 200;
+    int pos = gtk_paned_get_position(GTK_PANED(tab->paned));
+    tab->inspector_width = win_w - pos;
+    if (tab->inspector_width < 200) tab->inspector_width = 200;
 
     // Remove from paned (but don't destroy)
-    g_object_ref(st->inspector_box);
-    gtk_container_remove(GTK_CONTAINER(st->paned), st->inspector_box);
+    g_object_ref(tab->inspector_box);
+    gtk_container_remove(GTK_CONTAINER(tab->paned), tab->inspector_box);
 
     // Disconnect console callback
-    if (st->js_engine) st->js_engine->on_console_entry = nullptr;
+    if (tab->js_engine) tab->js_engine->on_console_entry = nullptr;
 
-    st->inspector_visible = false;
+    tab->inspector_visible = false;
 }
 
 static void inspector_toggle(AppState* st) {
-    if (st->inspector_visible) inspector_hide(st);
+    auto* tab = st->ct;
+    if (!tab) return;
+    if (tab->inspector_visible) inspector_hide(st);
     else inspector_show(st);
 }
 
@@ -2637,6 +2688,426 @@ static gboolean on_content_click(GtkWidget*, GdkEventButton* ev, gpointer d) {
     g_signal_connect(item, "activate", G_CALLBACK(on_inspect), st);
     gtk_widget_show_all(menu);
     gtk_menu_popup_at_pointer(GTK_MENU(menu), (GdkEvent*)ev);
+    return TRUE;
+}
+
+// ---- Forward declarations for tab lifecycle ----
+static void navigate(AppState* st, const std::string& raw);
+static void load_url(AppState* st, const std::string& url);
+
+// ---- Tab bar constants ----
+static const int TAB_BAR_HEIGHT = 38;
+static const int TAB_MIN_WIDTH = 60;
+static const int TAB_MAX_WIDTH = 240;
+static const int TAB_CLOSE_SIZE = 14;
+static const int TAB_PADDING = 8;
+static const int NEW_TAB_BTN_WIDTH = 28;
+static const int WINDOW_CTRL_WIDTH = 46;
+static const int WINDOW_CTRL_COUNT = 3; // minimize, maximize, close
+
+static int compute_tab_width(int n_tabs, int bar_width) {
+    int avail = bar_width - NEW_TAB_BTN_WIDTH - WINDOW_CTRL_WIDTH * WINDOW_CTRL_COUNT - 8;
+    if (n_tabs <= 0) return TAB_MAX_WIDTH;
+    int w = avail / n_tabs;
+    if (w < TAB_MIN_WIDTH) w = TAB_MIN_WIDTH;
+    if (w > TAB_MAX_WIDTH) w = TAB_MAX_WIDTH;
+    return w;
+}
+
+// ---- Tab bar drawing (Cairo) ----
+
+static gboolean draw_tab_bar(GtkWidget* widget, cairo_t* cr, gpointer data) {
+    auto* st = static_cast<AppState*>(data);
+    int width = gtk_widget_get_allocated_width(widget);
+    int height = gtk_widget_get_allocated_height(widget);
+    int n = (int)st->tabs.size();
+    int tw = compute_tab_width(n, width);
+
+    // Background
+    cairo_set_source_rgb(cr, 0.22, 0.22, 0.22); // #383838
+    cairo_rectangle(cr, 0, 0, width, height);
+    cairo_fill(cr);
+
+    // Draw each tab
+    for (int i = 0; i < n; i++) {
+        double x = i * tw;
+        bool active = (i == st->active_tab_idx);
+        bool hover = (i == st->tab_bar_hover);
+
+        // Tab background
+        if (active)
+            cairo_set_source_rgb(cr, 0.30, 0.30, 0.30); // #4d4d4d
+        else if (hover)
+            cairo_set_source_rgb(cr, 0.26, 0.26, 0.26); // #424242
+        else
+            cairo_set_source_rgb(cr, 0.22, 0.22, 0.22); // #383838
+
+        // Rounded top corners
+        double r = 6;
+        double y0 = active ? 2 : 4;
+        double y1 = height;
+        cairo_new_path(cr);
+        cairo_move_to(cr, x, y1);
+        cairo_line_to(cr, x, y0 + r);
+        cairo_arc(cr, x + r, y0 + r, r, M_PI, 1.5 * M_PI);
+        cairo_line_to(cr, x + tw - r, y0);
+        cairo_arc(cr, x + tw - r, y0 + r, r, 1.5 * M_PI, 2 * M_PI);
+        cairo_line_to(cr, x + tw, y1);
+        cairo_close_path(cr);
+        cairo_fill(cr);
+
+        // Active tab bottom highlight
+        if (active) {
+            cairo_set_source_rgb(cr, 0.40, 0.40, 0.40);
+            cairo_rectangle(cr, x + 1, height - 2, tw - 2, 2);
+            cairo_fill(cr);
+        }
+
+        // Tab title
+        cairo_set_source_rgb(cr, 0.85, 0.85, 0.85);
+        cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+        cairo_set_font_size(cr, 12);
+
+        std::string title = st->tabs[i]->title;
+        int max_chars = (tw - TAB_PADDING * 2 - TAB_CLOSE_SIZE - 8) / 7;
+        if (max_chars < 3) max_chars = 3;
+        if ((int)title.size() > max_chars) title = title.substr(0, max_chars - 1) + "\xe2\x80\xa6";
+
+        cairo_move_to(cr, x + TAB_PADDING, y0 + (height - y0) / 2 + 4);
+        cairo_show_text(cr, title.c_str());
+
+        // Close button (X)
+        double cx = x + tw - TAB_PADDING - TAB_CLOSE_SIZE / 2;
+        double cy = y0 + (height - y0) / 2;
+        bool close_hover = (i == st->tab_bar_close_hover);
+
+        if (close_hover) {
+            cairo_set_source_rgb(cr, 0.45, 0.45, 0.45);
+            cairo_arc(cr, cx, cy, TAB_CLOSE_SIZE / 2 + 2, 0, 2 * M_PI);
+            cairo_fill(cr);
+        }
+
+        cairo_set_source_rgb(cr, 0.7, 0.7, 0.7);
+        cairo_set_line_width(cr, 1.5);
+        double cs = 4;
+        cairo_move_to(cr, cx - cs, cy - cs);
+        cairo_line_to(cr, cx + cs, cy + cs);
+        cairo_move_to(cr, cx + cs, cy - cs);
+        cairo_line_to(cr, cx - cs, cy + cs);
+        cairo_stroke(cr);
+    }
+
+    // New tab (+) button
+    double nx = n * tw + 4;
+    cairo_set_source_rgb(cr, 0.7, 0.7, 0.7);
+    cairo_set_font_size(cr, 18);
+    cairo_move_to(cr, nx + 6, height / 2 + 6);
+    cairo_show_text(cr, "+");
+
+    // Window controls (minimize, maximize, close) at right
+    double wc_x = width - WINDOW_CTRL_WIDTH * WINDOW_CTRL_COUNT;
+    const char* ctrl_labels[] = {"\xe2\x80\x93", "\xe2\x96\xa1", "\xc3\x97"}; // –, □, ×
+    for (int i = 0; i < WINDOW_CTRL_COUNT; i++) {
+        double bx = wc_x + i * WINDOW_CTRL_WIDTH;
+        // Hover highlight
+        if (i == 2) { // Close button
+            cairo_set_source_rgb(cr, 0.90, 0.18, 0.18);
+        } else {
+            cairo_set_source_rgb(cr, 0.22, 0.22, 0.22);
+        }
+        // Only highlight on hover would need more state, keep simple
+        cairo_set_source_rgb(cr, 0.7, 0.7, 0.7);
+        cairo_set_font_size(cr, 14);
+        cairo_move_to(cr, bx + WINDOW_CTRL_WIDTH / 2 - 4, height / 2 + 5);
+        cairo_show_text(cr, ctrl_labels[i]);
+    }
+
+    return FALSE;
+}
+
+// ---- Tab bar hit testing ----
+
+enum TabBarHit { HIT_NONE, HIT_TAB, HIT_CLOSE, HIT_NEW, HIT_MINIMIZE, HIT_MAXIMIZE, HIT_CLOSE_WINDOW, HIT_EMPTY };
+
+struct TabBarHitResult {
+    TabBarHit type = HIT_NONE;
+    int tab_idx = -1;
+};
+
+static TabBarHitResult hit_test_tab_bar(AppState* st, double x, double y) {
+    int width = gtk_widget_get_allocated_width(st->tab_bar_area);
+    int n = (int)st->tabs.size();
+    int tw = compute_tab_width(n, width);
+    TabBarHitResult r;
+
+    // Window controls
+    double wc_x = width - WINDOW_CTRL_WIDTH * WINDOW_CTRL_COUNT;
+    if (x >= wc_x) {
+        int ctrl = (int)((x - wc_x) / WINDOW_CTRL_WIDTH);
+        if (ctrl == 0) { r.type = HIT_MINIMIZE; return r; }
+        if (ctrl == 1) { r.type = HIT_MAXIMIZE; return r; }
+        if (ctrl == 2) { r.type = HIT_CLOSE_WINDOW; return r; }
+    }
+
+    // New tab button
+    double nx = n * tw + 4;
+    if (x >= nx && x < nx + NEW_TAB_BTN_WIDTH) { r.type = HIT_NEW; return r; }
+
+    // Tab area
+    if (x < n * tw) {
+        int idx = (int)(x / tw);
+        if (idx >= 0 && idx < n) {
+            // Check close button
+            double cx = idx * tw + tw - TAB_PADDING - TAB_CLOSE_SIZE / 2;
+            double cy = TAB_BAR_HEIGHT / 2;
+            if (fabs(x - cx) < TAB_CLOSE_SIZE && fabs(y - cy) < TAB_CLOSE_SIZE) {
+                r.type = HIT_CLOSE;
+                r.tab_idx = idx;
+                return r;
+            }
+            r.type = HIT_TAB;
+            r.tab_idx = idx;
+            return r;
+        }
+    }
+
+    r.type = HIT_EMPTY;
+    return r;
+}
+
+// ---- Tab lifecycle ----
+
+static void create_tab_widgets(AppState* st, std::shared_ptr<TabState> tab) {
+    // Horizontal paned: left = scroll+content, right = inspector
+    tab->paned = gtk_paned_new(GTK_ORIENTATION_HORIZONTAL);
+
+    tab->scroll = gtk_scrolled_window_new(nullptr, nullptr);
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(tab->scroll),
+        GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
+    gtk_paned_pack1(GTK_PANED(tab->paned), tab->scroll, TRUE, FALSE);
+
+    tab->viewport = gtk_viewport_new(nullptr, nullptr);
+    gtk_container_add(GTK_CONTAINER(tab->scroll), tab->viewport);
+    gtk_widget_add_events(tab->viewport, GDK_BUTTON_PRESS_MASK);
+    g_signal_connect(tab->viewport, "button-press-event", G_CALLBACK(on_content_click), st);
+
+    tab->content_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_widget_set_hexpand(tab->content_box, TRUE);
+    gtk_widget_set_vexpand(tab->content_box, TRUE);
+    gtk_container_add(GTK_CONTAINER(tab->viewport), tab->content_box);
+
+    // Add to content stack
+    gtk_stack_add_named(GTK_STACK(st->content_stack), tab->paned,
+        ("tab_" + std::to_string((uintptr_t)tab.get())).c_str());
+    gtk_widget_show_all(tab->paned);
+}
+
+static void update_nav_buttons(AppState* st);
+
+static void switch_to_tab(AppState* st, int idx) {
+    if (idx < 0 || idx >= (int)st->tabs.size()) return;
+    st->active_tab_idx = idx;
+    st->sync_ct();
+    auto* tab = st->ct;
+
+    // Switch visible child in stack
+    gtk_stack_set_visible_child(GTK_STACK(st->content_stack), tab->paned);
+
+    // Update address bar and nav buttons
+    gtk_entry_set_text(GTK_ENTRY(st->address_bar), tab->current_url.c_str());
+    update_nav_buttons(st);
+    gtk_window_set_title(GTK_WINDOW(st->window), tab->title.c_str());
+
+    // Swap global JS engine pointer
+    extern JSEngine* g_js_engine;
+    g_js_engine = tab->js_engine;
+
+    // Redraw tab bar
+    if (st->tab_bar_area) gtk_widget_queue_draw(st->tab_bar_area);
+}
+
+static void new_tab(AppState* st, const std::string& url = "file:///mnt/1tb-ssd/random/browser/api_test.html") {
+    auto tab = std::make_shared<TabState>();
+    st->tabs.push_back(tab);
+    create_tab_widgets(st, tab);
+    st->active_tab_idx = (int)st->tabs.size() - 1;
+    st->sync_ct();
+
+    if (st->tab_bar_area) gtk_widget_queue_draw(st->tab_bar_area);
+    switch_to_tab(st, st->active_tab_idx);
+    navigate(st, url);
+}
+
+static void close_tab(AppState* st, int idx) {
+    if (idx < 0 || idx >= (int)st->tabs.size()) return;
+    if (st->tabs.size() <= 1) {
+        // Last tab: close window
+        gtk_main_quit();
+        return;
+    }
+
+    auto& tab = st->tabs[idx];
+
+    // Save to closed tabs
+    st->closed_tabs.push_back({tab->current_url, tab->back_stack, tab->fwd_stack});
+
+    // Destroy JS engine
+    if (tab->js_engine) {
+        extern JSEngine* g_js_engine;
+        if (g_js_engine == tab->js_engine) g_js_engine = nullptr;
+        delete tab->js_engine;
+        tab->js_engine = nullptr;
+    }
+
+    // Remove widget from stack
+    gtk_widget_destroy(tab->paned);
+    tab->paned = nullptr;
+
+    // Remove from vector
+    st->tabs.erase(st->tabs.begin() + idx);
+
+    // Adjust active tab
+    if (st->active_tab_idx >= (int)st->tabs.size())
+        st->active_tab_idx = (int)st->tabs.size() - 1;
+    if (st->active_tab_idx < 0) st->active_tab_idx = 0;
+
+    st->sync_ct();
+    switch_to_tab(st, st->active_tab_idx);
+}
+
+static void reopen_closed_tab(AppState* st) {
+    if (st->closed_tabs.empty()) return;
+    auto info = st->closed_tabs.back();
+    st->closed_tabs.pop_back();
+
+    auto tab = std::make_shared<TabState>();
+    tab->back_stack = info.back_stack;
+    tab->fwd_stack = info.fwd_stack;
+    st->tabs.push_back(tab);
+    create_tab_widgets(st, tab);
+    st->active_tab_idx = (int)st->tabs.size() - 1;
+    st->sync_ct();
+
+    if (st->tab_bar_area) gtk_widget_queue_draw(st->tab_bar_area);
+    switch_to_tab(st, st->active_tab_idx);
+    navigate(st, info.url);
+}
+
+// ---- Tab bar event handlers ----
+
+static gboolean tab_bar_press(GtkWidget*, GdkEventButton* ev, gpointer data) {
+    auto* st = static_cast<AppState*>(data);
+    auto hit = hit_test_tab_bar(st, ev->x, ev->y);
+
+    if (ev->button == 1) {
+        switch (hit.type) {
+            case HIT_TAB:
+                st->tab_bar_dragging = true;
+                st->tab_bar_drag_idx = hit.tab_idx;
+                st->tab_bar_drag_x = ev->x;
+                st->tab_bar_drag_start_x = ev->x;
+                switch_to_tab(st, hit.tab_idx);
+                break;
+            case HIT_CLOSE:
+                close_tab(st, hit.tab_idx);
+                break;
+            case HIT_NEW:
+                new_tab(st);
+                break;
+            case HIT_MINIMIZE:
+                gtk_window_iconify(GTK_WINDOW(st->window));
+                break;
+            case HIT_MAXIMIZE:
+                if (gtk_window_is_maximized(GTK_WINDOW(st->window)))
+                    gtk_window_unmaximize(GTK_WINDOW(st->window));
+                else
+                    gtk_window_maximize(GTK_WINDOW(st->window));
+                break;
+            case HIT_CLOSE_WINDOW:
+                gtk_main_quit();
+                break;
+            case HIT_EMPTY:
+                // Start window drag
+                gtk_window_begin_move_drag(GTK_WINDOW(st->window),
+                    ev->button, (int)ev->x_root, (int)ev->y_root, ev->time);
+                break;
+            default: break;
+        }
+    } else if (ev->button == 2) {
+        // Middle click: close tab
+        if (hit.type == HIT_TAB) close_tab(st, hit.tab_idx);
+    } else if (ev->button == 3) {
+        // Right click: context menu
+        if (hit.type == HIT_TAB || hit.type == HIT_EMPTY) {
+            GtkWidget* menu = gtk_menu_new();
+            GtkWidget* item_new = gtk_menu_item_new_with_label("New Tab");
+            g_signal_connect(item_new, "activate", G_CALLBACK(+[](GtkMenuItem*, gpointer d) {
+                new_tab(static_cast<AppState*>(d));
+            }), st);
+            gtk_menu_shell_append(GTK_MENU_SHELL(menu), item_new);
+
+            if (!st->closed_tabs.empty()) {
+                GtkWidget* item_reopen = gtk_menu_item_new_with_label("Reopen Closed Tab");
+                g_signal_connect(item_reopen, "activate", G_CALLBACK(+[](GtkMenuItem*, gpointer d) {
+                    reopen_closed_tab(static_cast<AppState*>(d));
+                }), st);
+                gtk_menu_shell_append(GTK_MENU_SHELL(menu), item_reopen);
+            }
+            gtk_widget_show_all(menu);
+            gtk_menu_popup_at_pointer(GTK_MENU(menu), (GdkEvent*)ev);
+        }
+    }
+    return TRUE;
+}
+
+static gboolean tab_bar_motion(GtkWidget*, GdkEventMotion* ev, gpointer data) {
+    auto* st = static_cast<AppState*>(data);
+
+    if (st->tab_bar_dragging && st->tab_bar_drag_idx >= 0) {
+        // Drag to reorder
+        int width = gtk_widget_get_allocated_width(st->tab_bar_area);
+        int n = (int)st->tabs.size();
+        int tw = compute_tab_width(n, width);
+        double delta = ev->x - st->tab_bar_drag_x;
+
+        if (fabs(delta) > tw / 2) {
+            int new_idx = st->tab_bar_drag_idx + (delta > 0 ? 1 : -1);
+            if (new_idx >= 0 && new_idx < n) {
+                std::swap(st->tabs[st->tab_bar_drag_idx], st->tabs[new_idx]);
+                st->active_tab_idx = new_idx;
+                st->tab_bar_drag_idx = new_idx;
+                st->tab_bar_drag_x = ev->x;
+                st->sync_ct();
+            }
+        }
+        gtk_widget_queue_draw(st->tab_bar_area);
+        return TRUE;
+    }
+
+    // Hover tracking
+    auto hit = hit_test_tab_bar(st, ev->x, ev->y);
+    int new_hover = (hit.type == HIT_TAB || hit.type == HIT_CLOSE) ? hit.tab_idx : -1;
+    int new_close = (hit.type == HIT_CLOSE) ? hit.tab_idx : -1;
+    if (new_hover != st->tab_bar_hover || new_close != st->tab_bar_close_hover) {
+        st->tab_bar_hover = new_hover;
+        st->tab_bar_close_hover = new_close;
+        gtk_widget_queue_draw(st->tab_bar_area);
+    }
+    return TRUE;
+}
+
+static gboolean tab_bar_release(GtkWidget*, GdkEventButton*, gpointer data) {
+    auto* st = static_cast<AppState*>(data);
+    st->tab_bar_dragging = false;
+    st->tab_bar_drag_idx = -1;
+    return TRUE;
+}
+
+static gboolean tab_bar_leave(GtkWidget*, GdkEventCrossing*, gpointer data) {
+    auto* st = static_cast<AppState*>(data);
+    st->tab_bar_hover = -1;
+    st->tab_bar_close_hover = -1;
+    gtk_widget_queue_draw(st->tab_bar_area);
     return TRUE;
 }
 
@@ -2703,9 +3174,9 @@ static BoxModel dom_node_to_boxmodel(DOMNode* node) {
     return bm;
 }
 
-static void render_dom_to_gtk(AppState* st, Document* doc, int gen);
+static void render_dom_to_gtk(AppState* st, TabState* tab, Document* doc, int gen);
 
-static void render_node(AppState* st, DOMNode* node, int gen,
+static void render_node(AppState* st, TabState* tab, DOMNode* node, int gen,
                          std::vector<GtkWidget*>& cstack,
                          std::vector<GtkWidget*>& float_rows) {
     if (node->node_type == DOMNode::TEXT) {
@@ -2925,9 +3396,9 @@ static void render_node(AppState* st, DOMNode* node, int gen,
         g_object_ref(img);
         std::string img_url = node->attributes.count("src") ? node->attributes.at("src") : "";
         if (!img_url.empty()) {
-            std::thread([st, img, img_url, gen]() {
+            std::thread([st, tab, img, img_url, gen]() {
                 Buf ibuf;
-                if (gen != st->generation || !fetch(img_url, ibuf)) {
+                if (gen != tab->generation || !fetch(img_url, ibuf)) {
                     idle_add([img](){ g_object_unref(img); });
                     return;
                 }
@@ -2950,8 +3421,8 @@ static void render_node(AppState* st, DOMNode* node, int gen,
                 }
                 if (err) g_error_free(err);
                 g_object_unref(loader);
-                idle_add([st, img, pb, gen]() {
-                    if (gen == st->generation && pb)
+                idle_add([st, tab, img, pb, gen]() {
+                    if (gen == tab->generation && pb)
                         gtk_image_set_from_pixbuf(GTK_IMAGE(img), pb);
                     if (pb) g_object_unref(pb);
                     g_object_unref(img);
@@ -2982,17 +3453,18 @@ static void render_node(AppState* st, DOMNode* node, int gen,
             g_signal_connect(cb, "toggled",
                 G_CALLBACK(+[](GtkToggleButton* tb, gpointer d) {
                     auto* st = static_cast<AppState*>(d);
+                    auto* tab = st->ct;
                     uint32_t nid = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(tb), "dom_node_id"));
-                    DOMNode* n = st->document ? st->document->node_map.count(nid) ? st->document->node_map[nid] : nullptr : nullptr;
+                    DOMNode* n = tab->document ? tab->document->node_map.count(nid) ? tab->document->node_map[nid] : nullptr : nullptr;
                     if (n) {
                         if (gtk_toggle_button_get_active(tb)) n->attributes["checked"] = "checked";
                         else n->attributes.erase("checked");
                     }
-                    if (st->js_engine) st->js_engine->dispatchEvent(nid, "change", 0, 0);
+                    if (tab->js_engine) tab->js_engine->dispatchEvent(nid, "change", 0, 0);
                 }), st);
             gtk_box_pack_start(GTK_BOX(cur), cb, FALSE, FALSE, 2);
             gtk_widget_show(cb);
-            st->node_widget_map[nid] = cb;
+            tab->node_widget_map[nid] = cb;
         } else if (type == "radio") {
             GtkWidget* rb = gtk_radio_button_new(nullptr);
             if (node->attributes.count("checked")) gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(rb), TRUE);
@@ -3001,17 +3473,18 @@ static void render_node(AppState* st, DOMNode* node, int gen,
             g_signal_connect(rb, "toggled",
                 G_CALLBACK(+[](GtkToggleButton* tb, gpointer d) {
                     auto* st = static_cast<AppState*>(d);
+                    auto* tab = st->ct;
                     uint32_t nid = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(tb), "dom_node_id"));
-                    DOMNode* n = st->document ? st->document->node_map.count(nid) ? st->document->node_map[nid] : nullptr : nullptr;
+                    DOMNode* n = tab->document ? tab->document->node_map.count(nid) ? tab->document->node_map[nid] : nullptr : nullptr;
                     if (n) {
                         if (gtk_toggle_button_get_active(tb)) n->attributes["checked"] = "checked";
                         else n->attributes.erase("checked");
                     }
-                    if (st->js_engine) st->js_engine->dispatchEvent(nid, "change", 0, 0);
+                    if (tab->js_engine) tab->js_engine->dispatchEvent(nid, "change", 0, 0);
                 }), st);
             gtk_box_pack_start(GTK_BOX(cur), rb, FALSE, FALSE, 2);
             gtk_widget_show(rb);
-            st->node_widget_map[nid] = rb;
+            tab->node_widget_map[nid] = rb;
         } else if (type == "submit" || type == "reset") {
             std::string label = init_val.empty() ? (type == "submit" ? "Submit" : "Reset") : init_val;
             GtkWidget* btn = gtk_button_new_with_label(label.c_str());
@@ -3020,13 +3493,14 @@ static void render_node(AppState* st, DOMNode* node, int gen,
             g_signal_connect(btn, "clicked",
                 G_CALLBACK(+[](GtkWidget* w, gpointer d) {
                     auto* st = static_cast<AppState*>(d);
-                    if (!st->js_engine) return;
+                    auto* tab = st->ct;
+                    if (!tab->js_engine) return;
                     uint32_t nid = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(w), "dom_node_id"));
-                    st->js_engine->dispatchEvent(nid, "click", 0, 0);
+                    tab->js_engine->dispatchEvent(nid, "click", 0, 0);
                 }), st);
             gtk_box_pack_start(GTK_BOX(cur), btn, FALSE, FALSE, 2);
             gtk_widget_show(btn);
-            st->node_widget_map[nid] = btn;
+            tab->node_widget_map[nid] = btn;
         } else {
             // text, password, email, number, search, etc.
             GtkWidget* entry = gtk_entry_new();
@@ -3040,30 +3514,33 @@ static void render_node(AppState* st, DOMNode* node, int gen,
             g_signal_connect(entry, "changed",
                 G_CALLBACK(+[](GtkEditable* e, gpointer d) {
                     auto* st = static_cast<AppState*>(d);
+                    auto* tab = st->ct;
                     uint32_t nid = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(e), "dom_node_id"));
-                    DOMNode* n = st->document ? st->document->node_map.count(nid) ? st->document->node_map[nid] : nullptr : nullptr;
+                    DOMNode* n = tab->document ? tab->document->node_map.count(nid) ? tab->document->node_map[nid] : nullptr : nullptr;
                     if (n) n->attributes["value"] = gtk_entry_get_text(GTK_ENTRY(e));
-                    if (st->js_engine) st->js_engine->dispatchEvent(nid, "input", 0, 0);
+                    if (tab->js_engine) tab->js_engine->dispatchEvent(nid, "input", 0, 0);
                 }), st);
             // Dispatch change event on focus-out
             g_signal_connect(entry, "focus-out-event",
                 G_CALLBACK(+[](GtkWidget* w, GdkEventFocus*, gpointer d) -> gboolean {
                     auto* st = static_cast<AppState*>(d);
+                    auto* tab = st->ct;
                     uint32_t nid = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(w), "dom_node_id"));
-                    if (st->js_engine) st->js_engine->dispatchEvent(nid, "change", 0, 0);
-                    st->focused_node_id = 0;
+                    if (tab->js_engine) tab->js_engine->dispatchEvent(nid, "change", 0, 0);
+                    tab->focused_node_id = 0;
                     return FALSE;
                 }), st);
             // Track focus for keyboard routing
             g_signal_connect(entry, "focus-in-event",
                 G_CALLBACK(+[](GtkWidget* w, GdkEventFocus*, gpointer d) -> gboolean {
                     auto* st = static_cast<AppState*>(d);
-                    st->focused_node_id = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(w), "dom_node_id"));
+                    auto* tab = st->ct;
+                    tab->focused_node_id = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(w), "dom_node_id"));
                     return FALSE;
                 }), st);
             gtk_box_pack_start(GTK_BOX(cur), entry, FALSE, FALSE, 2);
             gtk_widget_show(entry);
-            st->node_widget_map[nid] = entry;
+            tab->node_widget_map[nid] = entry;
         }
         return;
     }
@@ -3099,13 +3576,14 @@ static void render_node(AppState* st, DOMNode* node, int gen,
             auto* st = static_cast<AppState*>(g_object_get_data(G_OBJECT(buf), "app_state"));
             uint32_t nid = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(buf), "dom_node_id"));
             if (!st) return;
+            auto* tab = st->ct;
             GtkTextIter start, end;
             gtk_text_buffer_get_bounds(buf, &start, &end);
             char* text = gtk_text_buffer_get_text(buf, &start, &end, FALSE);
-            DOMNode* n = st->document ? st->document->node_map.count(nid) ? st->document->node_map[nid] : nullptr : nullptr;
+            DOMNode* n = tab->document ? tab->document->node_map.count(nid) ? tab->document->node_map[nid] : nullptr : nullptr;
             if (n) n->attributes["value"] = text ? text : "";
             g_free(text);
-            if (st->js_engine) st->js_engine->dispatchEvent(nid, "input", 0, 0);
+            if (tab->js_engine) tab->js_engine->dispatchEvent(nid, "input", 0, 0);
         };
         g_signal_connect(gtk_text_view_get_buffer(GTK_TEXT_VIEW(tv)), "changed",
             G_CALLBACK(textarea_changed_cb), nullptr);
@@ -3113,20 +3591,22 @@ static void render_node(AppState* st, DOMNode* node, int gen,
         g_signal_connect(tv, "focus-in-event",
             G_CALLBACK(+[](GtkWidget* w, GdkEventFocus*, gpointer d) -> gboolean {
                 auto* st = static_cast<AppState*>(d);
-                st->focused_node_id = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(w), "dom_node_id"));
+                auto* tab = st->ct;
+                tab->focused_node_id = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(w), "dom_node_id"));
                 return FALSE;
             }), st);
         g_signal_connect(tv, "focus-out-event",
             G_CALLBACK(+[](GtkWidget* w, GdkEventFocus*, gpointer d) -> gboolean {
                 auto* st = static_cast<AppState*>(d);
+                auto* tab = st->ct;
                 uint32_t nid = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(w), "dom_node_id"));
-                if (st->js_engine) st->js_engine->dispatchEvent(nid, "change", 0, 0);
-                st->focused_node_id = 0;
+                if (tab->js_engine) tab->js_engine->dispatchEvent(nid, "change", 0, 0);
+                tab->focused_node_id = 0;
                 return FALSE;
             }), st);
         gtk_box_pack_start(GTK_BOX(cur), scroll, FALSE, FALSE, 2);
         gtk_widget_show_all(scroll);
-        st->node_widget_map[nid] = scroll;
+        tab->node_widget_map[nid] = scroll;
         return;
     }
 
@@ -3168,8 +3648,9 @@ static void render_node(AppState* st, DOMNode* node, int gen,
         g_signal_connect(combo, "changed",
             G_CALLBACK(+[](GtkComboBox* cb, gpointer d) {
                 auto* st = static_cast<AppState*>(d);
+                auto* tab = st->ct;
                 uint32_t nid = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(cb), "dom_node_id"));
-                DOMNode* n = st->document ? st->document->node_map.count(nid) ? st->document->node_map[nid] : nullptr : nullptr;
+                DOMNode* n = tab->document ? tab->document->node_map.count(nid) ? tab->document->node_map[nid] : nullptr : nullptr;
                 if (n) {
                     int active = gtk_combo_box_get_active(cb);
                     n->attributes["selectedindex"] = std::to_string(active);
@@ -3185,11 +3666,11 @@ static void render_node(AppState* st, DOMNode* node, int gen,
                         }
                     }
                 }
-                if (st->js_engine) st->js_engine->dispatchEvent(nid, "change", 0, 0);
+                if (tab->js_engine) tab->js_engine->dispatchEvent(nid, "change", 0, 0);
             }), st);
         gtk_box_pack_start(GTK_BOX(cur), combo, FALSE, FALSE, 2);
         gtk_widget_show(combo);
-        st->node_widget_map[nid] = combo;
+        tab->node_widget_map[nid] = combo;
         return;
     }
 
@@ -3221,14 +3702,15 @@ static void render_node(AppState* st, DOMNode* node, int gen,
         g_signal_connect(btn, "clicked",
             G_CALLBACK(+[](GtkWidget* w, gpointer d) {
                 auto* st = static_cast<AppState*>(d);
-                if (!st->js_engine) return;
+                auto* tab = st->ct;
+                if (!tab->js_engine) return;
                 uint32_t nid = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(w), "dom_node_id"));
-                st->js_engine->dispatchEvent(nid, "click", 0, 0);
+                tab->js_engine->dispatchEvent(nid, "click", 0, 0);
             }), st);
 
         gtk_box_pack_start(GTK_BOX(cur), btn, FALSE, FALSE, 2);
         gtk_widget_show(btn);
-        st->node_widget_map[nid] = btn;
+        tab->node_widget_map[nid] = btn;
         fprintf(stderr, "[DEBUG render_node] <button id='%s'> label='%s' node_id=%u\n",
                 node->id.c_str(), label.c_str(), node->node_id);
         return;
@@ -3247,25 +3729,25 @@ static void render_node(AppState* st, DOMNode* node, int gen,
         BoxModel bm = dom_node_to_boxmodel(node);
         if (!bm.bg_color.empty()) {
             char* bgc = g_strdup(bm.bg_color.c_str());
-            g_object_set_data_full(G_OBJECT(st->content_box), "bg_color_str", bgc, g_free);
+            g_object_set_data_full(G_OBJECT(tab->content_box), "bg_color_str", bgc, g_free);
         }
-        gtk_widget_set_margin_top(st->content_box, std::max(0, bm.margin[0]));
-        gtk_widget_set_margin_end(st->content_box, std::max(0, bm.margin[1]));
-        gtk_widget_set_margin_bottom(st->content_box, std::max(0, bm.margin[2]));
-        gtk_widget_set_margin_start(st->content_box, std::max(0, bm.margin[3]));
+        gtk_widget_set_margin_top(tab->content_box, std::max(0, bm.margin[0]));
+        gtk_widget_set_margin_end(tab->content_box, std::max(0, bm.margin[1]));
+        gtk_widget_set_margin_bottom(tab->content_box, std::max(0, bm.margin[2]));
+        gtk_widget_set_margin_start(tab->content_box, std::max(0, bm.margin[3]));
         if (!bm.bg_color.empty() || !bm.bg_image.empty()) {
-            gtk_widget_set_app_paintable(st->content_box, TRUE);
-            st->body_draw_signal = g_signal_connect(st->content_box, "draw", G_CALLBACK(draw_bg), nullptr);
+            gtk_widget_set_app_paintable(tab->content_box, TRUE);
+            tab->body_draw_signal = g_signal_connect(tab->content_box, "draw", G_CALLBACK(draw_bg), nullptr);
         }
         if (!bm.bg_image.empty()) {
             if (!bm.bg_repeat.empty())
-                g_object_set_data_full(G_OBJECT(st->content_box), "bg_repeat", g_strdup(bm.bg_repeat.c_str()), g_free);
+                g_object_set_data_full(G_OBJECT(tab->content_box), "bg_repeat", g_strdup(bm.bg_repeat.c_str()), g_free);
             if (!bm.bg_size.empty())
-                g_object_set_data_full(G_OBJECT(st->content_box), "bg_size", g_strdup(bm.bg_size.c_str()), g_free);
+                g_object_set_data_full(G_OBJECT(tab->content_box), "bg_size", g_strdup(bm.bg_size.c_str()), g_free);
             std::string bg_url = bm.bg_image;
-            std::thread([st, bg_url, gen]() {
+            std::thread([st, tab, bg_url, gen]() {
                 Buf ibuf;
-                if (gen != st->generation || !fetch(bg_url, ibuf)) return;
+                if (gen != tab->generation || !fetch(bg_url, ibuf)) return;
                 GdkPixbufLoader* ldr = gdk_pixbuf_loader_new();
                 GError* err = nullptr;
                 gdk_pixbuf_loader_write(ldr, (const guchar*)ibuf.data.data(), ibuf.data.size(), &err);
@@ -3274,18 +3756,18 @@ static void render_node(AppState* st, DOMNode* node, int gen,
                 if (!err) { pb = gdk_pixbuf_loader_get_pixbuf(ldr); if (pb) g_object_ref(pb); }
                 if (err) g_error_free(err);
                 g_object_unref(ldr);
-                idle_add([st, pb, gen]() {
-                    if (gen == st->generation && pb) {
-                        g_object_set_data_full(G_OBJECT(st->content_box), "bg_pb", pb, (GDestroyNotify)g_object_unref);
-                        gtk_widget_queue_draw(st->content_box);
+                idle_add([st, tab, pb, gen]() {
+                    if (gen == tab->generation && pb) {
+                        g_object_set_data_full(G_OBJECT(tab->content_box), "bg_pb", pb, (GDestroyNotify)g_object_unref);
+                        gtk_widget_queue_draw(tab->content_box);
                     } else if (pb) g_object_unref(pb);
                 });
             }).detach();
         }
-        cstack.push_back(st->content_box);
+        cstack.push_back(tab->content_box);
         float_rows.push_back(nullptr);
         for (auto& child : node->children)
-            render_node(st, child.get(), gen, cstack, float_rows);
+            render_node(st, tab, child.get(), gen, cstack, float_rows);
         cstack.pop_back();
         float_rows.pop_back();
         return;
@@ -3346,9 +3828,9 @@ static void render_node(AppState* st, DOMNode* node, int gen,
                 g_object_set_data_full(G_OBJECT(new_blk), "bg_size", g_strdup(bm.bg_size.c_str()), g_free);
             g_object_ref(new_blk);
             std::string bg_url = bm.bg_image;
-            std::thread([st, new_blk, bg_url, gen]() {
+            std::thread([st, tab, new_blk, bg_url, gen]() {
                 Buf ibuf;
-                if (gen != st->generation || !fetch(bg_url, ibuf)) {
+                if (gen != tab->generation || !fetch(bg_url, ibuf)) {
                     idle_add([new_blk](){ g_object_unref(new_blk); });
                     return;
                 }
@@ -3360,8 +3842,8 @@ static void render_node(AppState* st, DOMNode* node, int gen,
                 if (!err) { pb = gdk_pixbuf_loader_get_pixbuf(ldr); if (pb) g_object_ref(pb); }
                 if (err) g_error_free(err);
                 g_object_unref(ldr);
-                idle_add([st, new_blk, pb, gen]() {
-                    if (gen == st->generation && pb) {
+                idle_add([st, tab, new_blk, pb, gen]() {
+                    if (gen == tab->generation && pb) {
                         g_object_set_data_full(G_OBJECT(new_blk), "bg_pb", pb, (GDestroyNotify)g_object_unref);
                         gtk_widget_queue_draw(new_blk);
                     } else if (pb) g_object_unref(pb);
@@ -3383,7 +3865,7 @@ static void render_node(AppState* st, DOMNode* node, int gen,
         } else if (node->position == 2 || node->position == 3) { // absolute or fixed
             // For absolute/fixed: use GtkOverlay on the parent container
             // Remove from normal flow and position with GtkFixed
-            GtkWidget* parent_container = (node->position == 3) ? st->viewport : cstack.back();
+            GtkWidget* parent_container = (node->position == 3) ? tab->viewport : cstack.back();
 
             // Find the outer widget (make_block may return inner)
             GtkWidget* outer = new_blk;
@@ -3409,7 +3891,7 @@ static void render_node(AppState* st, DOMNode* node, int gen,
         // Store node_id on widget for click dispatch
         g_object_set_data(G_OBJECT(new_blk), "dom_node_id",
             GUINT_TO_POINTER(node->node_id));
-        st->node_widget_map[node->node_id] = new_blk;
+        tab->node_widget_map[node->node_id] = new_blk;
 
         // Add click event handling if node has listeners
         if (!node->listeners.empty()) {
@@ -3422,9 +3904,10 @@ static void render_node(AppState* st, DOMNode* node, int gen,
                 G_CALLBACK(+[](GtkWidget* w, GdkEventButton* ev, gpointer d) -> gboolean {
                     if (ev->button != 1 || ev->type != GDK_BUTTON_PRESS) return FALSE;
                     auto* st = static_cast<AppState*>(d);
-                    if (!st->js_engine) return FALSE;
+                    auto* tab = st->ct;
+                    if (!tab->js_engine) return FALSE;
                     uint32_t nid = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(w), "dom_node_id"));
-                    st->js_engine->dispatchEvent(nid, "click", (int)ev->x, (int)ev->y);
+                    tab->js_engine->dispatchEvent(nid, "click", (int)ev->x, (int)ev->y);
                     return FALSE;
                 }), st);
             // Wrap the block widget - reparent
@@ -3442,7 +3925,7 @@ static void render_node(AppState* st, DOMNode* node, int gen,
         cstack.push_back(new_blk);
         float_rows.push_back(nullptr);
         for (auto& child : node->children)
-            render_node(st, child.get(), gen, cstack, float_rows);
+            render_node(st, tab, child.get(), gen, cstack, float_rows);
         // Apply flex align-items to children
         if (is_flex && node->align_items != 0) {
             GtkOrientation orient = (node->flex_direction == 0 || node->flex_direction == 2)
@@ -3478,12 +3961,12 @@ static void render_node(AppState* st, DOMNode* node, int gen,
         float_rows.pop_back();
     } else {
         for (auto& child : node->children)
-            render_node(st, child.get(), gen, cstack, float_rows);
+            render_node(st, tab, child.get(), gen, cstack, float_rows);
     }
 }
 
-static void render_dom_to_gtk(AppState* st, Document* doc, int gen) {
-    std::vector<GtkWidget*> cstack = {st->content_box};
+static void render_dom_to_gtk(AppState* st, TabState* tab, Document* doc, int gen) {
+    std::vector<GtkWidget*> cstack = {tab->content_box};
     std::vector<GtkWidget*> float_rows = {nullptr};
     // Debug: dump DOM tree structure
     std::function<void(DOMNode*, int)> dump_tree = [&](DOMNode* n, int depth) {
@@ -3506,48 +3989,48 @@ static void render_dom_to_gtk(AppState* st, Document* doc, int gen) {
         dump_tree(doc->body, 0);
     }
     if (doc->body) {
-        render_node(st, doc->body, gen, cstack, float_rows);
+        render_node(st, tab, doc->body, gen, cstack, float_rows);
     } else {
         for (auto& child : doc->root->children)
-            render_node(st, child.get(), gen, cstack, float_rows);
+            render_node(st, tab, child.get(), gen, cstack, float_rows);
     }
 }
 
 // Called by JSEngine::rerender_callback when DOM is dirty
-void do_rerender(AppState* st) {
-    if (!st->document) return;
-    int gen = st->generation;
+void do_rerender(AppState* st, TabState* tab) {
+    if (!tab || !tab->document) return;
+    int gen = tab->generation;
 
     // Clean up previous body styles
-    if (st->body_draw_signal) {
-        g_signal_handler_disconnect(st->content_box, st->body_draw_signal);
-        st->body_draw_signal = 0;
-        gtk_widget_set_app_paintable(st->content_box, FALSE);
-        g_object_set_data(G_OBJECT(st->content_box), "bg_pb", nullptr);
-        g_object_set_data(G_OBJECT(st->content_box), "bg_color_str", nullptr);
+    if (tab->body_draw_signal) {
+        g_signal_handler_disconnect(tab->content_box, tab->body_draw_signal);
+        tab->body_draw_signal = 0;
+        gtk_widget_set_app_paintable(tab->content_box, FALSE);
+        g_object_set_data(G_OBJECT(tab->content_box), "bg_pb", nullptr);
+        g_object_set_data(G_OBJECT(tab->content_box), "bg_color_str", nullptr);
     }
-    gtk_widget_set_margin_top(st->content_box, 0);
-    gtk_widget_set_margin_end(st->content_box, 0);
-    gtk_widget_set_margin_bottom(st->content_box, 0);
-    gtk_widget_set_margin_start(st->content_box, 0);
+    gtk_widget_set_margin_top(tab->content_box, 0);
+    gtk_widget_set_margin_end(tab->content_box, 0);
+    gtk_widget_set_margin_bottom(tab->content_box, 0);
+    gtk_widget_set_margin_start(tab->content_box, 0);
 
     // Clear node-to-widget map
-    st->node_widget_map.clear();
+    tab->node_widget_map.clear();
 
     // Remove all children
-    GList* ch = gtk_container_get_children(GTK_CONTAINER(st->content_box));
+    GList* ch = gtk_container_get_children(GTK_CONTAINER(tab->content_box));
     for (GList* l = ch; l; l = l->next) gtk_widget_destroy(GTK_WIDGET(l->data));
     g_list_free(ch);
 
     // Re-render
-    render_dom_to_gtk(st, st->document.get(), gen);
+    render_dom_to_gtk(st, tab, tab->document.get(), gen);
 
     // Clear dirty flags
     std::function<void(DOMNode*)> clear_dirty = [&](DOMNode* n) {
         n->dirty = false;
         for (auto& c : n->children) clear_dirty(c.get());
     };
-    clear_dirty(st->document->root.get());
+    clear_dirty(tab->document->root.get());
 }
 
 // ---- test mode (forward decls) ----
@@ -3558,7 +4041,7 @@ static void run_test_probes(AppState* st);
 
 // ---- page fetch ----
 
-static void fetch_page(AppState* st, std::string url, int gen) {
+static void fetch_page(AppState* st, TabState* tab, std::string url, int gen) {
     bool is_vs = (url.size()>=12 && url.substr(0,12)=="view-source:");
     std::string fetch_url = is_vs ? url.substr(12) : url;
 
@@ -3569,12 +4052,12 @@ static void fetch_page(AppState* st, std::string url, int gen) {
         });
         return;
     }
-    if (gen != st->generation) return;
+    if (gen != tab->generation) return;
 
     if (is_vs) {
         std::string raw = std::move(buf.data);
-        idle_add([st, gen, url, raw=std::move(raw)]() {
-            if (gen != st->generation) return;
+        idle_add([st, tab, gen, url, raw=std::move(raw)]() {
+            if (gen != tab->generation) return;
             gtk_window_set_title(GTK_WINDOW(st->window), url.c_str());
             GtkWidget* tv = gtk_text_view_new();
             gtk_text_view_set_editable(GTK_TEXT_VIEW(tv), FALSE);
@@ -3587,7 +4070,7 @@ static void fetch_page(AppState* st, std::string url, int gen) {
             g_object_unref(css);
             gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(tv)),
                 raw.c_str(), (gint)raw.size());
-            gtk_box_pack_start(GTK_BOX(st->content_box), tv, TRUE, TRUE, 0);
+            gtk_box_pack_start(GTK_BOX(tab->content_box), tv, TRUE, TRUE, 0);
             gtk_widget_show(tv);
         });
         return;
@@ -3599,7 +4082,7 @@ static void fetch_page(AppState* st, std::string url, int gen) {
     // Fetch external scripts synchronously (blocking, matches <script src> behavior)
     std::vector<std::string> external_scripts;
     for (const auto& src_url : doc->script_srcs) {
-        if (gen != st->generation) return;
+        if (gen != tab->generation) return;
         Buf sbuf;
         if (fetch(src_url, sbuf)) {
             external_scripts.push_back(std::move(sbuf.data));
@@ -3608,31 +4091,47 @@ static void fetch_page(AppState* st, std::string url, int gen) {
         }
     }
 
-    idle_add([st, gen, url, doc, raw_source=std::move(raw_source),
+    idle_add([st, tab, gen, url, doc, raw_source=std::move(raw_source),
               external_scripts=std::move(external_scripts)]() {
-        if (gen != st->generation) return;
+        if (gen != tab->generation) return;
         gtk_window_set_title(GTK_WINDOW(st->window), url.c_str());
-        st->document = doc;
-        st->page_source = raw_source;
-        render_dom_to_gtk(st, doc.get(), gen);
+        tab->document = doc;
+        tab->page_source = raw_source;
+
+        // Extract title from DOM
+        if (doc->body) {
+            std::function<std::string(DOMNode*)> find_title = [&](DOMNode* n) -> std::string {
+                if (n->tag_name == "title") return n->getTextContent();
+                for (auto& c : n->children) {
+                    std::string t = find_title(c.get());
+                    if (!t.empty()) return t;
+                }
+                return "";
+            };
+            std::string t = find_title(doc->root.get());
+            if (!t.empty()) tab->title = t;
+            else tab->title = url;
+        }
+
+        render_dom_to_gtk(st, tab, doc.get(), gen);
 
         // Destroy previous JS engine
-        if (st->js_engine) {
-            delete st->js_engine;
-            st->js_engine = nullptr;
+        if (tab->js_engine) {
+            delete tab->js_engine;
+            tab->js_engine = nullptr;
         }
 
         // Create JS engine and run scripts
         auto* engine = new JSEngine();
-        st->js_engine = engine;
-        engine->page_url = st->current_url;
-        engine->init(st, doc.get());
+        tab->js_engine = engine;
+        engine->page_url = tab->current_url;
+        engine->init(st, tab, doc.get());
 
         // Wire up inspector console callback if inspector is open
-        if (st->inspector_visible) {
-            engine->on_console_entry = [st]() {
-                if (st->js_engine && !st->js_engine->console_log.empty()) {
-                    inspector_append_console_entry(st, st->js_engine->console_log.back());
+        if (tab->inspector_visible) {
+            engine->on_console_entry = [st, tab]() {
+                if (tab->js_engine && !tab->js_engine->console_log.empty()) {
+                    inspector_append_console_entry(st, tab->js_engine->console_log.back());
                 }
             };
             inspector_update_elements(st);
@@ -3683,12 +4182,15 @@ static void fetch_page(AppState* st, std::string url, int gen) {
             engine->executePendingJobs();
         }
 
+        // Redraw tab bar for updated title
+        if (st->tab_bar_area) gtk_widget_queue_draw(st->tab_bar_area);
+
         // Run C++ DOM probes if --test mode
         if (g_test_mode) {
-            // Schedule probes after a short delay so timers (setTimeout 500ms) fire first
             g_timeout_add(800, [](gpointer data) -> gboolean {
                 auto* st = static_cast<AppState*>(data);
-                if (st->js_engine) st->js_engine->executePendingJobs();
+                auto* tab = st->ct;
+                if (tab && tab->js_engine) tab->js_engine->executePendingJobs();
                 run_test_probes(st);
                 return G_SOURCE_REMOVE;
             }, st);
@@ -3699,50 +4201,58 @@ static void fetch_page(AppState* st, std::string url, int gen) {
 // ---- navigate ----
 
 static void update_nav_buttons(AppState* st) {
-    gtk_widget_set_sensitive(st->btn_back, !st->back_stack.empty());
-    gtk_widget_set_sensitive(st->btn_fwd,  !st->fwd_stack.empty());
+    auto* tab = st->ct;
+    if (!tab) return;
+    gtk_widget_set_sensitive(st->btn_back, !tab->back_stack.empty());
+    gtk_widget_set_sensitive(st->btn_fwd,  !tab->fwd_stack.empty());
 }
 
 // load_url: fetch without touching history
 static void load_url(AppState* st, const std::string& url) {
+    auto* tab = st->ct;
+    if (!tab) return;
     gtk_entry_set_text(GTK_ENTRY(st->address_bar), url.c_str());
 
     int gen;
-    { std::lock_guard<std::mutex> lk(st->mu); gen = ++st->generation; }
+    { std::lock_guard<std::mutex> lk(tab->mu); gen = ++tab->generation; }
 
     // destroy JS engine from previous page
-    if (st->js_engine) {
-        delete st->js_engine;
-        st->js_engine = nullptr;
+    if (tab->js_engine) {
+        delete tab->js_engine;
+        tab->js_engine = nullptr;
     }
-    st->document.reset();
+    tab->document.reset();
 
     // clean up previous body styles from content_box
-    if (st->body_draw_signal) {
-        g_signal_handler_disconnect(st->content_box, st->body_draw_signal);
-        st->body_draw_signal = 0;
-        gtk_widget_set_app_paintable(st->content_box, FALSE);
-        g_object_set_data(G_OBJECT(st->content_box), "bg_pb", nullptr);
-        g_object_set_data(G_OBJECT(st->content_box), "bg_color_str", nullptr);
+    if (tab->body_draw_signal) {
+        g_signal_handler_disconnect(tab->content_box, tab->body_draw_signal);
+        tab->body_draw_signal = 0;
+        gtk_widget_set_app_paintable(tab->content_box, FALSE);
+        g_object_set_data(G_OBJECT(tab->content_box), "bg_pb", nullptr);
+        g_object_set_data(G_OBJECT(tab->content_box), "bg_color_str", nullptr);
     }
-    gtk_widget_set_margin_top(st->content_box, 0);
-    gtk_widget_set_margin_end(st->content_box, 0);
-    gtk_widget_set_margin_bottom(st->content_box, 0);
-    gtk_widget_set_margin_start(st->content_box, 0);
+    gtk_widget_set_margin_top(tab->content_box, 0);
+    gtk_widget_set_margin_end(tab->content_box, 0);
+    gtk_widget_set_margin_bottom(tab->content_box, 0);
+    gtk_widget_set_margin_start(tab->content_box, 0);
 
-    GList* ch = gtk_container_get_children(GTK_CONTAINER(st->content_box));
+    GList* ch = gtk_container_get_children(GTK_CONTAINER(tab->content_box));
     for (GList* l=ch; l; l=l->next) gtk_widget_destroy(GTK_WIDGET(l->data));
     g_list_free(ch);
 
     gtk_window_set_title(GTK_WINDOW(st->window), ("Loading "+url+"...").c_str());
-    std::thread(fetch_page, st, url, gen).detach();
+    tab->title = "Loading...";
+    if (st->tab_bar_area) gtk_widget_queue_draw(st->tab_bar_area);
+    std::thread(fetch_page, st, tab, url, gen).detach();
 }
 
 static void navigate(AppState* st, const std::string& raw) {
+    auto* tab = st->ct;
+    if (!tab) return;
     std::string url = normalize_url(raw);
-    if (!st->current_url.empty()) st->back_stack.push_back(st->current_url);
-    st->fwd_stack.clear();
-    st->current_url = url;
+    if (!tab->current_url.empty()) tab->back_stack.push_back(tab->current_url);
+    tab->fwd_stack.clear();
+    tab->current_url = url;
     update_nav_buttons(st);
     load_url(st, url);
 }
@@ -3757,23 +4267,26 @@ static void on_activate(GtkEntry*, gpointer d) {
 }
 static void on_back(GtkButton*, gpointer d) {
     auto* st = static_cast<AppState*>(d);
-    if (st->back_stack.empty()) return;
-    if (!st->current_url.empty()) st->fwd_stack.push_back(st->current_url);
-    st->current_url = st->back_stack.back(); st->back_stack.pop_back();
+    auto* tab = st->ct;
+    if (!tab || tab->back_stack.empty()) return;
+    if (!tab->current_url.empty()) tab->fwd_stack.push_back(tab->current_url);
+    tab->current_url = tab->back_stack.back(); tab->back_stack.pop_back();
     update_nav_buttons(st);
-    load_url(st, st->current_url);
+    load_url(st, tab->current_url);
 }
 static void on_fwd(GtkButton*, gpointer d) {
     auto* st = static_cast<AppState*>(d);
-    if (st->fwd_stack.empty()) return;
-    if (!st->current_url.empty()) st->back_stack.push_back(st->current_url);
-    st->current_url = st->fwd_stack.back(); st->fwd_stack.pop_back();
+    auto* tab = st->ct;
+    if (!tab || tab->fwd_stack.empty()) return;
+    if (!tab->current_url.empty()) tab->back_stack.push_back(tab->current_url);
+    tab->current_url = tab->fwd_stack.back(); tab->fwd_stack.pop_back();
     update_nav_buttons(st);
-    load_url(st, st->current_url);
+    load_url(st, tab->current_url);
 }
 static void on_refresh(GtkButton*, gpointer d) {
     auto* st = static_cast<AppState*>(d);
-    if (!st->current_url.empty()) load_url(st, st->current_url);
+    auto* tab = st->ct;
+    if (tab && !tab->current_url.empty()) load_url(st, tab->current_url);
 }
 
 // ---- C++ DOM probes (--test mode) ----
@@ -3803,7 +4316,9 @@ static DOMNode* probe_node(Document* doc, const std::string& id) {
 
 // Phase 1: probes that run right after scripts finish (checks initial JS execution)
 static void run_probes_phase1(AppState* st) {
-    Document* doc = st->document.get();
+    auto* tab = st->ct;
+    if (!tab) return;
+    Document* doc = tab->document.get();
     if (!doc) { fprintf(stderr, "FAIL: no document\n"); return; }
 
     fprintf(stderr, "\n\033[1m=== C++ DOM Probes: Phase 1 (post-script) ===\033[0m\n");
@@ -3955,8 +4470,8 @@ static void run_probes_phase1(AppState* st) {
     }
 
     // -- Probe: console log captured entries
-    if (st->js_engine) {
-        auto& log = st->js_engine->console_log;
+    if (tab->js_engine) {
+        auto& log = tab->js_engine->console_log;
         probe_check("console_log has >= 10 entries", log.size() >= 10);
         // Check for specific messages
         bool found_log = false, found_warn = false, found_info = false;
@@ -3999,8 +4514,9 @@ static void run_probes_phase1(AppState* st) {
 
 // Phase 2: simulate a click on click-count-btn and verify DOM changes
 static void run_probes_phase2(AppState* st) {
-    Document* doc = st->document.get();
-    if (!doc || !st->js_engine) return;
+    auto* tab = st->ct; if (!tab) return;
+    Document* doc = tab->document.get();
+    if (!doc || !tab->js_engine) return;
 
     fprintf(stderr, "\n\033[1m=== C++ DOM Probes: Phase 2 (after simulated click) ===\033[0m\n");
 
@@ -4013,15 +4529,15 @@ static void run_probes_phase2(AppState* st) {
     probe_check("click-count-btn text before click is 'Count: 0'", before == "Count: 0");
 
     // Dispatch click event from C++ (not JS)
-    st->js_engine->dispatchEvent(btn->node_id, "click", 0, 0);
-    st->js_engine->executePendingJobs();
+    tab->js_engine->dispatchEvent(btn->node_id, "click", 0, 0);
+    tab->js_engine->executePendingJobs();
 
     std::string after1 = btn->getTextContent();
     probe_check("click-count-btn text after 1 click is 'Count: 1'", after1 == "Count: 1");
 
     // Click again
-    st->js_engine->dispatchEvent(btn->node_id, "click", 0, 0);
-    st->js_engine->executePendingJobs();
+    tab->js_engine->dispatchEvent(btn->node_id, "click", 0, 0);
+    tab->js_engine->executePendingJobs();
 
     std::string after2 = btn->getTextContent();
     probe_check("click-count-btn text after 2 clicks is 'Count: 2'", after2 == "Count: 2");
@@ -4034,8 +4550,9 @@ static void run_probes_phase2(AppState* st) {
 
 // Phase 3: simulate toggle-style click and verify style changes
 static void run_probes_phase3(AppState* st) {
-    Document* doc = st->document.get();
-    if (!doc || !st->js_engine) return;
+    auto* tab = st->ct; if (!tab) return;
+    Document* doc = tab->document.get();
+    if (!doc || !tab->js_engine) return;
 
     fprintf(stderr, "\n\033[1m=== C++ DOM Probes: Phase 3 (style toggle) ===\033[0m\n");
 
@@ -4046,8 +4563,8 @@ static void run_probes_phase3(AppState* st) {
     if (!toggle_btn || !target) return;
 
     // Click toggle
-    st->js_engine->dispatchEvent(toggle_btn->node_id, "click", 0, 0);
-    st->js_engine->executePendingJobs();
+    tab->js_engine->dispatchEvent(toggle_btn->node_id, "click", 0, 0);
+    tab->js_engine->executePendingJobs();
 
     probe_check("toggle-target bg changed to '#e74c3c'",
         target->style_props.count("background-color") &&
@@ -4056,8 +4573,8 @@ static void run_probes_phase3(AppState* st) {
         target->getTextContent().find("toggled ON") != std::string::npos);
 
     // Toggle back
-    st->js_engine->dispatchEvent(toggle_btn->node_id, "click", 0, 0);
-    st->js_engine->executePendingJobs();
+    tab->js_engine->dispatchEvent(toggle_btn->node_id, "click", 0, 0);
+    tab->js_engine->executePendingJobs();
 
     probe_check("toggle-target bg changed back to '#3498db'",
         target->style_props.count("background-color") &&
@@ -4068,8 +4585,9 @@ static void run_probes_phase3(AppState* st) {
 
 // Phase 4: todo list add/clear via simulated clicks
 static void run_probes_phase4(AppState* st) {
-    Document* doc = st->document.get();
-    if (!doc || !st->js_engine) return;
+    auto* tab = st->ct; if (!tab) return;
+    Document* doc = tab->document.get();
+    if (!doc || !tab->js_engine) return;
 
     fprintf(stderr, "\n\033[1m=== C++ DOM Probes: Phase 4 (todo list) ===\033[0m\n");
 
@@ -4082,8 +4600,8 @@ static void run_probes_phase4(AppState* st) {
 
     // Add 3 items
     for (int i = 0; i < 3; i++) {
-        st->js_engine->dispatchEvent(add_btn->node_id, "click", 0, 0);
-        st->js_engine->executePendingJobs();
+        tab->js_engine->dispatchEvent(add_btn->node_id, "click", 0, 0);
+        tab->js_engine->executePendingJobs();
     }
 
     int li_count = 0;
@@ -4107,8 +4625,8 @@ static void run_probes_phase4(AppState* st) {
 
     // Clear all
     if (clear_btn) {
-        st->js_engine->dispatchEvent(clear_btn->node_id, "click", 0, 0);
-        st->js_engine->executePendingJobs();
+        tab->js_engine->dispatchEvent(clear_btn->node_id, "click", 0, 0);
+        tab->js_engine->executePendingJobs();
     }
 
     li_count = 0;
@@ -4122,24 +4640,25 @@ static void run_probes_phase4(AppState* st) {
 
 // Phase 5: error handling — trigger errors and verify they land in console_log
 static void run_probes_phase5(AppState* st) {
-    Document* doc = st->document.get();
-    if (!doc || !st->js_engine) return;
+    auto* tab = st->ct; if (!tab) return;
+    Document* doc = tab->document.get();
+    if (!doc || !tab->js_engine) return;
 
     fprintf(stderr, "\n\033[1m=== C++ DOM Probes: Phase 5 (error capture) ===\033[0m\n");
 
-    size_t log_before = st->js_engine->console_log.size();
+    size_t log_before = tab->js_engine->console_log.size();
 
     // Click trigger-error button (causes ReferenceError)
     DOMNode* err_btn = probe_node(doc, "trigger-error");
     if (err_btn) {
-        st->js_engine->dispatchEvent(err_btn->node_id, "click", 0, 0);
-        st->js_engine->executePendingJobs();
+        tab->js_engine->dispatchEvent(err_btn->node_id, "click", 0, 0);
+        tab->js_engine->executePendingJobs();
     }
 
-    size_t log_after = st->js_engine->console_log.size();
+    size_t log_after = tab->js_engine->console_log.size();
     probe_check("ReferenceError captured in console_log", log_after > log_before);
     if (log_after > log_before) {
-        auto& last = st->js_engine->console_log.back();
+        auto& last = tab->js_engine->console_log.back();
         probe_check("error entry level is ERROR", last.level == ConsoleLevel::ERROR);
         probe_check("error message mentions 'not defined' or similar",
             last.message.find("not defined") != std::string::npos ||
@@ -4147,28 +4666,28 @@ static void run_probes_phase5(AppState* st) {
     }
 
     // Click trigger-type-error button
-    log_before = st->js_engine->console_log.size();
+    log_before = tab->js_engine->console_log.size();
     DOMNode* terr_btn = probe_node(doc, "trigger-type-error");
     if (terr_btn) {
-        st->js_engine->dispatchEvent(terr_btn->node_id, "click", 0, 0);
-        st->js_engine->executePendingJobs();
+        tab->js_engine->dispatchEvent(terr_btn->node_id, "click", 0, 0);
+        tab->js_engine->executePendingJobs();
     }
 
-    log_after = st->js_engine->console_log.size();
+    log_after = tab->js_engine->console_log.size();
     probe_check("TypeError captured in console_log", log_after > log_before);
 
     // Click log-all and verify 4 new entries
-    log_before = st->js_engine->console_log.size();
+    log_before = tab->js_engine->console_log.size();
     DOMNode* log_btn = probe_node(doc, "log-all");
     if (log_btn) {
-        st->js_engine->dispatchEvent(log_btn->node_id, "click", 0, 0);
-        st->js_engine->executePendingJobs();
+        tab->js_engine->dispatchEvent(log_btn->node_id, "click", 0, 0);
+        tab->js_engine->executePendingJobs();
     }
 
-    log_after = st->js_engine->console_log.size();
+    log_after = tab->js_engine->console_log.size();
     probe_check("log-all added 4 entries", log_after - log_before == 4);
     if (log_after - log_before >= 4) {
-        auto& entries = st->js_engine->console_log;
+        auto& entries = tab->js_engine->console_log;
         probe_check("log-all: LOG level present",
             entries[log_before].level == ConsoleLevel::LOG);
         probe_check("log-all: INFO level present",
@@ -4182,8 +4701,9 @@ static void run_probes_phase5(AppState* st) {
 
 // Phase 6: 50 new DOM probes across tests 15-40
 static void run_probes_phase6(AppState* st) {
-    Document* doc = st->document.get();
-    if (!doc || !st->js_engine) return;
+    auto* tab = st->ct; if (!tab) return;
+    Document* doc = tab->document.get();
+    if (!doc || !tab->js_engine) return;
 
     fprintf(stderr, "\n\033[1m=== C++ DOM Probes: Phase 6 (extended tests 15-40) ===\033[0m\n");
 
@@ -4469,7 +4989,8 @@ static void run_probes_phase6(AppState* st) {
 
 // Phase 7: new CSS/form feature probes (tests 41-48)
 static void run_probes_phase7(AppState* st) {
-    Document* doc = st->document.get();
+    auto* tab = st->ct; if (!tab) return;
+    Document* doc = tab->document.get();
     if (!doc) return;
 
     fprintf(stderr, "\n\033[1m=== C++ DOM Probes: Phase 7 (CSS/form features 41-48) ===\033[0m\n");
@@ -4616,7 +5137,8 @@ static void run_probes_phase7(AppState* st) {
 
 // Phase 8: Font/text feature probes (tests 49-58)
 static void run_probes_phase8(AppState* st) {
-    Document* doc = st->document.get();
+    auto* tab = st->ct; if (!tab) return;
+    Document* doc = tab->document.get();
     if (!doc) return;
 
     fprintf(stderr, "\n\033[1m=== C++ DOM Probes: Phase 8 (Font/text features 49-58) ===\033[0m\n");
@@ -4859,12 +5381,36 @@ int main(int argc, char** argv) {
     AppState* st = new AppState();
     st->window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
     gtk_window_set_title(GTK_WINDOW(st->window), "Browser");
-    gtk_window_set_default_size(GTK_WINDOW(st->window), 960, 800);
+    gtk_window_set_default_size(GTK_WINDOW(st->window), 1100, 800);
+    gtk_window_set_decorated(GTK_WINDOW(st->window), FALSE); // custom titlebar via tab bar
     g_signal_connect(st->window, "destroy", G_CALLBACK(gtk_main_quit), nullptr);
 
     GtkWidget* root = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     gtk_container_add(GTK_CONTAINER(st->window), root);
 
+    // ---- Tab bar (Cairo-drawn, replaces OS titlebar) ----
+    st->tab_bar_area = gtk_drawing_area_new();
+    gtk_widget_set_size_request(st->tab_bar_area, -1, TAB_BAR_HEIGHT);
+    gtk_widget_add_events(st->tab_bar_area,
+        GDK_BUTTON_PRESS_MASK | GDK_BUTTON_RELEASE_MASK |
+        GDK_POINTER_MOTION_MASK | GDK_LEAVE_NOTIFY_MASK);
+    g_signal_connect(st->tab_bar_area, "draw", G_CALLBACK(draw_tab_bar), st);
+    g_signal_connect(st->tab_bar_area, "button-press-event", G_CALLBACK(tab_bar_press), st);
+    g_signal_connect(st->tab_bar_area, "button-release-event", G_CALLBACK(tab_bar_release), st);
+    g_signal_connect(st->tab_bar_area, "motion-notify-event", G_CALLBACK(tab_bar_motion), st);
+    g_signal_connect(st->tab_bar_area, "leave-notify-event", G_CALLBACK(tab_bar_leave), st);
+
+    // Style the tab bar background
+    {
+        GtkCssProvider* cp = gtk_css_provider_new();
+        gtk_css_provider_load_from_data(cp, "drawingarea { background-color: #383838; }", -1, nullptr);
+        gtk_style_context_add_provider(gtk_widget_get_style_context(st->tab_bar_area),
+            GTK_STYLE_PROVIDER(cp), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+        g_object_unref(cp);
+    }
+    gtk_box_pack_start(GTK_BOX(root), st->tab_bar_area, FALSE, FALSE, 0);
+
+    // ---- Navigation bar ----
     GtkWidget* bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
     gtk_widget_set_margin_start(bar, 4);
     gtk_widget_set_margin_end(bar, 4);
@@ -4872,22 +5418,21 @@ int main(int argc, char** argv) {
     gtk_widget_set_margin_bottom(bar, 4);
     gtk_box_pack_start(GTK_BOX(root), bar, FALSE, FALSE, 0);
 
-    st->btn_back = gtk_button_new_with_label("←");
+    st->btn_back = gtk_button_new_with_label("\xe2\x86\x90"); // ←
     gtk_widget_set_sensitive(st->btn_back, FALSE);
     gtk_box_pack_start(GTK_BOX(bar), st->btn_back, FALSE, FALSE, 0);
     g_signal_connect(st->btn_back, "clicked", G_CALLBACK(on_back), st);
 
-    st->btn_fwd = gtk_button_new_with_label("→");
+    st->btn_fwd = gtk_button_new_with_label("\xe2\x86\x92"); // →
     gtk_widget_set_sensitive(st->btn_fwd, FALSE);
     gtk_box_pack_start(GTK_BOX(bar), st->btn_fwd, FALSE, FALSE, 0);
     g_signal_connect(st->btn_fwd, "clicked", G_CALLBACK(on_fwd), st);
 
-    GtkWidget* btn_refresh = gtk_button_new_with_label("↺");
+    GtkWidget* btn_refresh = gtk_button_new_with_label("\xe2\x86\xba"); // ↺
     gtk_box_pack_start(GTK_BOX(bar), btn_refresh, FALSE, FALSE, 4);
     g_signal_connect(btn_refresh, "clicked", G_CALLBACK(on_refresh), st);
 
     st->address_bar = gtk_entry_new();
-    gtk_entry_set_text(GTK_ENTRY(st->address_bar), "mattmontag.com");
     gtk_box_pack_start(GTK_BOX(bar), st->address_bar, TRUE, TRUE, 0);
     g_signal_connect(st->address_bar, "activate", G_CALLBACK(on_activate), st);
 
@@ -4895,39 +5440,63 @@ int main(int argc, char** argv) {
     gtk_box_pack_start(GTK_BOX(bar), go_btn, FALSE, FALSE, 4);
     g_signal_connect(go_btn, "clicked", G_CALLBACK(on_go), st);
 
-    // Horizontal paned: left = page content, right = inspector (when open)
-    st->paned = gtk_paned_new(GTK_ORIENTATION_HORIZONTAL);
-    gtk_box_pack_start(GTK_BOX(root), st->paned, TRUE, TRUE, 0);
+    // ---- Content stack (holds per-tab paned widgets) ----
+    st->content_stack = gtk_stack_new();
+    gtk_stack_set_transition_type(GTK_STACK(st->content_stack), GTK_STACK_TRANSITION_TYPE_NONE);
+    gtk_box_pack_start(GTK_BOX(root), st->content_stack, TRUE, TRUE, 0);
 
-    GtkWidget* scroll = gtk_scrolled_window_new(nullptr, nullptr);
-    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll),
-        GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
-    gtk_paned_pack1(GTK_PANED(st->paned), scroll, TRUE, FALSE);
-
-    GtkWidget* viewport = gtk_viewport_new(nullptr, nullptr);
-    gtk_container_add(GTK_CONTAINER(scroll), viewport);
-    gtk_widget_add_events(viewport, GDK_BUTTON_PRESS_MASK);
-    g_signal_connect(viewport, "button-press-event", G_CALLBACK(on_content_click), st);
-    st->viewport = viewport;
-
-    st->content_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-    gtk_widget_set_hexpand(st->content_box, TRUE);
-    gtk_widget_set_vexpand(st->content_box, TRUE);
-    gtk_container_add(GTK_CONTAINER(viewport), st->content_box);
-
-    // Keyboard event handler: F12 for inspector + dispatch to JS
+    // ---- Keyboard event handler ----
     g_signal_connect(st->window, "key-press-event",
         G_CALLBACK(+[](GtkWidget*, GdkEventKey* ev, gpointer d) -> gboolean {
             auto* st = static_cast<AppState*>(d);
+            auto* tab = st->ct;
+            bool ctrl = (ev->state & GDK_CONTROL_MASK) != 0;
+            bool shift = (ev->state & GDK_SHIFT_MASK) != 0;
+
+            // Tab shortcuts
+            if (ctrl && shift && (ev->keyval == GDK_KEY_N || ev->keyval == GDK_KEY_n)) {
+                new_tab(st); return TRUE;
+            }
+            if (ctrl && (ev->keyval == GDK_KEY_W || ev->keyval == GDK_KEY_w)) {
+                if (!st->tabs.empty()) close_tab(st, st->active_tab_idx);
+                return TRUE;
+            }
+            if (ctrl && shift && (ev->keyval == GDK_KEY_T || ev->keyval == GDK_KEY_t)) {
+                reopen_closed_tab(st); return TRUE;
+            }
+            if (ctrl && ev->keyval == GDK_KEY_Tab) {
+                int next = (st->active_tab_idx + 1) % (int)st->tabs.size();
+                switch_to_tab(st, next); return TRUE;
+            }
+            if (ctrl && ev->keyval == GDK_KEY_ISO_Left_Tab) { // Ctrl+Shift+Tab
+                int prev = (st->active_tab_idx - 1 + (int)st->tabs.size()) % (int)st->tabs.size();
+                switch_to_tab(st, prev); return TRUE;
+            }
+            // Ctrl+1-9: switch to tab by index
+            if (ctrl && ev->keyval >= GDK_KEY_1 && ev->keyval <= GDK_KEY_9) {
+                int idx = ev->keyval - GDK_KEY_1;
+                if (ev->keyval == GDK_KEY_9) idx = (int)st->tabs.size() - 1;
+                if (idx < (int)st->tabs.size()) switch_to_tab(st, idx);
+                return TRUE;
+            }
+            // Ctrl+N: new window
+            if (ctrl && !shift && (ev->keyval == GDK_KEY_N || ev->keyval == GDK_KEY_n)) {
+                // Spawn new process
+                char self[1024];
+                ssize_t len = readlink("/proc/self/exe", self, sizeof(self)-1);
+                if (len > 0) { self[len] = 0; fork() == 0 ? (execl(self, self, (char*)nullptr), exit(1)) : (void)0; }
+                return TRUE;
+            }
+
             if (ev->keyval == GDK_KEY_F12) {
                 inspector_toggle(st);
                 return TRUE;
             }
+
             // Dispatch keydown to JS
-            if (st->js_engine && st->document) {
+            if (tab && tab->js_engine && tab->document) {
                 const char* keyname = gdk_keyval_name(ev->keyval);
                 std::string key = keyname ? keyname : "";
-                // Map common GDK key names to DOM key values
                 if (key == "Return") key = "Enter";
                 else if (key == "Escape") key = "Escape";
                 else if (key == "BackSpace") key = "Backspace";
@@ -4936,7 +5505,6 @@ int main(int argc, char** argv) {
                 else if (key.size() > 1 && key.substr(0,5) == "Shift") key = "Shift";
                 else if (key.size() > 1 && key.substr(0,7) == "Control") key = "Control";
                 else if (key.size() > 1 && key.substr(0,3) == "Alt") key = "Alt";
-                // For single chars, use lowercase for non-shifted
                 if (key.size() == 1 && !(ev->state & GDK_SHIFT_MASK))
                     key[0] = tolower((unsigned char)key[0]);
 
@@ -4951,9 +5519,9 @@ int main(int argc, char** argv) {
                 else if (ev->keyval >= GDK_KEY_F1 && ev->keyval <= GDK_KEY_F12)
                     code = "F" + std::to_string(ev->keyval - GDK_KEY_F1 + 1);
 
-                uint32_t target = st->focused_node_id;
-                if (!target && st->document->body) target = st->document->body->node_id;
-                js_dispatch_key_event(st->js_engine, target,
+                uint32_t target = tab->focused_node_id;
+                if (!target && tab->document->body) target = tab->document->body->node_id;
+                js_dispatch_key_event(tab->js_engine, target,
                     "keydown", key, code, ev->hardware_keycode,
                     (ev->state & GDK_SHIFT_MASK) != 0,
                     (ev->state & GDK_CONTROL_MASK) != 0,
@@ -4967,7 +5535,8 @@ int main(int argc, char** argv) {
     g_signal_connect(st->window, "key-release-event",
         G_CALLBACK(+[](GtkWidget*, GdkEventKey* ev, gpointer d) -> gboolean {
             auto* st = static_cast<AppState*>(d);
-            if (st->js_engine && st->document) {
+            auto* tab = st->ct;
+            if (tab && tab->js_engine && tab->document) {
                 const char* keyname = gdk_keyval_name(ev->keyval);
                 std::string key = keyname ? keyname : "";
                 if (key == "Return") key = "Enter";
@@ -4975,9 +5544,9 @@ int main(int argc, char** argv) {
                 else if (key == "space") key = " ";
                 if (key.size() == 1) key[0] = tolower((unsigned char)key[0]);
                 std::string code = keyname ? std::string("Key") + (char)toupper((unsigned char)(keyname[0])) : "";
-                uint32_t target = st->focused_node_id;
-                if (!target && st->document->body) target = st->document->body->node_id;
-                js_dispatch_key_event(st->js_engine, target,
+                uint32_t target = tab->focused_node_id;
+                if (!target && tab->document->body) target = tab->document->body->node_id;
+                js_dispatch_key_event(tab->js_engine, target,
                     "keyup", key, code, ev->hardware_keycode,
                     (ev->state & GDK_SHIFT_MASK) != 0,
                     (ev->state & GDK_CONTROL_MASK) != 0,
@@ -4987,17 +5556,35 @@ int main(int argc, char** argv) {
             return FALSE;
         }), st);
 
+    // Allow double-click on tab bar to maximize/restore
+    g_signal_connect(st->tab_bar_area, "button-press-event",
+        G_CALLBACK(+[](GtkWidget*, GdkEventButton* ev, gpointer d) -> gboolean {
+            if (ev->type == GDK_2BUTTON_PRESS && ev->button == 1) {
+                auto* st = static_cast<AppState*>(d);
+                auto hit = hit_test_tab_bar(st, ev->x, ev->y);
+                if (hit.type == HIT_EMPTY) {
+                    if (gtk_window_is_maximized(GTK_WINDOW(st->window)))
+                        gtk_window_unmaximize(GTK_WINDOW(st->window));
+                    else
+                        gtk_window_maximize(GTK_WINDOW(st->window));
+                    return TRUE;
+                }
+            }
+            return FALSE;
+        }), st);
+
     gtk_widget_show_all(st->window);
 
     // Accept URL and flags from command line
-    std::string start_url = "mattmontag.com";
+    std::string start_url = "file:///mnt/1tb-ssd/random/browser/api_test.html";
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
         if (arg == "--test") { g_test_mode = true; continue; }
         if (!arg.empty() && arg[0] != '-') { start_url = arg; }
     }
-    gtk_entry_set_text(GTK_ENTRY(st->address_bar), start_url.c_str());
-    navigate(st, start_url);
+
+    // Create first tab
+    new_tab(st, start_url);
 
     gtk_main();
     curl_global_cleanup();

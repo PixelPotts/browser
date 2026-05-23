@@ -307,8 +307,9 @@ JSEngine::~JSEngine() {
     shutdown();
 }
 
-void JSEngine::init(AppState* as, Document* doc) {
+void JSEngine::init(AppState* as, TabState* ts, Document* doc) {
     app_state = as;
+    tab_state = ts;
     document = doc;
     g_js_engine = this;
 
@@ -1586,13 +1587,13 @@ void JSEngine::scheduleRerender() {
 }
 
 // Defined in browser.cpp
-extern void do_rerender(AppState* st);
+extern void do_rerender(AppState* st, TabState* tab);
 
 gboolean JSEngine::rerender_callback(gpointer data) {
     auto* engine = static_cast<JSEngine*>(data);
     engine->rerender_idle_id = 0;
-    if (engine->app_state && engine->document) {
-        do_rerender(engine->app_state);
+    if (engine->app_state && engine->tab_state && engine->document) {
+        do_rerender(engine->app_state, engine->tab_state);
     }
     return G_SOURCE_REMOVE;
 }

@@ -977,6 +977,7 @@ static JSValue js_element_removeEventListener(JSContext* ctx, JSValueConst this_
 
 // Forward declare AppState for widget lookup (defined in browser.cpp)
 struct AppState;
+struct TabState;
 
 static JSValue js_element_getBoundingClientRect(JSContext* ctx, JSValueConst this_val,
                                                   int argc, JSValueConst* argv) {
@@ -999,8 +1000,8 @@ static JSValue js_element_getBoundingClientRect(JSContext* ctx, JSValueConst thi
     // We need to include the map — but AppState is defined in browser.cpp
     // Use a helper function declared in browser.cpp
     int x = 0, y = 0, w = 0, h = 0;
-    extern void js_get_node_geometry(AppState* st, uint32_t node_id, int& x, int& y, int& w, int& h);
-    js_get_node_geometry(g_js_engine->app_state, node->node_id, x, y, w, h);
+    extern void js_get_node_geometry(TabState* tab, uint32_t node_id, int& x, int& y, int& w, int& h);
+    js_get_node_geometry(g_js_engine->tab_state, node->node_id, x, y, w, h);
 
     JSValue r = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, r, "x", JS_NewInt32(ctx, x));
@@ -1018,37 +1019,37 @@ static JSValue js_element_getBoundingClientRect(JSContext* ctx, JSValueConst thi
 
 static JSValue js_element_get_offsetWidth(JSContext* ctx, JSValueConst this_val) {
     DOMNode* node = js_get_node(ctx, this_val);
-    if (!node || !g_js_engine || !g_js_engine->app_state) return JS_NewInt32(ctx, 0);
+    if (!node || !g_js_engine || !g_js_engine->tab_state) return JS_NewInt32(ctx, 0);
     int x, y, w, h;
-    extern void js_get_node_geometry(AppState* st, uint32_t node_id, int& x, int& y, int& w, int& h);
-    js_get_node_geometry(g_js_engine->app_state, node->node_id, x, y, w, h);
+    extern void js_get_node_geometry(TabState* tab, uint32_t node_id, int& x, int& y, int& w, int& h);
+    js_get_node_geometry(g_js_engine->tab_state, node->node_id, x, y, w, h);
     return JS_NewInt32(ctx, w);
 }
 
 static JSValue js_element_get_offsetHeight(JSContext* ctx, JSValueConst this_val) {
     DOMNode* node = js_get_node(ctx, this_val);
-    if (!node || !g_js_engine || !g_js_engine->app_state) return JS_NewInt32(ctx, 0);
+    if (!node || !g_js_engine || !g_js_engine->tab_state) return JS_NewInt32(ctx, 0);
     int x, y, w, h;
-    extern void js_get_node_geometry(AppState* st, uint32_t node_id, int& x, int& y, int& w, int& h);
-    js_get_node_geometry(g_js_engine->app_state, node->node_id, x, y, w, h);
+    extern void js_get_node_geometry(TabState* tab, uint32_t node_id, int& x, int& y, int& w, int& h);
+    js_get_node_geometry(g_js_engine->tab_state, node->node_id, x, y, w, h);
     return JS_NewInt32(ctx, h);
 }
 
 static JSValue js_element_get_offsetTop(JSContext* ctx, JSValueConst this_val) {
     DOMNode* node = js_get_node(ctx, this_val);
-    if (!node || !g_js_engine || !g_js_engine->app_state) return JS_NewInt32(ctx, 0);
+    if (!node || !g_js_engine || !g_js_engine->tab_state) return JS_NewInt32(ctx, 0);
     int x, y, w, h;
-    extern void js_get_node_geometry(AppState* st, uint32_t node_id, int& x, int& y, int& w, int& h);
-    js_get_node_geometry(g_js_engine->app_state, node->node_id, x, y, w, h);
+    extern void js_get_node_geometry(TabState* tab, uint32_t node_id, int& x, int& y, int& w, int& h);
+    js_get_node_geometry(g_js_engine->tab_state, node->node_id, x, y, w, h);
     return JS_NewInt32(ctx, y);
 }
 
 static JSValue js_element_get_offsetLeft(JSContext* ctx, JSValueConst this_val) {
     DOMNode* node = js_get_node(ctx, this_val);
-    if (!node || !g_js_engine || !g_js_engine->app_state) return JS_NewInt32(ctx, 0);
+    if (!node || !g_js_engine || !g_js_engine->tab_state) return JS_NewInt32(ctx, 0);
     int x, y, w, h;
-    extern void js_get_node_geometry(AppState* st, uint32_t node_id, int& x, int& y, int& w, int& h);
-    js_get_node_geometry(g_js_engine->app_state, node->node_id, x, y, w, h);
+    extern void js_get_node_geometry(TabState* tab, uint32_t node_id, int& x, int& y, int& w, int& h);
+    js_get_node_geometry(g_js_engine->tab_state, node->node_id, x, y, w, h);
     return JS_NewInt32(ctx, x);
 }
 
