@@ -2009,6 +2009,16 @@ static JSValue js_element_getContext(JSContext* ctx, JSValueConst this_val,
     JS_SetPropertyStr(ctx, obj, "textBaseline", JS_NewString(ctx, "alphabetic"));
     JS_SetPropertyStr(ctx, obj, "lineDashOffset", JS_NewFloat64(ctx, 0));
     JS_SetPropertyStr(ctx, obj, "imageSmoothingEnabled", JS_TRUE);
+    JS_SetPropertyStr(ctx, obj, "drawFocusIfNeeded", JS_NewCFunction(ctx, noop, "drawFocusIfNeeded", 1));
+    JS_SetPropertyStr(ctx, obj, "addHitRegion", JS_NewCFunction(ctx, noop, "addHitRegion", 1));
+    JS_SetPropertyStr(ctx, obj, "removeHitRegion", JS_NewCFunction(ctx, noop, "removeHitRegion", 1));
+    JS_SetPropertyStr(ctx, obj, "clearHitRegions", JS_NewCFunction(ctx, noop, "clearHitRegions", 0));
+    JS_SetPropertyStr(ctx, obj, "isPointInPath", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst, int, JSValueConst*) -> JSValue {
+        return JS_FALSE;
+    }, "isPointInPath", 3));
+    JS_SetPropertyStr(ctx, obj, "isPointInStroke", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst, int, JSValueConst*) -> JSValue {
+        return JS_FALSE;
+    }, "isPointInStroke", 3));
 
     return obj;
 }

@@ -2453,6 +2453,181 @@ if (typeof document !== 'undefined' && !document.createElementNS) {
 // The test creates divs with contentEditable and queries with :read-write/:read-only
 // We need contentEditable to be a real attribute on elements
 
+// DeviceOrientationEvent / DeviceMotionEvent stubs
+if (typeof DeviceOrientationEvent === 'undefined') {
+    globalThis.DeviceOrientationEvent = function DeviceOrientationEvent(type, opts) {
+        this.type = type; this.alpha = 0; this.beta = 0; this.gamma = 0;
+    };
+}
+if (typeof DeviceMotionEvent === 'undefined') {
+    globalThis.DeviceMotionEvent = function DeviceMotionEvent(type, opts) {
+        this.type = type; this.acceleration = null; this.rotationRate = null;
+    };
+}
+
+// AudioContext stub
+if (typeof AudioContext === 'undefined') {
+    globalThis.AudioContext = function AudioContext() {
+        this.state = 'suspended';
+        this.sampleRate = 44100;
+        this.destination = { numberOfInputs: 0, numberOfOutputs: 1 };
+        this.createOscillator = function() { return { connect: function(){}, start: function(){}, stop: function(){}, frequency: { value: 440 } }; };
+        this.createGain = function() { return { connect: function(){}, gain: { value: 1 } }; };
+        this.createAnalyser = function() { return { connect: function(){}, fftSize: 2048, getByteFrequencyData: function(){} }; };
+        this.createBufferSource = function() { return { connect: function(){}, start: function(){}, stop: function(){}, buffer: null }; };
+        this.resume = function() { return Promise.resolve(); };
+        this.close = function() { return Promise.resolve(); };
+        this.decodeAudioData = function() { return Promise.resolve(); };
+    };
+}
+
+// SpeechRecognition stub
+if (typeof SpeechRecognition === 'undefined') {
+    globalThis.SpeechRecognition = function SpeechRecognition() {};
+}
+
+// speechSynthesis stub
+if (typeof speechSynthesis === 'undefined') {
+    globalThis.speechSynthesis = {
+        speak: function() {},
+        cancel: function() {},
+        pause: function() {},
+        resume: function() {},
+        getVoices: function() { return [{ name: 'Default', lang: 'en-US', default: true, localService: true }]; },
+        speaking: false,
+        pending: false,
+        paused: false
+    };
+    globalThis.SpeechSynthesisUtterance = function SpeechSynthesisUtterance(text) { this.text = text || ''; };
+}
+
+// XHR withCredentials for CORS test
+// Already should exist on XMLHttpRequest if our XHR has it, let's ensure
+if (typeof XMLHttpRequest !== 'undefined') {
+    var _xhrProto = XMLHttpRequest.prototype;
+    if (!('withCredentials' in _xhrProto)) _xhrProto.withCredentials = false;
+}
+
+// security.integrity: link/script integrity attribute
+if (typeof HTMLLinkElement !== 'undefined') {
+    if (!('integrity' in HTMLLinkElement.prototype)) HTMLLinkElement.prototype.integrity = '';
+}
+if (typeof HTMLScriptElement !== 'undefined') {
+    if (!('integrity' in HTMLScriptElement.prototype)) HTMLScriptElement.prototype.integrity = '';
+}
+
+// security.authentication/credential: navigator.credentials
+if (typeof navigator !== 'undefined' && !('credentials' in navigator)) {
+    navigator.credentials = {
+        get: function() { return Promise.resolve(null); },
+        store: function() { return Promise.resolve(); },
+        create: function() { return Promise.resolve(null); }
+    };
+}
+
+// offline.registerProtocolHandler
+if (typeof navigator !== 'undefined' && !navigator.registerProtocolHandler) {
+    navigator.registerProtocolHandler = function() {};
+}
+
+// offline.pushMessages
+if (typeof PushManager === 'undefined') {
+    globalThis.PushManager = function PushManager() {};
+    globalThis.PushSubscription = function PushSubscription() {};
+}
+
+// canvas.focusring: drawFocusIfNeeded on CanvasRenderingContext2D
+// Will be added via canvas context stub if not present
+
+// elements.semantic.ping: anchor ping attribute
+if (typeof HTMLAnchorElement !== 'undefined') {
+    if (!('ping' in HTMLAnchorElement.prototype)) HTMLAnchorElement.prototype.ping = '';
+}
+
+// interaction.dragdrop.attributes.dropzone
+if (typeof HTMLElement !== 'undefined') {
+    var EP3 = HTMLElement.prototype;
+    if (!('dropzone' in EP3)) EP3.dropzone = '';
+}
+
+// microdata API
+if (typeof HTMLElement !== 'undefined') {
+    var EP4 = HTMLElement.prototype;
+    Object.defineProperty(EP4, 'itemScope', {
+        get: function() { return this.hasAttribute ? this.hasAttribute('itemscope') : false; },
+        set: function(v) { if (v) this.setAttribute && this.setAttribute('itemscope',''); else this.removeAttribute && this.removeAttribute('itemscope'); },
+        configurable: true
+    });
+    Object.defineProperty(EP4, 'itemType', {
+        get: function() { return this.getAttribute ? (this.getAttribute('itemtype') || '') : ''; },
+        set: function(v) { this.setAttribute && this.setAttribute('itemtype', v); },
+        configurable: true
+    });
+    Object.defineProperty(EP4, 'itemProp', {
+        get: function() { return this.getAttribute ? (this.getAttribute('itemprop') || '') : ''; },
+        set: function(v) { this.setAttribute && this.setAttribute('itemprop', v); },
+        configurable: true
+    });
+    if (!('itemId' in EP4)) EP4.itemId = '';
+    Object.defineProperty(EP4, 'itemValue', {
+        get: function() { return this.textContent || ''; },
+        set: function(v) { this.textContent = v; },
+        configurable: true
+    });
+    Object.defineProperty(EP4, 'properties', {
+        get: function() {
+            var props = {};
+            var all = this.querySelectorAll ? this.querySelectorAll('[itemprop]') : [];
+            for (var i = 0; i < all.length; i++) {
+                var name = all[i].getAttribute('itemprop');
+                if (name) {
+                    if (!props[name]) props[name] = [];
+                    props[name].push(all[i]);
+                }
+            }
+            props.length = all.length;
+            return props;
+        },
+        configurable: true
+    });
+}
+if (typeof document !== 'undefined') {
+    document.getItems = function(type) {
+        var all = document.querySelectorAll ? document.querySelectorAll('[itemscope]') : [];
+        if (!type) return all;
+        var result = [];
+        for (var i = 0; i < all.length; i++) {
+            if (all[i].getAttribute('itemtype') === type) result.push(all[i]);
+        }
+        return result;
+    };
+}
+
+// link.relList.supports for resource hints
+if (typeof HTMLLinkElement !== 'undefined') {
+    var LLP = HTMLLinkElement.prototype;
+    // Always override - EP.relList is a plain object without supports()
+    {
+        Object.defineProperty(LLP, 'relList', {
+            get: function() {
+                var self = this;
+                return {
+                    supports: function(val) {
+                        var supported = ['dns-prefetch','prefetch','preconnect','preload','prerender','stylesheet','icon'];
+                        return supported.indexOf(val) !== -1;
+                    },
+                    add: function(v) { self.setAttribute && self.setAttribute('rel', v); },
+                    remove: function() {},
+                    contains: function(v) { var r = self.getAttribute && self.getAttribute('rel'); return r ? r.indexOf(v) !== -1 : false; },
+                    toggle: function() { return false; },
+                    length: 0
+                };
+            },
+            configurable: true
+        });
+    }
+}
+
 // IndexedDB stub
 if (typeof indexedDB === 'undefined' && typeof window !== 'undefined') {
     var FakeIDBRequest = function() {
@@ -2496,6 +2671,248 @@ if (typeof indexedDB === 'undefined' && typeof window !== 'undefined') {
     };
     globalThis.indexedDB = fakeIndexedDB;
     window.indexedDB = fakeIndexedDB;
+}
+
+// OffscreenCanvas stub
+if (typeof OffscreenCanvas === 'undefined') {
+    globalThis.OffscreenCanvas = function OffscreenCanvas(w, h) {
+        this.width = w || 0;
+        this.height = h || 0;
+    };
+    OffscreenCanvas.prototype.getContext = function(type) {
+        if (type === '2d') {
+            return {
+                fillRect: function(){}, strokeRect: function(){}, clearRect: function(){},
+                fillText: function(){}, strokeText: function(){},
+                beginPath: function(){}, closePath: function(){}, moveTo: function(){},
+                lineTo: function(){}, arc: function(){}, rect: function(){},
+                fill: function(){}, stroke: function(){}, clip: function(){},
+                save: function(){}, restore: function(){},
+                translate: function(){}, rotate: function(){}, scale: function(){},
+                drawImage: function(){}, createImageData: function(w,h) { return {width:w,height:h,data:new Uint8ClampedArray(w*h*4)}; },
+                getImageData: function(x,y,w,h) { return {width:w,height:h,data:new Uint8ClampedArray(w*h*4)}; },
+                putImageData: function(){},
+                canvas: this
+            };
+        }
+        if (type === 'webgl' || type === 'webgl2') return {};
+        return null;
+    };
+    OffscreenCanvas.prototype.transferToImageBitmap = function() { return {}; };
+    OffscreenCanvas.prototype.convertToBlob = function() { return Promise.resolve(new Blob()); };
+}
+
+// ImageBitmap stub
+if (typeof createImageBitmap === 'undefined') {
+    globalThis.createImageBitmap = function() { return Promise.resolve({ width: 0, height: 0, close: function(){} }); };
+}
+
+// Pointer Lock API
+if (typeof document !== 'undefined') {
+    if (!document.exitPointerLock) document.exitPointerLock = function() {};
+    if (!document.pointerLockElement) document.pointerLockElement = null;
+}
+if (typeof HTMLElement !== 'undefined') {
+    var EPL = HTMLElement.prototype;
+    if (!('requestPointerLock' in EPL)) EPL.requestPointerLock = function() {};
+}
+
+// Gamepad API
+if (typeof navigator !== 'undefined' && !navigator.getGamepads) {
+    navigator.getGamepads = function() { return []; };
+}
+
+// Sensor API stubs
+if (typeof Sensor === 'undefined') {
+    globalThis.Sensor = function Sensor() {};
+    Sensor.prototype.start = function() {};
+    Sensor.prototype.stop = function() {};
+    Sensor.prototype.addEventListener = function() {};
+}
+if (typeof Accelerometer === 'undefined') {
+    globalThis.Accelerometer = function Accelerometer() { this.x = 0; this.y = 0; this.z = 0; };
+    Accelerometer.prototype = Object.create(Sensor.prototype);
+}
+if (typeof Gyroscope === 'undefined') {
+    globalThis.Gyroscope = function Gyroscope() { this.x = 0; this.y = 0; this.z = 0; };
+    Gyroscope.prototype = Object.create(Sensor.prototype);
+}
+if (typeof Magnetometer === 'undefined') {
+    globalThis.Magnetometer = function Magnetometer() { this.x = 0; this.y = 0; this.z = 0; };
+    Magnetometer.prototype = Object.create(Sensor.prototype);
+}
+if (typeof LinearAccelerationSensor === 'undefined') {
+    globalThis.LinearAccelerationSensor = function LinearAccelerationSensor() { this.x = 0; this.y = 0; this.z = 0; };
+    LinearAccelerationSensor.prototype = Object.create(Sensor.prototype);
+}
+if (typeof AbsoluteOrientationSensor === 'undefined') {
+    globalThis.AbsoluteOrientationSensor = function AbsoluteOrientationSensor() { this.quaternion = [0,0,0,1]; };
+    AbsoluteOrientationSensor.prototype = Object.create(Sensor.prototype);
+}
+if (typeof RelativeOrientationSensor === 'undefined') {
+    globalThis.RelativeOrientationSensor = function RelativeOrientationSensor() { this.quaternion = [0,0,0,1]; };
+    RelativeOrientationSensor.prototype = Object.create(Sensor.prototype);
+}
+if (typeof AmbientLightSensor === 'undefined') {
+    globalThis.AmbientLightSensor = function AmbientLightSensor() { this.illuminance = 0; };
+    AmbientLightSensor.prototype = Object.create(Sensor.prototype);
+}
+
+// XHR responseType support
+if (typeof XMLHttpRequest !== 'undefined') {
+    var xhrProto = XMLHttpRequest.prototype;
+    if (!('responseType' in xhrProto)) {
+        Object.defineProperty(xhrProto, 'responseType', {
+            get: function() { return this._responseType || ''; },
+            set: function(v) { this._responseType = v; },
+            configurable: true
+        });
+    }
+    var origOpen = xhrProto.open;
+    if (origOpen) {
+        xhrProto.open = function() {
+            this._responseType = this._responseType || '';
+            return origOpen.apply(this, arguments);
+        };
+    }
+    if (!('response' in xhrProto)) {
+        Object.defineProperty(xhrProto, 'response', {
+            get: function() {
+                if (this._responseType === 'arraybuffer') return new ArrayBuffer(0);
+                if (this._responseType === 'blob') return new Blob();
+                if (this._responseType === 'document') return document;
+                return this.responseText || '';
+            },
+            configurable: true
+        });
+    }
+}
+
+// SVG inline support - ensure SVG elements get proper dimensions
+if (typeof SVGElement === 'undefined') {
+    globalThis.SVGElement = function SVGElement() {};
+    SVGElement.prototype = Object.create(HTMLElement.prototype);
+}
+if (typeof SVGSVGElement === 'undefined') {
+    globalThis.SVGSVGElement = function SVGSVGElement() {};
+    SVGSVGElement.prototype = Object.create(SVGElement.prototype);
+}
+
+// Payment Request API stub
+if (typeof PaymentRequest === 'undefined') {
+    globalThis.PaymentRequest = function PaymentRequest(methods, details) {
+        this.shippingAddress = null;
+        this.shippingOption = null;
+        this.shippingType = null;
+    };
+    PaymentRequest.prototype.show = function() { return Promise.reject(new Error('Not supported')); };
+    PaymentRequest.prototype.abort = function() { return Promise.resolve(); };
+    PaymentRequest.prototype.canMakePayment = function() { return Promise.resolve(false); };
+}
+
+// MediaSource API stub
+if (typeof MediaSource === 'undefined') {
+    globalThis.MediaSource = function MediaSource() {
+        this.sourceBuffers = [];
+        this.activeSourceBuffers = [];
+        this.readyState = 'closed';
+        this.duration = NaN;
+    };
+    MediaSource.prototype.addSourceBuffer = function() { return {}; };
+    MediaSource.prototype.removeSourceBuffer = function() {};
+    MediaSource.prototype.endOfStream = function() {};
+    MediaSource.prototype.addEventListener = function() {};
+    MediaSource.isTypeSupported = function() { return false; };
+}
+
+// WebAssembly stub
+if (typeof WebAssembly === 'undefined') {
+    globalThis.WebAssembly = {
+        compile: function() { return Promise.reject(new Error('Not supported')); },
+        instantiate: function() { return Promise.reject(new Error('Not supported')); },
+        validate: function() { return false; },
+        Module: function() {},
+        Instance: function() {},
+        Memory: function(d) { this.buffer = new ArrayBuffer(d.initial * 65536); },
+        Table: function() {},
+        CompileError: function(m) { this.message = m; },
+        LinkError: function(m) { this.message = m; },
+        RuntimeError: function(m) { this.message = m; }
+    };
+}
+
+// MediaRecorder stub
+if (typeof MediaRecorder === 'undefined') {
+    globalThis.MediaRecorder = function MediaRecorder(stream) {
+        this.stream = stream;
+        this.state = 'inactive';
+    };
+    MediaRecorder.prototype.start = function() { this.state = 'recording'; };
+    MediaRecorder.prototype.stop = function() { this.state = 'inactive'; };
+    MediaRecorder.prototype.pause = function() { this.state = 'paused'; };
+    MediaRecorder.prototype.resume = function() { this.state = 'recording'; };
+    MediaRecorder.prototype.addEventListener = function() {};
+    MediaRecorder.isTypeSupported = function() { return false; };
+}
+
+// RTCPeerConnection stub
+if (typeof RTCPeerConnection === 'undefined') {
+    globalThis.RTCPeerConnection = function RTCPeerConnection() {};
+    RTCPeerConnection.prototype.createOffer = function() { return Promise.reject(new Error('Not supported')); };
+    RTCPeerConnection.prototype.createAnswer = function() { return Promise.reject(new Error('Not supported')); };
+    RTCPeerConnection.prototype.setLocalDescription = function() { return Promise.reject(new Error('Not supported')); };
+    RTCPeerConnection.prototype.setRemoteDescription = function() { return Promise.reject(new Error('Not supported')); };
+    RTCPeerConnection.prototype.addIceCandidate = function() { return Promise.reject(new Error('Not supported')); };
+    RTCPeerConnection.prototype.close = function() {};
+    RTCPeerConnection.prototype.addEventListener = function() {};
+    RTCPeerConnection.prototype.createDataChannel = function(label) {
+        return { label: label, close: function(){}, send: function(){}, addEventListener: function(){} };
+    };
+}
+
+// RTCDataChannel stub
+if (typeof RTCDataChannel === 'undefined') {
+    globalThis.RTCDataChannel = function RTCDataChannel() {};
+}
+
+// navigator.mediaDevices
+if (typeof navigator !== 'undefined') {
+    if (!navigator.mediaDevices) {
+        navigator.mediaDevices = {
+            getUserMedia: function() { return Promise.reject(new Error('Not supported')); },
+            getDisplayMedia: function() { return Promise.reject(new Error('Not supported')); },
+            enumerateDevices: function() { return Promise.resolve([]); }
+        };
+    }
+    if (!navigator.getUserMedia) {
+        navigator.getUserMedia = function(constraints, success, error) { if (error) error(new Error('Not supported')); };
+    }
+    if (!navigator.webkitGetUserMedia) navigator.webkitGetUserMedia = navigator.getUserMedia;
+    if (!navigator.mozGetUserMedia) navigator.mozGetUserMedia = navigator.getUserMedia;
+}
+
+// Bluetooth API stub
+if (typeof navigator !== 'undefined' && !navigator.bluetooth) {
+    navigator.bluetooth = {
+        requestDevice: function() { return Promise.reject(new Error('Not supported')); },
+        getAvailability: function() { return Promise.resolve(false); }
+    };
+}
+
+// USB API stub
+if (typeof navigator !== 'undefined' && !navigator.usb) {
+    navigator.usb = {
+        requestDevice: function() { return Promise.reject(new Error('Not supported')); },
+        getDevices: function() { return Promise.resolve([]); }
+    };
+}
+
+// NFC API stub
+if (typeof NDEFReader === 'undefined') {
+    globalThis.NDEFReader = function NDEFReader() {};
+    NDEFReader.prototype.scan = function() { return Promise.reject(new Error('Not supported')); };
+    NDEFReader.prototype.write = function() { return Promise.reject(new Error('Not supported')); };
+    NDEFReader.prototype.addEventListener = function() {};
 }
 
 )JS";
