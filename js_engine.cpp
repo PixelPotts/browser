@@ -3130,16 +3130,25 @@ if (typeof NDEFReader === 'undefined') {
     if (typeof HTMLVideoElement !== 'undefined') {
         HTMLVideoElement.prototype.canPlayType = function(type) {
             type = type.replace(/'/g, '"');
-            if (supportedVideo[type] || supportedAudio[type]) return 'probably';
-            return '';
+            if (!supportedVideo[type] && !supportedAudio[type]) return '';
+            // 'probably' if codecs specified or type is codec-specific
+            if (type.indexOf('codecs') !== -1) return 'probably';
+            var base = type.split(';')[0].trim();
+            // Container-only types: video/webm, video/ogg, video/mp4, audio/ogg, audio/webm, audio/mp4
+            if (base === 'video/webm' || base === 'video/ogg' || base === 'video/mp4' ||
+                base === 'audio/ogg' || base === 'audio/webm' || base === 'audio/mp4') return 'maybe';
+            return 'probably';
         };
     }
     // Patch audio element canPlayType
     if (typeof HTMLAudioElement !== 'undefined') {
         HTMLAudioElement.prototype.canPlayType = function(type) {
             type = type.replace(/'/g, '"');
-            if (supportedAudio[type]) return 'probably';
-            return '';
+            if (!supportedAudio[type]) return '';
+            if (type.indexOf('codecs') !== -1) return 'probably';
+            var base = type.split(';')[0].trim();
+            if (base === 'audio/ogg' || base === 'audio/webm' || base === 'audio/mp4') return 'maybe';
+            return 'probably';
         };
     }
     // Patch MediaSource.isTypeSupported for streaming
