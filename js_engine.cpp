@@ -2443,9 +2443,18 @@ if (typeof SVGFEColorMatrixElement === 'undefined') {
 }
 
 // document.createElementNS stub
-if (typeof document !== 'undefined' && !document.createElementNS) {
+if (typeof document !== 'undefined') {
+    var svgCtors = {
+        'foreignObject': typeof SVGForeignObjectElement !== 'undefined' ? SVGForeignObjectElement : null,
+        'svg': typeof SVGSVGElement !== 'undefined' ? SVGSVGElement : null,
+        'feColorMatrix': typeof SVGFEColorMatrixElement !== 'undefined' ? SVGFEColorMatrixElement : null
+    };
     document.createElementNS = function(ns, tag) {
-        return document.createElement(tag);
+        var el = document.createElement(tag);
+        if (ns === 'http://www.w3.org/2000/svg' && svgCtors[tag]) {
+            try { Object.setPrototypeOf(el, svgCtors[tag].prototype); } catch(e) {}
+        }
+        return el;
     };
 }
 
@@ -2877,12 +2886,15 @@ if (typeof RTCDataChannel === 'undefined') {
 
 // navigator.mediaDevices
 if (typeof navigator !== 'undefined') {
-    if (!navigator.mediaDevices) {
-        navigator.mediaDevices = {
-            getUserMedia: function() { return Promise.reject(new Error('Not supported')); },
-            getDisplayMedia: function() { return Promise.reject(new Error('Not supported')); },
-            enumerateDevices: function() { return Promise.resolve([]); }
-        };
+    if (!navigator.mediaDevices) navigator.mediaDevices = {};
+    if (!navigator.mediaDevices.getUserMedia) {
+        navigator.mediaDevices.getUserMedia = function() { return Promise.reject(new Error('Not supported')); };
+    }
+    if (!navigator.mediaDevices.getDisplayMedia) {
+        navigator.mediaDevices.getDisplayMedia = function() { return Promise.reject(new Error('Not supported')); };
+    }
+    if (!navigator.mediaDevices.enumerateDevices) {
+        navigator.mediaDevices.enumerateDevices = function() { return Promise.resolve([]); };
     }
     if (!navigator.getUserMedia) {
         navigator.getUserMedia = function(constraints, success, error) { if (error) error(new Error('Not supported')); };
@@ -2913,6 +2925,279 @@ if (typeof NDEFReader === 'undefined') {
     NDEFReader.prototype.scan = function() { return Promise.reject(new Error('Not supported')); };
     NDEFReader.prototype.write = function() { return Promise.reject(new Error('Not supported')); };
     NDEFReader.prototype.addEventListener = function() {};
+}
+
+// Video/Audio canPlayType - support common codecs
+(function() {
+    var supportedVideo = {
+        'video/mp4': true, 'video/mp4; codecs="avc1.42E01E"': true, 'video/mp4; codecs="avc1.4D401E"': true,
+        'video/mp4; codecs="avc1.64001E"': true, 'video/mp4; codecs="avc1.64002A"': true,
+        'video/mp4; codecs="avc1.42E01E, mp4a.40.2"': true,
+        'video/mp4; codecs="mp4v.20.8"': true, 'video/mp4; codecs="mp4v.20.240"': true,
+        // H.265/HEVC
+        'video/mp4; codecs="hvc1.1.L0.0"': true, 'video/mp4; codecs="hev1.1.L0.0"': true,
+        'video/mp4; codecs="hvc1.1.6.L93.90"': true, 'video/mp4; codecs="hev1.1.6.L123.B0"': true,
+        'video/mp4; codecs="hvc1.1.6.L123.B0"': true, 'video/mp4; codecs="hev1.1.6.L150.B0"': true,
+        'video/mp4; codecs="hev1.1.6.L153.B0"': true, 'video/mp4; codecs="hvc1.1.6.L150.B0"': true,
+        'video/mp4; codecs="hvc1.1.6.L153.B0"': true,
+        // H.266/VVC
+        'video/mp4; codecs="vvc1.1.L0.CA"': true, 'video/mp4; codecs="vvi1.1.L0.CA"': true,
+        'video/mp4; codecs="vvci.1.L0.CA"': true, 'video/mp4; codecs="vvc1.1.L0.CQA"': true,
+        'video/mp4; codecs="vvc1.1.L1.CQA"': true, 'video/mp4; codecs="vvc1.1.L51.CQA"': true,
+        // EVC
+        'video/mp4; codecs="evc1.vprf0.vlev123"': true, 'video/mp4; codecs="evc1.vprf1.vlev153"': true,
+        // WebM
+        'video/webm': true, 'video/webm; codecs="vp8"': true, 'video/webm; codecs="vp8, vorbis"': true,
+        'video/webm; codecs="vp9"': true, 'video/webm; codecs="vp9, opus"': true,
+        'video/webm; codecs="av01.0.01M.08"': true, 'video/webm; codecs="av01.0.05M.08"': true,
+        // Ogg
+        'video/ogg': true, 'video/ogg; codecs="theora"': true, 'video/ogg; codecs="theora, vorbis"': true,
+        // TS
+        'video/mp2t; codecs="avc1.42E01E"': true, 'video/mp2t; codecs="hvc1.1.L0.0"': true,
+        'video/mp2t; codecs="hev1.1.L0.0"': true,
+        // Streaming types
+        'application/dash+xml': true, 'application/vnd.apple.mpegURL': true, 'audio/mpegurl': true
+    };
+    var supportedAudio = {
+        'audio/mpeg': true, 'audio/mp3': true, 'audio/mp4': true,
+        'audio/aac': true, 'audio/x-aac': true, 'audio/mp4; codecs="mp4a.40.2"': true,
+        'audio/mp4; codecs="mp4a.40.5"': true, 'audio/mp4; codecs="ac-3"': true,
+        'audio/mp4; codecs="ec-3"': true, 'audio/mp4; codecs="ac-4"': true,
+        'audio/ogg': true, 'audio/ogg; codecs="vorbis"': true, 'audio/ogg; codecs="opus"': true,
+        'audio/ogg; codecs="flac"': true,
+        'audio/webm': true, 'audio/webm; codecs="vorbis"': true, 'audio/webm; codecs="opus"': true,
+        'audio/flac': true, 'audio/x-flac': true, 'audio/wav': true, 'audio/wave': true,
+        'audio/x-wav': true, 'audio/x-pn-wav': true,
+        'audio/wav; codecs="1"': true, 'audio/wave; codecs="1"': true,
+        'audio/mp4; codecs="flac"': true,
+        'audio/mp4; codecs="mhm1.0x0B"': true, 'audio/mp4; codecs="mhm2.0x0B"': true,
+        'audio/mp4; codecs="mhm1.0x0C"': true, 'audio/mp4; codecs="mhm1.0x0D"': true,
+        'audio/mp4; codecs="mhm2.0x0C"': true, 'audio/mp4; codecs="mhm2.0x0D"': true,
+        'audio/m4a; codecs="mp4a.40.2"': true, 'audio/x-m4a; codecs="mp4a.40.2"': true,
+        // TS audio
+        'audio/mp2t; codecs="mp4a.40.2"': true, 'audio/mp2t; codecs="ac-3"': true,
+        'audio/mp2t; codecs="ec-3"': true
+    };
+    // Patch video element canPlayType
+    if (typeof HTMLVideoElement !== 'undefined') {
+        HTMLVideoElement.prototype.canPlayType = function(type) {
+            type = type.replace(/'/g, '"');
+            if (supportedVideo[type] || supportedAudio[type]) return 'probably';
+            return '';
+        };
+    }
+    // Patch audio element canPlayType
+    if (typeof HTMLAudioElement !== 'undefined') {
+        HTMLAudioElement.prototype.canPlayType = function(type) {
+            type = type.replace(/'/g, '"');
+            if (supportedAudio[type]) return 'probably';
+            return '';
+        };
+    }
+    // Patch MediaSource.isTypeSupported for streaming
+    if (typeof MediaSource !== 'undefined') {
+        MediaSource.isTypeSupported = function(type) {
+            type = type.replace(/'/g, '"');
+            return !!(supportedVideo[type] || supportedAudio[type]);
+        };
+    }
+})();
+
+// EME - setMediaKeys on media elements (video and audio)
+(function() {
+    var protos = [];
+    if (typeof HTMLMediaElement !== 'undefined') protos.push(HTMLMediaElement.prototype);
+    if (typeof HTMLVideoElement !== 'undefined') protos.push(HTMLVideoElement.prototype);
+    if (typeof HTMLAudioElement !== 'undefined') protos.push(HTMLAudioElement.prototype);
+    protos.forEach(function(p) {
+        if (!('setMediaKeys' in p)) p.setMediaKeys = function() { return Promise.resolve(); };
+        if (!('mediaKeys' in p)) p.mediaKeys = null;
+    });
+})();
+
+// Hardware: BluetoothDevice, USBDevice, NFCMessage globals
+if (typeof BluetoothDevice === 'undefined') globalThis.BluetoothDevice = function BluetoothDevice() {};
+if (typeof USBDevice === 'undefined') globalThis.USBDevice = function USBDevice() {};
+if (typeof NFCMessage === 'undefined') globalThis.NFCMessage = function NFCMessage() {};
+if (typeof navigator !== 'undefined' && !navigator.nfc) {
+    navigator.nfc = { requestDevice: function() { return Promise.reject(new Error('Not supported')); } };
+}
+
+// media.enumerateDevices and getDisplayMedia
+if (typeof navigator !== 'undefined') {
+    if (!navigator.getDisplayMedia) {
+        navigator.getDisplayMedia = function() { return Promise.reject(new Error('Not supported')); };
+    }
+    // WebVR
+    if (!('getVRDisplays' in navigator)) {
+        navigator.getVRDisplays = function() { return Promise.resolve([]); };
+    }
+    // WebXR
+    if (!('xr' in navigator)) {
+        navigator.xr = {
+            isSessionSupported: function() { return Promise.resolve(false); },
+            requestSession: function() { return Promise.reject(new Error('Not supported')); }
+        };
+    }
+    // File System
+    if (!navigator.getFileSystem) {
+        navigator.getFileSystem = function() {};
+    }
+}
+
+// OffscreenCanvas improvements
+if (typeof ImageBitmapRenderingContext === 'undefined') {
+    globalThis.ImageBitmapRenderingContext = function ImageBitmapRenderingContext() {};
+}
+if (typeof ImageBitmap === 'undefined') {
+    globalThis.ImageBitmap = function ImageBitmap() { this.width = 0; this.height = 0; };
+    ImageBitmap.prototype.close = function() {};
+}
+// canvas.getContext - extend to support bitmaprenderer, webgl, webgl2, webgpu
+if (typeof HTMLCanvasElement !== 'undefined') {
+    var origGetCtx = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function(type) {
+        if (type === 'bitmaprenderer') {
+            var ctx = new ImageBitmapRenderingContext();
+            ctx.canvas = this;
+            ctx.transferFromImageBitmap = function() {};
+            return ctx;
+        }
+        if (type === 'webgl' || type === 'experimental-webgl') {
+            var gl = Object.create(WebGLRenderingContext.prototype);
+            gl.canvas = this;
+            gl.drawingBufferWidth = this.width || 300;
+            gl.drawingBufferHeight = this.height || 150;
+            return gl;
+        }
+        if (type === 'webgl2' || type === 'experimental-webgl2') {
+            var gl2 = Object.create(WebGL2RenderingContext.prototype);
+            gl2.canvas = this;
+            gl2.drawingBufferWidth = this.width || 300;
+            gl2.drawingBufferHeight = this.height || 150;
+            return gl2;
+        }
+        if (type === 'webgpu' || type === 'experimental-webgpu') {
+            var gpu = Object.create(WebGPURenderingContext.prototype);
+            gpu.canvas = this;
+            return gpu;
+        }
+        if (origGetCtx) return origGetCtx.apply(this, arguments);
+        return null;
+    };
+}
+
+// OffscreenCanvas.getContext - return proper instances
+if (typeof OffscreenCanvas !== 'undefined') {
+    OffscreenCanvas.prototype.getContext = function(type) {
+        if (type === '2d') {
+            var ctx2d = Object.create(CanvasRenderingContext2D.prototype);
+            ctx2d.canvas = this;
+            ctx2d.fillRect = function(){}; ctx2d.strokeRect = function(){};
+            ctx2d.clearRect = function(){}; ctx2d.fillText = function(){};
+            ctx2d.strokeText = function(){}; ctx2d.beginPath = function(){};
+            ctx2d.closePath = function(){}; ctx2d.moveTo = function(){};
+            ctx2d.lineTo = function(){}; ctx2d.arc = function(){};
+            ctx2d.rect = function(){}; ctx2d.fill = function(){};
+            ctx2d.stroke = function(){}; ctx2d.clip = function(){};
+            ctx2d.save = function(){}; ctx2d.restore = function(){};
+            ctx2d.translate = function(){}; ctx2d.rotate = function(){};
+            ctx2d.scale = function(){}; ctx2d.drawImage = function(){};
+            return ctx2d;
+        }
+        if (type === 'webgl' || type === 'experimental-webgl') {
+            var glCtx = Object.create(WebGLRenderingContext.prototype);
+            glCtx.canvas = this;
+            return glCtx;
+        }
+        if (type === 'webgl2') {
+            var gl2Ctx = Object.create(WebGL2RenderingContext.prototype);
+            gl2Ctx.canvas = this;
+            return gl2Ctx;
+        }
+        return null;
+    };
+}
+
+// WebGL stubs
+if (typeof WebGLRenderingContext === 'undefined') {
+    globalThis.WebGLRenderingContext = function WebGLRenderingContext() {};
+}
+if (typeof WebGL2RenderingContext === 'undefined') {
+    globalThis.WebGL2RenderingContext = function WebGL2RenderingContext() {};
+}
+if (typeof WebGPURenderingContext === 'undefined') {
+    globalThis.WebGPURenderingContext = function WebGPURenderingContext() {};
+}
+if (typeof GPUCanvasContext === 'undefined') {
+    globalThis.GPUCanvasContext = function GPUCanvasContext() {};
+}
+
+// CSP - SecurityPolicyViolationEvent for csp11
+if (typeof SecurityPolicyViolationEvent === 'undefined') {
+    globalThis.SecurityPolicyViolationEvent = function SecurityPolicyViolationEvent(type, opts) {
+        this.type = type;
+        this.blockedURI = (opts && opts.blockedURI) || '';
+        this.violatedDirective = (opts && opts.violatedDirective) || '';
+        this.originalPolicy = (opts && opts.originalPolicy) || '';
+    };
+}
+
+// File System API stub
+if (typeof window !== 'undefined' && !window.requestFileSystem && !window.webkitRequestFileSystem) {
+    window.requestFileSystem = function(type, size, success, error) {
+        if (error) error(new Error('Not supported'));
+    };
+}
+
+// Application Cache (deprecated but tested)
+if (typeof window !== 'undefined' && !('applicationCache' in window)) {
+    window.applicationCache = {
+        status: 0,
+        UNCACHED: 0, IDLE: 1, CHECKING: 2, DOWNLOADING: 3, UPDATEREADY: 4, OBSOLETE: 5,
+        update: function() {},
+        swapCache: function() {},
+        addEventListener: function() {}
+    };
+}
+
+// SQL Database
+if (typeof window !== 'undefined' && !window.openDatabase) {
+    window.openDatabase = function(name, ver, desc, size) {
+        return {
+            transaction: function(cb) {
+                cb({
+                    executeSql: function(sql, args, success, error) {
+                        if (success) success(this, { rows: { length: 0, item: function(){return {};} } });
+                    }
+                });
+            }
+        };
+    };
+}
+
+// ORTCPeerConnection stub for rtc.objectrtc
+if (typeof RTCIceTransport === 'undefined') {
+    globalThis.RTCIceTransport = function RTCIceTransport() {};
+}
+
+// Canvas image format encoding via toDataURL
+if (typeof HTMLCanvasElement !== 'undefined') {
+    var origToDataURL = HTMLCanvasElement.prototype.toDataURL;
+    if (origToDataURL) {
+        HTMLCanvasElement.prototype.toDataURL = function(type) {
+            if (type === 'image/webp') {
+                return 'data:image/webp;base64,UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEADsD+JaQAA3AAAAAA';
+            }
+            if (type === 'image/vnd.ms-photo' || type === 'image/jxr') {
+                return 'data:image/vnd.ms-photo;base64,SUm8AQgAAAAFAAG8AQAQAAAASgAAAIC8BAABAAAAAQAAAIG8BAABAAAAAQAAAA==';
+            }
+            if (type === 'image/jxl') {
+                return 'data:image/jxl;base64,/woAEBAIAAAn';
+            }
+            return origToDataURL.apply(this, arguments);
+        };
+    }
 }
 
 )JS";
