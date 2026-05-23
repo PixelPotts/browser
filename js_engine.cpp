@@ -2571,20 +2571,33 @@ if (typeof XMLHttpRequest !== 'undefined') {
         var self = this;
         var url = self._url || '';
         // Resolve relative URLs against page location
-        if (url && url[0] === '/' && typeof location !== 'undefined' && location.href) {
+        if (url && typeof location !== 'undefined' && location.href) {
             var base = location.href;
-            var proto = base.indexOf('://');
-            if (proto !== -1) {
-                var hostEnd = base.indexOf('/', proto + 3);
-                if (hostEnd !== -1) url = base.substring(0, hostEnd) + url;
-                else url = base + url;
+            if (url[0] === '/' && url.indexOf('://') === -1) {
+                // Absolute path - resolve against origin
+                if (base.substring(0, 7) === 'file://') {
+                    // For file:// URLs, resolve against page directory (not filesystem root)
+                    var lastSlash = base.lastIndexOf('/');
+                    if (lastSlash > 6) url = base.substring(0, lastSlash) + url;
+                } else {
+                    var proto = base.indexOf('://');
+                    if (proto !== -1) {
+                        var hostEnd = base.indexOf('/', proto + 3);
+                        if (hostEnd !== -1) url = base.substring(0, hostEnd) + url;
+                        else url = base + url;
+                    }
+                }
+            } else if (url.indexOf('://') === -1) {
+                // Relative path - resolve against page directory
+                var lastSlash2 = base.lastIndexOf('/');
+                if (lastSlash2 !== -1) url = base.substring(0, lastSlash2 + 1) + url;
             }
-        } else if (url && url.indexOf('://') === -1 && typeof location !== 'undefined' && location.href) {
-            var b2 = location.href;
-            var lastSlash = b2.lastIndexOf('/');
-            if (lastSlash !== -1) url = b2.substring(0, lastSlash + 1) + url;
         }
         if (!url) return;
+        // Strip query string from file:// URLs (filesystem doesn't support query params)
+        if (url.substring(0, 7) === 'file://' && url.indexOf('?') !== -1) {
+            url = url.substring(0, url.indexOf('?'));
+        }
         fetch(url).then(function(resp) {
             self.status = resp.status || 200;
             self.statusText = resp.statusText || 'OK';
