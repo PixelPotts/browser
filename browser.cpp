@@ -1147,7 +1147,7 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
         return entries;
     };
 
-    enum { NORM, SCRIPT_CAP, STYLE_SKIP, COMMENT } state = NORM;
+    enum { NORM, SCRIPT_CAP, STYLE_SKIP, NOSCRIPT_SKIP, COMMENT } state = NORM;
     std::string script_content;
     std::string script_src;
     int skip_depth = 0;
@@ -1180,6 +1180,11 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
         if (state == STYLE_SKIP) {
             size_t p = find_ci(html, "</style>", i);
             i = p == std::string::npos ? n : p + 8;
+            state = NORM; continue;
+        }
+        if (state == NOSCRIPT_SKIP) {
+            size_t p = find_ci(html, "</noscript>", i);
+            i = p == std::string::npos ? n : p + 11;
             state = NORM; continue;
         }
         if (html[i] != '<') { if (!skip_depth) acc += html[i]; ++i; continue; }
@@ -1219,6 +1224,7 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
             state = SCRIPT_CAP; continue;
         }
         if (!closing && tname == "style") { state = STYLE_SKIP; continue; }
+        if (!closing && tname == "noscript") { state = NOSCRIPT_SKIP; continue; }
         // Skip <!DOCTYPE>, <!-- -->, and other !-prefixed declarations
         if (!tname.empty() && tname[0] == '!') continue;
 
