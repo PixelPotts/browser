@@ -2207,20 +2207,39 @@ void js_bindings_init(JSEngine* engine) {
             cairo_paint(cr);
             cairo_destroy(cr);
 
-            struct PngData { std::string buf; };
-            PngData pd;
-            cairo_surface_write_to_png_stream(surf, [](void* ud, const unsigned char* data, unsigned int length) -> cairo_status_t {
-                auto* pd = static_cast<PngData*>(ud);
-                pd->buf.append((const char*)data, length);
-                return CAIRO_STATUS_SUCCESS;
-            }, &pd);
-            cairo_surface_destroy(surf);
+            std::string imgData;
+            std::string outMime = "image/png";
+
+            if (mimeType == "image/jpeg" || mimeType == "image/jpg") {
+                outMime = "image/jpeg";
+                // Use GDK pixbuf to convert Cairo surface to JPEG
+                cairo_surface_flush(surf);
+                GdkPixbuf* pixbuf = gdk_pixbuf_get_from_surface(surf, 0, 0, w, h);
+                cairo_surface_destroy(surf);
+                if (pixbuf) {
+                    gchar* buf = nullptr; gsize buf_sz = 0;
+                    gdk_pixbuf_save_to_buffer(pixbuf, &buf, &buf_sz, "jpeg", nullptr, "quality", "85", NULL);
+                    g_object_unref(pixbuf);
+                    if (buf) { imgData.assign(buf, buf_sz); g_free(buf); }
+                }
+            } else {
+                // PNG output using Cairo
+                struct PngData { std::string buf; };
+                PngData pd;
+                cairo_surface_write_to_png_stream(surf, [](void* ud, const unsigned char* data, unsigned int length) -> cairo_status_t {
+                    auto* pd = static_cast<PngData*>(ud);
+                    pd->buf.append((const char*)data, length);
+                    return CAIRO_STATUS_SUCCESS;
+                }, &pd);
+                cairo_surface_destroy(surf);
+                imgData = std::move(pd.buf);
+            }
 
             // Base64 encode
             static const char b64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
             std::string b64str;
-            const unsigned char* in = (const unsigned char*)pd.buf.data();
-            size_t sz = pd.buf.size();
+            const unsigned char* in = (const unsigned char*)imgData.data();
+            size_t sz = imgData.size();
             for (size_t i = 0; i < sz; i += 3) {
                 unsigned int n = ((unsigned int)in[i]) << 16;
                 if (i+1 < sz) n |= ((unsigned int)in[i+1]) << 8;
@@ -2230,7 +2249,7 @@ void js_bindings_init(JSEngine* engine) {
                 b64str += (i+1 < sz) ? b64[(n >> 6) & 63] : '=';
                 b64str += (i+2 < sz) ? b64[n & 63] : '=';
             }
-            std::string result = "data:image/png;base64," + b64str;
+            std::string result = "data:" + outMime + ";base64," + b64str;
             return JS_NewString(c, result.c_str());
         }, "toDataURL", 1));
     JS_SetPropertyStr(ctx, elem_proto, "stepUp",

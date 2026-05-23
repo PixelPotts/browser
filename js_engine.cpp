@@ -1215,20 +1215,18 @@ globalThis.URLSearchParams = function URLSearchParams(init) {
 
 // URL constructor basic stub
 globalThis.URL = function URL(url, base) {
-    if (base && !url.match(/^https?:\/\//)) {
+    if (base && !url.match(/^[a-zA-Z][a-zA-Z0-9+.-]*:/)) {
         url = base.replace(/\/[^/]*$/, '/') + url;
     }
-    this.href = url;
-    var m = url.match(/^(https?:)\/\/([^/:]+)(?::(\d+))?(\/[^?#]*)?(\?[^#]*)?(#.*)?$/);
-    if (m) {
-        this.protocol = m[1]; this.hostname = m[2]; this.port = m[3] || '';
-        this.pathname = m[4] || '/'; this.search = m[5] || ''; this.hash = m[6] || '';
-        this.host = this.port ? this.hostname + ':' + this.port : this.hostname;
-        this.origin = this.protocol + '//' + this.host;
-    } else {
-        this.protocol = ''; this.hostname = ''; this.port = ''; this.pathname = url;
-        this.search = ''; this.hash = ''; this.host = ''; this.origin = '';
+    var m = url.match(/^([a-zA-Z][a-zA-Z0-9+.-]*:)\/\/([^/:]+)(?::(\d+))?(\/[^?#]*)?(\?[^#]*)?(#.*)?$/);
+    if (!m) {
+        throw new TypeError("Invalid URL: " + url);
     }
+    this.href = url;
+    this.protocol = m[1]; this.hostname = m[2]; this.port = m[3] || '';
+    this.pathname = m[4] || '/'; this.search = m[5] || ''; this.hash = m[6] || '';
+    this.host = this.port ? this.hostname + ':' + this.port : this.hostname;
+    this.origin = this.protocol + '//' + this.host;
     this.searchParams = new URLSearchParams(this.search);
     this.toString = function() { return this.href; };
 };
@@ -1910,8 +1908,10 @@ if (typeof HTMLInputElement !== 'undefined') {
             if (val !== '' && (type === 'number' || type === 'range')) {
                 var num = parseFloat(val);
                 if (!isNaN(num)) {
-                    var mn = el.getAttribute ? el.getAttribute('min') : el.min;
-                    var mx = el.getAttribute ? el.getAttribute('max') : el.max;
+                    var mn = el.min !== undefined && el.min !== '' ? el.min :
+                             (el.getAttribute ? el.getAttribute('min') : null);
+                    var mx = el.max !== undefined && el.max !== '' ? el.max :
+                             (el.getAttribute ? el.getAttribute('max') : null);
                     if (mn !== null && mn !== '' && num < parseFloat(mn)) { rangeUnderflow = true; valid = false; }
                     if (mx !== null && mx !== '' && num > parseFloat(mx)) { rangeOverflow = true; valid = false; }
                 }
@@ -1925,17 +1925,29 @@ if (typeof HTMLInputElement !== 'undefined') {
                 } catch(e) {}
             }
 
+            // Custom validity
+            var customError = !!(el._customValidity);
+            if (customError) valid = false;
+
             return {
                 valid: valid, valueMissing: valueMissing, typeMismatch: typeMismatch,
                 patternMismatch: patternMismatch, tooLong: false, tooShort: false,
                 rangeUnderflow: rangeUnderflow, rangeOverflow: rangeOverflow,
-                stepMismatch: false, badInput: false, customError: false
+                stepMismatch: false, badInput: false, customError: customError
             };
         },
         configurable: true
     });
     EP.checkValidity = function() { return this.validity.valid; };
     EP.reportValidity = function() { return this.validity.valid; };
+    EP.setCustomValidity = function(msg) {
+        this._customValidity = msg || '';
+        // Store in DOM attribute so C++ selector matching can access it
+        if (this.setAttribute) {
+            if (msg) this.setAttribute('data-custom-validity', msg);
+            else this.removeAttribute('data-custom-validity');
+        }
+    };
 })();
 
 // template.content
@@ -2204,6 +2216,125 @@ if (typeof WebSocket === 'undefined') {
 if (typeof navigator !== 'undefined') {
     if (!('maxTouchPoints' in navigator)) navigator.maxTouchPoints = 0;
     if (!('pointerEnabled' in navigator)) navigator.pointerEnabled = true;
+}
+
+// ---- Easy wins batch: property stubs and constructors ----
+
+// ClipboardEvent
+if (typeof ClipboardEvent === 'undefined') {
+    globalThis.ClipboardEvent = function ClipboardEvent(type, opts) {
+        this.type = type;
+        this.clipboardData = (opts && opts.clipboardData) || null;
+    };
+}
+
+// iframe: sandbox, srcdoc properties
+if (typeof HTMLIFrameElement !== 'undefined') {
+    var IFP = HTMLIFrameElement.prototype;
+    if (!('sandbox' in IFP)) IFP.sandbox = '';
+    if (!('srcdoc' in IFP)) IFP.srcdoc = '';
+}
+
+// img: srcset, sizes properties
+if (typeof HTMLImageElement !== 'undefined') {
+    var IMP = HTMLImageElement.prototype;
+    if (!('srcset' in IMP)) IMP.srcset = '';
+    if (!('sizes' in IMP)) IMP.sizes = '';
+}
+
+// video/audio: canPlayType method
+if (typeof HTMLVideoElement !== 'undefined') {
+    HTMLVideoElement.prototype.canPlayType = function(type) { return ''; };
+    HTMLVideoElement.prototype.play = function() { return Promise.resolve(); };
+    HTMLVideoElement.prototype.pause = function() {};
+    HTMLVideoElement.prototype.load = function() {};
+}
+if (typeof HTMLAudioElement !== 'undefined') {
+    HTMLAudioElement.prototype.canPlayType = function(type) { return ''; };
+    HTMLAudioElement.prototype.play = function() { return Promise.resolve(); };
+    HTMLAudioElement.prototype.pause = function() {};
+    HTMLAudioElement.prototype.load = function() {};
+}
+if (typeof HTMLMediaElement !== 'undefined') {
+    HTMLMediaElement.prototype.canPlayType = function(type) { return ''; };
+}
+
+// label.control - returns the associated input element
+if (typeof HTMLLabelElement !== 'undefined') {
+    Object.defineProperty(HTMLLabelElement.prototype, 'control', {
+        get: function() {
+            var forId = this.getAttribute && this.getAttribute('for');
+            if (forId) return document.getElementById(forId);
+            // Also check for nested input
+            return this.querySelector ? this.querySelector('input,select,textarea') : null;
+        },
+        configurable: true
+    });
+}
+
+// input.labels - returns associated labels
+(function() {
+    var EP = HTMLElement.prototype;
+    if (!('labels' in EP)) {
+        Object.defineProperty(EP, 'labels', {
+            get: function() {
+                if (!this.id) return [];
+                var labels = document.querySelectorAll ? document.querySelectorAll('label[for="' + this.id + '"]') : [];
+                return labels;
+            },
+            configurable: true
+        });
+    }
+})();
+
+// input.form - returns associated form
+(function() {
+    var EP = HTMLElement.prototype;
+    if (!('form' in EP)) {
+        Object.defineProperty(EP, 'form', {
+            get: function() {
+                // Check for form attribute
+                var formId = this.getAttribute && this.getAttribute('form');
+                if (formId) return document.getElementById(formId);
+                // Check for parent form
+                var p = this.parentNode;
+                while (p) {
+                    if (p.tagName && p.tagName.toLowerCase() === 'form') return p;
+                    p = p.parentNode;
+                }
+                return null;
+            },
+            configurable: true
+        });
+    }
+})();
+
+// details element: open property
+if (typeof HTMLDetailsElement !== 'undefined') {
+    if (!('open' in HTMLDetailsElement.prototype)) {
+        Object.defineProperty(HTMLDetailsElement.prototype, 'open', {
+            get: function() { return this._open || false; },
+            set: function(v) { this._open = !!v; },
+            configurable: true
+        });
+    }
+}
+
+// Fullscreen API stubs
+if (typeof document !== 'undefined') {
+    if (!document.exitFullscreen) document.exitFullscreen = function() { return Promise.resolve(); };
+    if (!('fullscreenEnabled' in document)) document.fullscreenEnabled = false;
+}
+var EP2 = HTMLElement.prototype;
+if (!EP2.requestFullscreen) EP2.requestFullscreen = function() { return Promise.resolve(); };
+
+// PointerEvent
+if (typeof PointerEvent === 'undefined') {
+    globalThis.PointerEvent = function PointerEvent(type, opts) {
+        this.type = type;
+        this.pointerId = (opts && opts.pointerId) || 0;
+        this.pointerType = (opts && opts.pointerType) || 'mouse';
+    };
 }
 
 )JS";

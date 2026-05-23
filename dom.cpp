@@ -1,6 +1,7 @@
 #include "dom.h"
 #include <sstream>
 #include <cctype>
+#include <set>
 
 // ---- DOMNode ----
 
@@ -624,6 +625,66 @@ bool dom_simple_match(const std::string& raw, DOMNode* node) {
         } else if (ps.substr(0, 4) == "not(") {
             std::string inner = ps.substr(4, ps.size() - 5);
             if (dom_simple_match(inner, node)) return false; // :not matches if inner doesn't
+        } else if (ps == "required") {
+            if (node->attributes.find("required") == node->attributes.end()) return false;
+        } else if (ps == "optional") {
+            static const std::set<std::string> form_tags = {"input","select","textarea"};
+            if (form_tags.find(node->tag_name) == form_tags.end()) return false;
+            if (node->attributes.find("required") != node->attributes.end()) return false;
+        } else if (ps == "read-only") {
+            if (node->attributes.find("readonly") == node->attributes.end() &&
+                node->attributes.find("disabled") == node->attributes.end()) return false;
+        } else if (ps == "read-write") {
+            static const std::set<std::string> form_tags = {"input","select","textarea"};
+            if (form_tags.find(node->tag_name) == form_tags.end()) return false;
+            if (node->attributes.find("readonly") != node->attributes.end()) return false;
+            if (node->attributes.find("disabled") != node->attributes.end()) return false;
+        } else if (ps == "in-range") {
+            auto mn = node->attributes.find("min");
+            auto mx = node->attributes.find("max");
+            auto vl = node->attributes.find("value");
+            if (mn == node->attributes.end() && mx == node->attributes.end()) return false;
+            if (vl == node->attributes.end()) return false;
+            double v = 0; try { v = std::stod(vl->second); } catch(...) { return false; }
+            if (mn != node->attributes.end()) { double lo = 0; try { lo = std::stod(mn->second); } catch(...) {} if (v < lo) return false; }
+            if (mx != node->attributes.end()) { double hi = 0; try { hi = std::stod(mx->second); } catch(...) {} if (v > hi) return false; }
+        } else if (ps == "out-of-range") {
+            auto mn = node->attributes.find("min");
+            auto mx = node->attributes.find("max");
+            auto vl = node->attributes.find("value");
+            if (mn == node->attributes.end() && mx == node->attributes.end()) return false;
+            if (vl == node->attributes.end()) return false;
+            double v = 0; try { v = std::stod(vl->second); } catch(...) { return false; }
+            bool in_range = true;
+            if (mn != node->attributes.end()) { double lo = 0; try { lo = std::stod(mn->second); } catch(...) {} if (v < lo) in_range = false; }
+            if (mx != node->attributes.end()) { double hi = 0; try { hi = std::stod(mx->second); } catch(...) {} if (v > hi) in_range = false; }
+            if (in_range) return false;
+        } else if (ps == "valid") {
+            static const std::set<std::string> form_tags = {"input","select","textarea","button","output","fieldset"};
+            if (form_tags.find(node->tag_name) == form_tags.end()) return false;
+            // Invalid if has custom validity error
+            if (node->attributes.find("data-custom-validity") != node->attributes.end()) return false;
+            // Invalid if required but empty value
+            if (node->attributes.find("required") != node->attributes.end()) {
+                auto vl = node->attributes.find("value");
+                if (vl == node->attributes.end() || vl->second.empty()) return false;
+            }
+        } else if (ps == "invalid") {
+            static const std::set<std::string> form_tags = {"input","select","textarea","button","output","fieldset"};
+            if (form_tags.find(node->tag_name) == form_tags.end()) return false;
+            bool is_invalid = false;
+            if (node->attributes.find("data-custom-validity") != node->attributes.end()) is_invalid = true;
+            if (!is_invalid && node->attributes.find("required") != node->attributes.end()) {
+                auto vl = node->attributes.find("value");
+                if (vl == node->attributes.end() || vl->second.empty()) is_invalid = true;
+            }
+            if (!is_invalid) return false;
+        } else if (ps == "checked") {
+            if (node->attributes.find("checked") == node->attributes.end()) return false;
+        } else if (ps == "disabled") {
+            if (node->attributes.find("disabled") == node->attributes.end()) return false;
+        } else if (ps == "enabled") {
+            if (node->attributes.find("disabled") != node->attributes.end()) return false;
         }
         // other pseudo-classes: silently ignore (hover, focus, etc.)
     }
