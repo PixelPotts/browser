@@ -1591,6 +1591,22 @@ if (typeof HTMLUnknownElement === 'undefined') {
     // elements.hidden test: 'hidden' in element
     if (!('hidden' in EP)) EP.hidden = false;
 
+    // width/height properties (for form.image.width/height tests)
+    if (!('width' in EP)) {
+        Object.defineProperty(EP, 'width', {
+            get: function() { var v = this.getAttribute && this.getAttribute('width'); return v ? parseInt(v, 10) : 0; },
+            set: function(v) { if (this.setAttribute) this.setAttribute('width', String(v)); },
+            configurable: true
+        });
+    }
+    if (!('height' in EP)) {
+        Object.defineProperty(EP, 'height', {
+            get: function() { var v = this.getAttribute && this.getAttribute('height'); return v ? parseInt(v, 10) : 0; },
+            set: function(v) { if (this.setAttribute) this.setAttribute('height', String(v)); },
+            configurable: true
+        });
+    }
+
     // elements.dynamic.outerHTML: 'outerHTML' in element
     if (!('outerHTML' in EP)) {
         Object.defineProperty(EP, 'outerHTML', {
