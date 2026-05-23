@@ -632,13 +632,34 @@ bool dom_simple_match(const std::string& raw, DOMNode* node) {
             if (form_tags.find(node->tag_name) == form_tags.end()) return false;
             if (node->attributes.find("required") != node->attributes.end()) return false;
         } else if (ps == "read-only") {
-            if (node->attributes.find("readonly") == node->attributes.end() &&
-                node->attributes.find("disabled") == node->attributes.end()) return false;
+            // contentEditable=false elements are read-only
+            auto ce = node->attributes.find("contenteditable");
+            if (ce != node->attributes.end() && ce->second == "false") {
+                // read-only
+            } else if (ce != node->attributes.end() && (ce->second == "true" || ce->second == "")) {
+                return false; // contentEditable=true is read-write, not read-only
+            } else {
+                // For form elements: readonly or disabled = read-only
+                static const std::set<std::string> form_tags = {"input","select","textarea"};
+                if (form_tags.find(node->tag_name) != form_tags.end()) {
+                    if (node->attributes.find("readonly") == node->attributes.end() &&
+                        node->attributes.find("disabled") == node->attributes.end()) return false;
+                } else {
+                    // Non-form, non-contentEditable elements are read-only by default
+                    // but only if not inheriting contentEditable from parent
+                    // For now, non-form elements without contentEditable are read-only
+                }
+            }
         } else if (ps == "read-write") {
-            static const std::set<std::string> form_tags = {"input","select","textarea"};
-            if (form_tags.find(node->tag_name) == form_tags.end()) return false;
-            if (node->attributes.find("readonly") != node->attributes.end()) return false;
-            if (node->attributes.find("disabled") != node->attributes.end()) return false;
+            auto ce = node->attributes.find("contenteditable");
+            if (ce != node->attributes.end() && (ce->second == "true" || ce->second == "")) {
+                // contentEditable=true is read-write
+            } else {
+                static const std::set<std::string> form_tags = {"input","select","textarea"};
+                if (form_tags.find(node->tag_name) == form_tags.end()) return false;
+                if (node->attributes.find("readonly") != node->attributes.end()) return false;
+                if (node->attributes.find("disabled") != node->attributes.end()) return false;
+            }
         } else if (ps == "in-range") {
             auto mn = node->attributes.find("min");
             auto mx = node->attributes.find("max");

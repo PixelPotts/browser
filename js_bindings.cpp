@@ -65,6 +65,13 @@ struct ClassListOpaque {
     uint32_t node_id;
 };
 
+// Node wrapper cache for identity comparison (node_id -> JSValue)
+static std::unordered_map<uint32_t, JSValue> g_node_cache;
+
+void clear_node_cache() {
+    g_node_cache.clear();
+}
+
 // ---- Helpers ----
 
 static DOMNode* get_node_by_id(uint32_t node_id) {
@@ -123,6 +130,17 @@ static const char* tag_to_constructor(const std::string& tag) {
 
 JSValue js_wrap_node(JSContext* ctx, DOMNode* node) {
     if (!node) return JS_NULL;
+
+    // Check cache for existing wrapper (enables identity comparison: a === b)
+    auto cache_it = g_node_cache.find(node->node_id);
+    if (cache_it != g_node_cache.end()) {
+        // Verify the cached value is still valid (not freed)
+        if (!JS_IsUndefined(cache_it->second)) {
+            return JS_DupValue(ctx, cache_it->second);
+        }
+        g_node_cache.erase(cache_it);
+    }
+
     JSValue obj = JS_NewObjectClass(ctx, js_element_class_id);
     auto* op = new ElementOpaque{node->node_id};
     JS_SetOpaque(obj, op);
@@ -142,6 +160,9 @@ JSValue js_wrap_node(JSContext* ctx, DOMNode* node) {
         JS_FreeValue(ctx, ctor);
         JS_FreeValue(ctx, global);
     }
+
+    // Cache the wrapper (dup so cache holds its own ref)
+    g_node_cache[node->node_id] = JS_DupValue(ctx, obj);
     return obj;
 }
 

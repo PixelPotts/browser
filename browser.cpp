@@ -4427,6 +4427,10 @@ static void load_url(AppState* st, const std::string& url) {
     }
     g_canvas_map.clear();
 
+    // Clear node wrapper cache (defined in js_bindings.cpp)
+    extern void clear_node_cache();
+    clear_node_cache();
+
     // clean up previous body styles from content_box
     if (tab->body_draw_signal) {
         g_signal_handler_disconnect(tab->content_box, tab->body_draw_signal);

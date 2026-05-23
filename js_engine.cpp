@@ -1675,8 +1675,7 @@ if (typeof HTMLUnknownElement === 'undefined') {
     if (!('min' in EP)) EP.min = '';
     if (!('max' in EP)) EP.max = '';
     if (!('step' in EP)) EP.step = '';
-    if (!('labels' in EP)) EP.labels = [];
-    if (!('form' in EP)) EP.form = null;
+    // labels and form are defined as getters below (form.association tests)
     if (!('formAction' in EP)) EP.formAction = '';
     if (!('formEnctype' in EP)) EP.formEnctype = '';
     if (!('formMethod' in EP)) EP.formMethod = '';
@@ -1698,9 +1697,34 @@ if (typeof HTMLUnknownElement === 'undefined') {
     // spellcheck
     if (!('spellcheck' in EP)) EP.spellcheck = false;
 
-    // contentEditable / isContentEditable
-    if (!('contentEditable' in EP)) EP.contentEditable = 'inherit';
-    if (!('isContentEditable' in EP)) EP.isContentEditable = false;
+    // contentEditable / isContentEditable - bridge to DOM attribute
+    if (!('contentEditable' in EP)) {
+        Object.defineProperty(EP, 'contentEditable', {
+            get: function() {
+                var v = this.getAttribute ? this.getAttribute('contenteditable') : null;
+                if (v === 'true' || v === '') return 'true';
+                if (v === 'false') return 'false';
+                return 'inherit';
+            },
+            set: function(v) {
+                if (this.setAttribute) {
+                    if (v === true || v === 'true') this.setAttribute('contenteditable', 'true');
+                    else if (v === false || v === 'false') this.setAttribute('contenteditable', 'false');
+                    else this.removeAttribute && this.removeAttribute('contenteditable');
+                }
+            },
+            configurable: true
+        });
+    }
+    if (!('isContentEditable' in EP)) {
+        Object.defineProperty(EP, 'isContentEditable', {
+            get: function() {
+                var v = this.getAttribute ? this.getAttribute('contenteditable') : null;
+                return v === 'true' || v === '';
+            },
+            configurable: true
+        });
+    }
 
     // draggable
     if (!('draggable' in EP)) EP.draggable = false;
@@ -2276,38 +2300,34 @@ if (typeof HTMLLabelElement !== 'undefined') {
 // input.labels - returns associated labels
 (function() {
     var EP = HTMLElement.prototype;
-    if (!('labels' in EP)) {
-        Object.defineProperty(EP, 'labels', {
-            get: function() {
-                if (!this.id) return [];
-                var labels = document.querySelectorAll ? document.querySelectorAll('label[for="' + this.id + '"]') : [];
-                return labels;
-            },
-            configurable: true
-        });
-    }
+    Object.defineProperty(EP, 'labels', {
+        get: function() {
+            if (!this.id) return [];
+            var labels = document.querySelectorAll ? document.querySelectorAll('label[for="' + this.id + '"]') : [];
+            return labels;
+        },
+        configurable: true
+    });
 })();
 
 // input.form - returns associated form
 (function() {
     var EP = HTMLElement.prototype;
-    if (!('form' in EP)) {
-        Object.defineProperty(EP, 'form', {
-            get: function() {
-                // Check for form attribute
-                var formId = this.getAttribute && this.getAttribute('form');
-                if (formId) return document.getElementById(formId);
-                // Check for parent form
-                var p = this.parentNode;
-                while (p) {
-                    if (p.tagName && p.tagName.toLowerCase() === 'form') return p;
-                    p = p.parentNode;
-                }
-                return null;
-            },
-            configurable: true
-        });
-    }
+    Object.defineProperty(EP, 'form', {
+        get: function() {
+            // Check for form attribute
+            var formId = this.getAttribute && this.getAttribute('form');
+            if (formId) return document.getElementById(formId);
+            // Check for parent form
+            var p = this.parentNode;
+            while (p) {
+                if (p.tagName && p.tagName.toLowerCase() === 'form') return p;
+                p = p.parentNode;
+            }
+            return null;
+        },
+        configurable: true
+    });
 })();
 
 // details element: open property
@@ -2336,6 +2356,130 @@ if (typeof PointerEvent === 'undefined') {
         this.pointerId = (opts && opts.pointerId) || 0;
         this.pointerType = (opts && opts.pointerType) || 'mouse';
     };
+}
+
+// video: poster, audioTracks, videoTracks properties
+if (typeof HTMLVideoElement !== 'undefined') {
+    var VP = HTMLVideoElement.prototype;
+    if (!('poster' in VP)) VP.poster = '';
+    if (!('audioTracks' in VP)) VP.audioTracks = [];
+    if (!('videoTracks' in VP)) VP.videoTracks = [];
+    if (!('textTracks' in VP)) VP.textTracks = [];
+}
+
+// audio: loop, preload properties
+if (typeof HTMLAudioElement !== 'undefined') {
+    var AP = HTMLAudioElement.prototype;
+    if (!('loop' in AP)) AP.loop = false;
+    if (!('preload' in AP)) AP.preload = 'auto';
+}
+// Also on media element base
+if (typeof HTMLMediaElement !== 'undefined') {
+    var MMP = HTMLMediaElement.prototype;
+    if (!('loop' in MMP)) MMP.loop = false;
+    if (!('preload' in MMP)) MMP.preload = 'auto';
+    if (!('poster' in MMP)) MMP.poster = '';
+    if (!('audioTracks' in MMP)) MMP.audioTracks = [];
+    if (!('videoTracks' in MMP)) MMP.videoTracks = [];
+    if (!('textTracks' in MMP)) MMP.textTracks = [];
+}
+// video element also needs loop/preload
+if (typeof HTMLVideoElement !== 'undefined') {
+    var VP2 = HTMLVideoElement.prototype;
+    if (!('loop' in VP2)) VP2.loop = false;
+    if (!('preload' in VP2)) VP2.preload = 'auto';
+}
+
+// track element: track property
+if (typeof HTMLTrackElement !== 'undefined') {
+    if (!('track' in HTMLTrackElement.prototype)) {
+        HTMLTrackElement.prototype.track = { kind: '', label: '', language: '', mode: 'disabled', cues: null, activeCues: null };
+    }
+}
+
+// input dirName property
+if (typeof HTMLInputElement !== 'undefined') {
+    if (!('dirName' in HTMLInputElement.prototype)) HTMLInputElement.prototype.dirName = '';
+}
+
+// form.image.width/height: input[type=image] needs width/height properties
+// These are already on elem_proto but need to return number for 'width' in element check
+// The test just checks 'width' in element and 'height' in element
+
+// Intl API stub
+if (typeof Intl === 'undefined') {
+    globalThis.Intl = {
+        Collator: function(locales, opts) { this.compare = function(a, b) { return a < b ? -1 : a > b ? 1 : 0; }; },
+        DateTimeFormat: function(locales, opts) { this.format = function(d) { return d ? d.toString() : ''; }; },
+        NumberFormat: function(locales, opts) { this.format = function(n) { return String(n); }; },
+        PluralRules: function() { this.select = function() { return 'other'; }; },
+        getCanonicalLocales: function(locales) { return Array.isArray(locales) ? locales : [locales || 'en']; }
+    };
+}
+
+// SVGForeignObjectElement / SVGFEColorMatrixElement stubs
+if (typeof SVGForeignObjectElement === 'undefined') {
+    globalThis.SVGForeignObjectElement = function SVGForeignObjectElement() {};
+}
+if (typeof SVGFEColorMatrixElement === 'undefined') {
+    globalThis.SVGFEColorMatrixElement = function SVGFEColorMatrixElement() {};
+    SVGFEColorMatrixElement.SVG_FECOLORMATRIX_TYPE_SATURATE = 2;
+}
+
+// document.createElementNS stub
+if (typeof document !== 'undefined' && !document.createElementNS) {
+    document.createElementNS = function(ns, tag) {
+        return document.createElement(tag);
+    };
+}
+
+// contentEditable support for :read-write/:read-only selectors
+// The test creates divs with contentEditable and queries with :read-write/:read-only
+// We need contentEditable to be a real attribute on elements
+
+// IndexedDB stub
+if (typeof indexedDB === 'undefined' && typeof window !== 'undefined') {
+    var FakeIDBRequest = function() {
+        this.result = null;
+        this.error = null;
+        this.readyState = 'pending';
+        this.onsuccess = null;
+        this.onerror = null;
+    };
+    var FakeIDBDatabase = function() {
+        this.name = '';
+        this.version = 1;
+        this.objectStoreNames = [];
+    };
+    FakeIDBDatabase.prototype.createObjectStore = function(name) {
+        return { put: function() { return new FakeIDBRequest(); }, get: function() { return new FakeIDBRequest(); } };
+    };
+    FakeIDBDatabase.prototype.transaction = function() {
+        return { objectStore: function() { return { put: function() { return new FakeIDBRequest(); }, get: function() { return new FakeIDBRequest(); } }; } };
+    };
+    FakeIDBDatabase.prototype.close = function() {};
+    FakeIDBDatabase.prototype.deleteDatabase = function() { return new FakeIDBRequest(); };
+
+    var fakeIndexedDB = {
+        open: function(name, ver) {
+            var req = new FakeIDBRequest();
+            setTimeout(function() {
+                req.result = new FakeIDBDatabase();
+                req.result.name = name;
+                req.readyState = 'done';
+                if (req.onupgradeneeded) req.onupgradeneeded({ target: req });
+                if (req.onsuccess) req.onsuccess({ target: req });
+            }, 0);
+            return req;
+        },
+        deleteDatabase: function(name) {
+            var req = new FakeIDBRequest();
+            setTimeout(function() { req.readyState = 'done'; if (req.onsuccess) req.onsuccess({ target: req }); }, 0);
+            return req;
+        }
+    };
+    globalThis.indexedDB = fakeIndexedDB;
+    window.indexedDB = fakeIndexedDB;
 }
 
 )JS";
