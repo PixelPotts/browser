@@ -529,9 +529,18 @@ static JSValue js_element_removeAttribute(JSContext* ctx, JSValueConst this_val,
 static JSValue js_element_appendChild(JSContext* ctx, JSValueConst this_val,
                                        int argc, JSValueConst* argv) {
     DOMNode* parent = js_get_node(ctx, this_val);
-    if (!parent || argc < 1 || !g_js_engine || !g_js_engine->document) return JS_UNDEFINED;
+    if (!parent || argc < 1 || !g_js_engine || !g_js_engine->document) {
+        fprintf(stderr, "[appendChild] early return: parent=%p argc=%d\n", (void*)parent, argc);
+        return JS_UNDEFINED;
+    }
     DOMNode* child = js_get_node(ctx, argv[0]);
-    if (!child) return JS_UNDEFINED;
+    if (!child) {
+        fprintf(stderr, "[appendChild] child is null\n");
+        return JS_UNDEFINED;
+    }
+
+    fprintf(stderr, "[appendChild] parent=<%s> child=<%s> child_tag='%s'\n",
+            parent->tag_name.c_str(), child->tag_name.c_str(), child->tag_name.c_str());
 
     // Find the shared_ptr for this child
     auto& doc = g_js_engine->document;
@@ -550,12 +559,18 @@ static JSValue js_element_appendChild(JSContext* ctx, JSValueConst this_val,
         }
     }
 
+    fprintf(stderr, "[appendChild] child_ptr found: %s\n", child_ptr ? "yes" : "NO");
+
     if (child_ptr) {
         doc->appendChild(parent, child_ptr);
 
         // Dynamic script loading: if appending a <script> with src, fetch & execute it
+        fprintf(stderr, "[appendChild] checking script: tag='%s' attrs:", child->tag_name.c_str());
+        for (auto& kv : child->attributes) fprintf(stderr, " %s='%s'", kv.first.c_str(), kv.second.c_str());
+        fprintf(stderr, "\n");
         if (child->tag_name == "script") {
             auto it = child->attributes.find("src");
+            fprintf(stderr, "[appendChild] script src found: %s\n", it != child->attributes.end() ? it->second.c_str() : "NO");
             if (it != child->attributes.end() && !it->second.empty()) {
                 std::string src_url = it->second;
                 // Resolve relative URLs

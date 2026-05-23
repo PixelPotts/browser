@@ -4210,6 +4210,13 @@ static void fetch_page(AppState* st, TabState* tab, std::string url, int gen) {
     std::string raw_source = buf.data;  // save raw source for inspector
     auto doc = parse_html_to_dom(buf.data, fetch_url);
 
+    fprintf(stderr, "[JS-TRACE] Parsed: %zu script_srcs, %zu inline scripts\n",
+            doc->script_srcs.size(), doc->scripts.size());
+    for (size_t si = 0; si < doc->script_srcs.size(); si++)
+        fprintf(stderr, "[JS-TRACE]   src[%zu] = %s\n", si, doc->script_srcs[si].c_str());
+    for (size_t si = 0; si < doc->scripts.size(); si++)
+        fprintf(stderr, "[JS-TRACE]   inline[%zu] = %.80s...\n", si, doc->scripts[si].c_str());
+
     // Fetch external scripts synchronously (blocking, matches <script src> behavior)
     std::vector<std::string> external_scripts;
     for (const auto& src_url : doc->script_srcs) {
@@ -4258,6 +4265,38 @@ static void fetch_page(AppState* st, TabState* tab, std::string url, int gen) {
         engine->page_url = tab->current_url;
         engine->init(st, tab, doc.get());
 
+        // Debug: trace Test completion
+        engine->eval(R"JS(
+            // Patch Test to trace completion
+            var _origTest = typeof Test !== 'undefined' ? Test : null;
+            if (_origTest) {
+                var _origFinished = _origTest.prototype ? _origTest.prototype.finished : null;
+                if (_origFinished) {
+                    _origTest.prototype.finished = function() {
+                        console.log('[DBG-TEST] Test finished! Calling callback...');
+                        _origFinished.call(this);
+                    };
+                }
+                var _origWait = _origTest.prototype ? _origTest.prototype.waitForBackground : null;
+                if (_origWait) {
+                    _origTest.prototype.checkForBackground = function() {
+                        var running = 0;
+                        for (var task = 0; task < this.backgroundTasks.length; task++) {
+                            if (this.backgroundTasks[task]) {
+                                running++;
+                            }
+                        }
+                        console.log('[DBG-TEST] checkForBackground: running=' + running);
+                        if (running) {
+                            this.waitForBackground();
+                        } else {
+                            this.finished();
+                        }
+                    };
+                }
+            }
+        )JS", "<debug>");
+
         // Wire up inspector console callback if inspector is open
         if (tab->inspector_visible) {
             engine->on_console_entry = [st, tab]() {
@@ -4279,7 +4318,9 @@ static void fetch_page(AppState* st, TabState* tab, std::string url, int gen) {
             engine->has_current_script = true;
             engine->current_script_src = fname;
             engine->current_script_node = script_el.get();
-            engine->eval(external_scripts[i], fname);
+            fprintf(stderr, "[JS-TRACE] Eval external: %s (%zu bytes)\n", fname.c_str(), external_scripts[i].size());
+            bool ok = engine->eval(external_scripts[i], fname);
+            fprintf(stderr, "[JS-TRACE]   => %s\n", ok ? "OK" : "FAILED");
             engine->has_current_script = false;
             engine->current_script_src.clear();
             engine->current_script_node = nullptr;
@@ -4287,12 +4328,14 @@ static void fetch_page(AppState* st, TabState* tab, std::string url, int gen) {
 
         // Execute inline scripts
         for (size_t i = 0; i < doc->scripts.size(); i++) {
+            fprintf(stderr, "[JS-TRACE] Eval inline[%zu] (%zu bytes)\n", i, doc->scripts[i].size());
             auto script_el = doc->createElement("script");
             if (script_parent) doc->appendChild(script_parent, script_el);
             engine->has_current_script = true;
             engine->current_script_src.clear();
             engine->current_script_node = script_el.get();
-            engine->eval(doc->scripts[i], "<script>");
+            bool ok = engine->eval(doc->scripts[i], "<script>");
+            fprintf(stderr, "[JS-TRACE]   => %s\n", ok ? "OK" : "FAILED");
             engine->has_current_script = false;
             engine->current_script_node = nullptr;
         }
