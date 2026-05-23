@@ -524,6 +524,7 @@ static std::vector<CSSRule> parse_css(const std::string& css) {
                     || !prop_val(decls,"z-index").empty()
                     || !prop_val(decls,"background-repeat").empty()
                     || !prop_val(decls,"background-size").empty()
+                    || !prop_val(decls,"background-position").empty()
                     || !prop_val(decls,"font-style").empty()
                     || !prop_val(decls,"text-decoration").empty()
                     || !prop_val(decls,"text-decoration-line").empty()
@@ -698,7 +699,7 @@ static void apply_box(const std::string& decls, BoxModel& bm) {
     { auto s=tolower_s(prop_val(decls,"background-size"));
       if (!s.empty()) bm.bg_size=s; }
     { auto s=prop_val(decls,"background-position");
-      if (!s.empty()) bm.bg_position=s; }
+      if (!s.empty()) { bm.bg_position=s; fprintf(stderr,"[DEBUG apply_box] bg_position='%s'\n", s.c_str()); } }
 }
 
 // ---- Element stack ----
@@ -1598,7 +1599,10 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
             elem->bg_color = bm.bg_color;
             if (!bm.bg_repeat.empty()) elem->style_props["background-repeat"] = bm.bg_repeat;
             if (!bm.bg_size.empty()) elem->style_props["background-size"] = bm.bg_size;
-            if (!bm.bg_position.empty()) elem->style_props["background-position"] = bm.bg_position;
+            if (!bm.bg_position.empty()) {
+                elem->style_props["background-position"] = bm.bg_position;
+                fprintf(stderr,"[DEBUG cascade] <%s> bg_position='%s'\n", tname.c_str(), bm.bg_position.c_str());
+            }
             if (!bm.box_shadow.empty()) elem->box_shadow = bm.box_shadow;
             if (bm.opacity < 1.0) elem->opacity = bm.opacity;
             if (bm.overflow >= 0) elem->overflow = bm.overflow;
@@ -3211,7 +3215,9 @@ static BoxModel dom_node_to_boxmodel(DOMNode* node) {
     { auto it = node->style_props.find("background-size");
       if (it != node->style_props.end()) bm.bg_size = it->second; }
     { auto it = node->style_props.find("background-position");
-      if (it != node->style_props.end()) bm.bg_position = it->second; }
+      if (it != node->style_props.end()) { bm.bg_position = it->second;
+        fprintf(stderr,"[DEBUG dom2bm] <%s id='%s'> bg_position='%s'\n", node->tag_name.c_str(), node->id.c_str(), bm.bg_position.c_str());
+      } }
 
     // Overlay JS-set style_props on top of parsed values
     if (!node->style_props.empty()) {
@@ -3933,6 +3939,8 @@ static void render_node(AppState* st, TabState* tab, DOMNode* node, int gen,
                 }
             }
         }
+        fprintf(stderr,"[DEBUG render_block] <%s id='%s'> bg_image='%s' bg_position='%s' bg_repeat='%s'\n",
+            node->tag_name.c_str(), node->id.c_str(), bm.bg_image.c_str(), bm.bg_position.c_str(), bm.bg_repeat.c_str());
         if (!bm.bg_image.empty()) {
             gtk_widget_set_app_paintable(new_blk, TRUE);
             g_signal_connect(new_blk, "draw", G_CALLBACK(draw_bg), nullptr);
