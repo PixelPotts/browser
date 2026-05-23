@@ -425,6 +425,36 @@ static JSValue js_element_get_classList(JSContext* ctx, JSValueConst this_val) {
     return js_wrap_classlist(ctx, node);
 }
 
+static JSValue js_attr_getNamedItem(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_NULL;
+    const char* name = JS_ToCString(ctx, argv[0]);
+    if (!name) return JS_NULL;
+    JSValue r = JS_GetPropertyStr(ctx, this_val, name);
+    JS_FreeCString(ctx, name);
+    return JS_IsUndefined(r) ? JS_NULL : r;
+}
+
+static JSValue js_element_get_attributes(JSContext* ctx, JSValueConst this_val) {
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node) return JS_UNDEFINED;
+    JSValue arr = JS_NewArray(ctx);
+    int idx = 0;
+    for (const auto& [k, v] : node->attributes) {
+        JSValue attr = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, attr, "name", JS_NewString(ctx, k.c_str()));
+        JS_SetPropertyStr(ctx, attr, "nodeName", JS_NewString(ctx, k.c_str()));
+        JS_SetPropertyStr(ctx, attr, "value", JS_NewString(ctx, v.c_str()));
+        JS_SetPropertyStr(ctx, attr, "nodeValue", JS_NewString(ctx, v.c_str()));
+        JS_SetPropertyStr(ctx, attr, "specified", JS_TRUE);
+        JS_SetPropertyUint32(ctx, arr, idx++, JS_DupValue(ctx, attr));
+        JS_SetPropertyStr(ctx, arr, k.c_str(), attr);
+    }
+    JS_SetPropertyStr(ctx, arr, "length", JS_NewInt32(ctx, idx));
+    JS_SetPropertyStr(ctx, arr, "getNamedItem",
+        JS_NewCFunction(ctx, js_attr_getNamedItem, "getNamedItem", 1));
+    return arr;
+}
+
 // ---- Form element properties ----
 
 static JSValue js_element_get_value(JSContext* ctx, JSValueConst this_val) {
@@ -2210,6 +2240,10 @@ void js_bindings_init(JSEngine* engine) {
         JS_NewAtom(ctx, "classList"),
         JS_NewCFunction(ctx, (JSCFunction*)js_element_get_classList, "get classList", 0),
         JS_NewCFunction(ctx, js_noop_setter, "set classList", 1), JS_PROP_CONFIGURABLE);
+    JS_DefinePropertyGetSet(ctx, elem_proto,
+        JS_NewAtom(ctx, "attributes"),
+        JS_NewCFunction(ctx, (JSCFunction*)js_element_get_attributes, "get attributes", 0),
+        JS_NewCFunction(ctx, js_noop_setter, "set attributes", 1), JS_PROP_CONFIGURABLE);
 
     // Form properties
     JS_DefinePropertyGetSet(ctx, elem_proto,

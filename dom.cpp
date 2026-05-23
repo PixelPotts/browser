@@ -175,7 +175,8 @@ static std::string decode_html_entities(const std::string& s) {
         {"pi", 0x3C0}, {"sigma", 0x3C3}, {"omega", 0x3C9},
         {"larr", 0x2190}, {"uarr", 0x2191}, {"rarr", 0x2192}, {"darr", 0x2193},
         {"hearts", 0x2665}, {"diams", 0x2666}, {"clubs", 0x2663}, {"spades", 0x2660},
-        {"ImaginaryI", 0x2148}, {"notinva", 0x2209},
+        {"ImaginaryI", 0x2148}, {"notinva", 0x2209}, {"Kopf", 0x1D542},
+        {"lang", 0x27E8}, {"rang", 0x27E9}, {"lang", 0x27E8}, {"rang", 0x27E9},
         {"notin", 0x2209}, {"isin", 0x2208}, {"exist", 0x2203}, {"forall", 0x2200},
         {"empty", 0x2205}, {"nabla", 0x2207}, {"prod", 0x220F}, {"sum", 0x2211},
         {"infin", 0x221E}, {"radic", 0x221A}, {"prop", 0x221D},
@@ -265,6 +266,13 @@ void DOMNode::setInnerHTML(const std::string& html, uint32_t& next_id,
                 cn->parent = cur;
                 node_map[cn->node_id] = cn.get();
                 cur->children.push_back(cn);
+                continue;
+            }
+
+            // DOCTYPE: <!DOCTYPE ...> → skip entirely
+            if (i + 7 < len && str_lower(html.substr(i, 8)) == "!doctype") {
+                while (i < len && html[i] != '>') i++;
+                if (i < len) i++;
                 continue;
             }
 
@@ -442,7 +450,19 @@ void DOMNode::setInnerHTML(const std::string& html, uint32_t& next_id,
             // Text content - decode HTML entities
             size_t ts = i;
             while (i < len && html[i] != '<') i++;
-            std::string text = decode_html_entities(html.substr(ts, i - ts));
+            std::string raw_text = html.substr(ts, i - ts);
+            // CR normalization: \r\n → \n, lone \r → \n
+            std::string norm_text;
+            norm_text.reserve(raw_text.size());
+            for (size_t k = 0; k < raw_text.size(); k++) {
+                if (raw_text[k] == '\r') {
+                    norm_text += '\n';
+                    if (k + 1 < raw_text.size() && raw_text[k+1] == '\n') k++;
+                } else {
+                    norm_text += raw_text[k];
+                }
+            }
+            std::string text = decode_html_entities(norm_text);
             if (!text.empty()) {
                 auto tn = std::make_shared<DOMNode>();
                 tn->node_id = next_id++;
