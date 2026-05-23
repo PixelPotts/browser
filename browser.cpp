@@ -4303,6 +4303,20 @@ static void fetch_page(AppState* st, TabState* tab, std::string url, int gen) {
                 console.warn('[DEBUG] Patching: ' + (_patchTarget.name || 'unknown'));
                 console.warn('[DEBUG] Proto keys: ' + Object.getOwnPropertyNames(_patchTarget.prototype).slice(0,20).join(', '));
 
+                // Wrap initialize to trace errors
+                var _origInit = _patchTarget.prototype.initialize;
+                if (_origInit) {
+                    _patchTarget.prototype.initialize = function(cb, err) {
+                        console.warn('[DEBUG] initialize called');
+                        try {
+                            return _origInit.call(this, cb, err);
+                        } catch(e) {
+                            console.warn('[DEBUG] initialize ERROR: ' + e + ' stack=' + (e.stack || 'none'));
+                            throw e;
+                        }
+                    };
+                }
+
                 var _origFinished = _patchTarget.prototype.finished;
                 if (_origFinished) {
                     _patchTarget.prototype.finished = function() {
@@ -4318,17 +4332,16 @@ static void fetch_page(AppState* st, TabState* tab, std::string url, int gen) {
                 var _checkCount = 0;
                 _patchTarget.prototype.checkForBackground = function() {
                     _checkCount++;
-                    if (_checkCount % 50 === 1) {
-                        var bg = this.background || [];
-                        if (bg.length > 0) {
-                            var keys = [];
-                            for (var i = 0; i < bg.length; i++) {
-                                keys.push(bg[i].key || bg[i].name || 'item-' + i);
-                            }
-                            console.warn('[BG-STUCK] count=' + bg.length + ' keys=' + keys.join(', '));
-                        } else {
-                            console.warn('[BG-CHECK] no background tasks, but still polling? bgCount=' + this.backgroundCount);
-                        }
+                    var bt = this.backgroundTasks || [];
+                    var running = 0;
+                    for (var t = 0; t < bt.length; t++) running += bt[t];
+                    if (_checkCount <= 3 || _checkCount % 50 === 0) {
+                        console.warn('[BG-CHECK] count=' + _checkCount + ' tasks=' + bt.length + ' running=' + running);
+                    }
+                    // Auto-stop stuck background tasks after ~5 seconds (17 checks * 300ms)
+                    if (_checkCount > 17 && running > 0) {
+                        console.warn('[BG-TIMEOUT] Force-stopping ' + running + ' stuck background tasks');
+                        for (var t = 0; t < bt.length; t++) bt[t] = 0;
                     }
                     return _origCheck.call(this);
                 };

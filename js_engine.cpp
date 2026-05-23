@@ -909,18 +909,24 @@ Element.prototype.focus = function() {};
 Element.prototype.blur = function() {};
 Element.prototype.click = function() {};
 Element.prototype.remove = function() { if (this.parentNode) this.parentNode.removeChild(this); };
-globalThis.HTMLElement = function HTMLElement() {};
-HTMLElement.prototype = Object.create(Element.prototype);
-HTMLElement.prototype.constructor = HTMLElement;
-HTMLElement.prototype.style = {};
-HTMLElement.prototype.offsetWidth = 0;
-HTMLElement.prototype.offsetHeight = 0;
-HTMLElement.prototype.offsetTop = 0;
-HTMLElement.prototype.offsetLeft = 0;
-HTMLElement.prototype.scrollWidth = 0;
-HTMLElement.prototype.scrollHeight = 0;
-HTMLElement.prototype.clientWidth = 0;
-HTMLElement.prototype.clientHeight = 0;
+if (typeof HTMLElement === 'undefined') {
+    globalThis.HTMLElement = function HTMLElement() {};
+    HTMLElement.prototype = Object.create(Element.prototype);
+    HTMLElement.prototype.constructor = HTMLElement;
+    HTMLElement.prototype.style = {};
+    HTMLElement.prototype.offsetWidth = 0;
+    HTMLElement.prototype.offsetHeight = 0;
+    HTMLElement.prototype.offsetTop = 0;
+    HTMLElement.prototype.offsetLeft = 0;
+    HTMLElement.prototype.scrollWidth = 0;
+    HTMLElement.prototype.scrollHeight = 0;
+    HTMLElement.prototype.clientWidth = 0;
+    HTMLElement.prototype.clientHeight = 0;
+} else {
+    // C++ set HTMLElement.prototype = elem_proto with all DOM getters/setters.
+    // Chain it into the Element hierarchy without replacing the prototype object.
+    Object.setPrototypeOf(HTMLElement.prototype, Element.prototype);
+}
 
 // Web Components API stubs (prevents webcomponents-loader from crashing)
 Element.prototype.attachShadow = function(opts) {
@@ -1308,8 +1314,10 @@ void JSEngine::setupDocPolyfills() {
 // WhichBrowser stub - html5test.co waits for this before running tests.
 // Define it via setTimeout so loadWhichBrowser's load() runs first, then wait() polls and finds it.
 setTimeout(function() {
+    console.warn('[WB-STUB] Timer fired, typeof WhichBrowser=' + typeof WhichBrowser);
     if (typeof WhichBrowser === 'undefined') {
         globalThis.WhichBrowser = function WhichBrowser(opts) {
+            console.warn('[WB-STUB] WhichBrowser constructor called');
             this.browser = { name: 'Custom', version: '1.0' };
             this.engine = { name: 'Custom', version: '1.0' };
             this.os = { name: 'Linux', version: '' };
@@ -1320,6 +1328,7 @@ setTimeout(function() {
             this.isOs = function() { return false; };
             this.isEngine = function() { return false; };
         };
+        console.warn('[WB-STUB] WhichBrowser defined globally');
     }
 }, 50);
 
@@ -1530,6 +1539,10 @@ if (typeof HTMLTemplateElement === 'undefined') {
 if (typeof HTMLElement === 'undefined') {
     globalThis.HTMLElement = function HTMLElement() {};
     HTMLElement.prototype = Object.create(Element ? Element.prototype : {});
+} else if (typeof Element !== 'undefined') {
+    // js_bindings_init set HTMLElement.prototype = elem_proto (has C++ DOM getters).
+    // Chain it into the Element hierarchy without replacing the prototype object.
+    Object.setPrototypeOf(HTMLElement.prototype, Element.prototype);
 }
 if (typeof HTMLUnknownElement === 'undefined') {
     globalThis.HTMLUnknownElement = function HTMLUnknownElement() {};
@@ -1537,6 +1550,9 @@ if (typeof HTMLUnknownElement === 'undefined') {
 }
 
 // Specific element type constructors
+// Always (re)set prototype to chain through correct HTMLElement.prototype,
+// since constructors created in browser-polyfills used a stale HTMLElement.prototype
+// that was replaced by js_bindings_init.
 (function() {
     var types = [
         'HTMLDivElement', 'HTMLSpanElement', 'HTMLParagraphElement',
@@ -1562,9 +1578,10 @@ if (typeof HTMLUnknownElement === 'undefined') {
     for (var i = 0; i < types.length; i++) {
         if (typeof globalThis[types[i]] === 'undefined') {
             globalThis[types[i]] = function() {};
-            globalThis[types[i]].prototype = Object.create(HTMLElement.prototype);
-            globalThis[types[i]].prototype.constructor = globalThis[types[i]];
         }
+        // Always reset prototype chain through correct HTMLElement.prototype (elem_proto)
+        globalThis[types[i]].prototype = Object.create(HTMLElement.prototype);
+        globalThis[types[i]].prototype.constructor = globalThis[types[i]];
     }
 })();
 
