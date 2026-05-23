@@ -1236,20 +1236,38 @@ globalThis.DOMParser = function DOMParser() {
     this.parseFromString = function(str, type) { return { documentElement: null }; };
 };
 
-// XMLHttpRequest stub
+// XMLHttpRequest - basic stub with property support
 globalThis.XMLHttpRequest = function XMLHttpRequest() {
     this.readyState = 0; this.status = 0; this.statusText = '';
     this.responseText = ''; this.responseXML = null; this.response = '';
+    this._responseType = ''; this._url = ''; this._method = 'GET';
     this.onreadystatechange = null; this.onload = null; this.onerror = null;
-    this.open = function() { this.readyState = 1; };
-    this.send = function() {};
-    this.setRequestHeader = function() {};
-    this.getResponseHeader = function() { return null; };
-    this.getAllResponseHeaders = function() { return ''; };
-    this.abort = function() {};
-    this.addEventListener = function() {};
-    this.removeEventListener = function() {};
+    this.upload = { addEventListener: function(){}, removeEventListener: function(){} };
+    this.withCredentials = false;
+    this.timeout = 0;
 };
+XMLHttpRequest.prototype.open = function(method, url) {
+    this._method = method || 'GET';
+    this._url = url || '';
+    this.readyState = 1;
+};
+XMLHttpRequest.prototype.send = function() {};
+XMLHttpRequest.prototype.setRequestHeader = function() {};
+XMLHttpRequest.prototype.getResponseHeader = function() { return null; };
+XMLHttpRequest.prototype.getAllResponseHeaders = function() { return ''; };
+XMLHttpRequest.prototype.abort = function() {};
+XMLHttpRequest.prototype.addEventListener = function(type, fn) {
+    if (type === 'load') this.onload = fn;
+    else if (type === 'error') this.onerror = fn;
+    else if (type === 'readystatechange') this.onreadystatechange = fn;
+};
+XMLHttpRequest.prototype.removeEventListener = function() {};
+XMLHttpRequest.prototype.overrideMimeType = function() {};
+Object.defineProperty(XMLHttpRequest.prototype, 'responseType', {
+    get: function() { return this._responseType || ''; },
+    set: function(v) { this._responseType = v; },
+    configurable: true
+});
 
 // HTMLDocument and remaining constructors (Node/Element/HTMLElement defined earlier)
 globalThis.HTMLDocument = function HTMLDocument() {};
@@ -1286,7 +1304,8 @@ Window.prototype = {};
  'HTMLVideoElement','HTMLAudioElement','HTMLMediaElement','HTMLLabelElement',
  'HTMLUListElement','HTMLOListElement','HTMLLIElement','HTMLParagraphElement',
  'HTMLHeadingElement','HTMLBRElement','HTMLHRElement','HTMLPreElement',
- 'HTMLBodyElement','HTMLHeadElement','HTMLMetaElement','HTMLTitleElement'
+ 'HTMLBodyElement','HTMLHeadElement','HTMLMetaElement','HTMLTitleElement',
+ 'HTMLKeygenElement'
 ].forEach(function(n) {
     globalThis[n] = function() {};
     globalThis[n].prototype = Object.create(HTMLElement.prototype);
@@ -1572,7 +1591,8 @@ if (typeof HTMLUnknownElement === 'undefined') {
         'HTMLMenuElement', 'HTMLDataElement', 'HTMLTimeElement',
         'HTMLPictureElement', 'HTMLSlotElement',
         'HTMLModElement', 'HTMLMapElement', 'HTMLAreaElement',
-        'HTMLBodyElement', 'HTMLHeadElement', 'HTMLMetaElement', 'HTMLTitleElement'
+        'HTMLBodyElement', 'HTMLHeadElement', 'HTMLMetaElement', 'HTMLTitleElement',
+        'HTMLKeygenElement'
     ];
     for (var i = 0; i < types.length; i++) {
         if (typeof globalThis[types[i]] === 'undefined') {
@@ -1667,6 +1687,31 @@ if (typeof HTMLUnknownElement === 'undefined') {
 
     // other.scrollIntoView
     if (!('scrollIntoView' in EP)) EP.scrollIntoView = function() {};
+
+    // namespaceURI - returns correct namespace based on tag
+    if (!('namespaceURI' in EP)) {
+        Object.defineProperty(EP, 'namespaceURI', {
+            get: function() {
+                var tag = this.tagName ? this.tagName.toLowerCase() : '';
+                if (tag === 'svg' || tag === 'path' || tag === 'circle' || tag === 'rect' ||
+                    tag === 'line' || tag === 'polyline' || tag === 'polygon' || tag === 'ellipse' ||
+                    tag === 'g' || tag === 'use' || tag === 'defs' || tag === 'text' ||
+                    tag === 'tspan' || tag === 'image' || tag === 'foreignobject' ||
+                    tag === 'fecolormatrix' || tag === 'filter' || tag === 'lineargradient' ||
+                    tag === 'radialgradient' || tag === 'stop' || tag === 'clippath' ||
+                    tag === 'mask' || tag === 'pattern' || tag === 'marker' || tag === 'symbol' ||
+                    tag === 'animate' || tag === 'animatetransform' || tag === 'set')
+                    return 'http://www.w3.org/2000/svg';
+                if (tag === 'math' || tag === 'mrow' || tag === 'msup' || tag === 'msub' ||
+                    tag === 'mfrac' || tag === 'msqrt' || tag === 'mspace' || tag === 'mi' ||
+                    tag === 'mn' || tag === 'mo' || tag === 'mtext' || tag === 'mover' ||
+                    tag === 'munder' || tag === 'mtable' || tag === 'mtr' || tag === 'mtd')
+                    return 'http://www.w3.org/1998/Math/MathML';
+                return 'http://www.w3.org/1999/xhtml';
+            },
+            configurable: true
+        });
+    }
 
     // scripting.async / scripting.defer on script elements - add to base prototype
     if (!('async' in EP)) EP.async = false;
@@ -2434,6 +2479,13 @@ if (typeof Intl === 'undefined') {
     };
 }
 
+// HTMLKeygenElement - add challenge/keytype after prototype reset
+if (typeof HTMLKeygenElement !== 'undefined') {
+    HTMLKeygenElement.prototype.challenge = '';
+    HTMLKeygenElement.prototype.keytype = 'rsa';
+    HTMLKeygenElement.prototype.type = 'keygen';
+}
+
 // SVGForeignObjectElement / SVGFEColorMatrixElement stubs
 if (typeof SVGForeignObjectElement === 'undefined') {
     globalThis.SVGForeignObjectElement = function SVGForeignObjectElement() {};
@@ -2511,11 +2563,66 @@ if (typeof speechSynthesis === 'undefined') {
     globalThis.SpeechSynthesisUtterance = function SpeechSynthesisUtterance(text) { this.text = text || ''; };
 }
 
-// XHR withCredentials for CORS test
-// Already should exist on XMLHttpRequest if our XHR has it, let's ensure
+// XHR: implement send() via fetch for actual HTTP/file requests
 if (typeof XMLHttpRequest !== 'undefined') {
     var _xhrProto = XMLHttpRequest.prototype;
     if (!('withCredentials' in _xhrProto)) _xhrProto.withCredentials = false;
+    _xhrProto.send = function(body) {
+        var self = this;
+        var url = self._url || '';
+        // Resolve relative URLs against page location
+        if (url && url[0] === '/' && typeof location !== 'undefined' && location.href) {
+            var base = location.href;
+            var proto = base.indexOf('://');
+            if (proto !== -1) {
+                var hostEnd = base.indexOf('/', proto + 3);
+                if (hostEnd !== -1) url = base.substring(0, hostEnd) + url;
+                else url = base + url;
+            }
+        } else if (url && url.indexOf('://') === -1 && typeof location !== 'undefined' && location.href) {
+            var b2 = location.href;
+            var lastSlash = b2.lastIndexOf('/');
+            if (lastSlash !== -1) url = b2.substring(0, lastSlash + 1) + url;
+        }
+        if (!url) return;
+        fetch(url).then(function(resp) {
+            self.status = resp.status || 200;
+            self.statusText = resp.statusText || 'OK';
+            return resp.text();
+        }).then(function(text) {
+            self.responseText = text;
+            var rt = self._responseType || '';
+            if (rt === 'arraybuffer' || rt === 'blob') {
+                // Convert text to ArrayBuffer
+                var buf = new ArrayBuffer(text.length);
+                var view = new Uint8Array(buf);
+                for (var i = 0; i < text.length; i++) view[i] = text.charCodeAt(i) & 0xff;
+                if (rt === 'arraybuffer') self.response = buf;
+                else self.response = new Blob([buf]);
+            } else if (rt === 'document') {
+                // Create a minimal document-like object
+                var titleMatch = text.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+                self.responseXML = {
+                    title: titleMatch ? titleMatch[1].replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>') : '',
+                    body: { innerHTML: text },
+                    querySelector: function() { return null; },
+                    querySelectorAll: function() { return []; },
+                    getElementById: function() { return null; }
+                };
+                self.response = self.responseXML;
+            } else {
+                self.response = text;
+            }
+            self.readyState = 4;
+            if (self.onreadystatechange) self.onreadystatechange.call(self);
+            if (self.onload) self.onload.call(self);
+        }).catch(function(err) {
+            self.status = 0;
+            self.readyState = 4;
+            if (self.onreadystatechange) self.onreadystatechange.call(self);
+            if (self.onerror) self.onerror.call(self);
+        });
+    };
 }
 
 // security.integrity: link/script integrity attribute

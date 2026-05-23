@@ -123,6 +123,7 @@ static const char* tag_to_constructor(const std::string& tag) {
         {"meta", "HTMLMetaElement"}, {"title", "HTMLTitleElement"},
         {"map", "HTMLMapElement"}, {"area", "HTMLAreaElement"},
         {"ins", "HTMLModElement"}, {"del", "HTMLModElement"},
+        {"keygen", "HTMLKeygenElement"},
     };
     auto it = map.find(tag);
     return it != map.end() ? it->second : nullptr;
@@ -1347,6 +1348,20 @@ static JSValue js_element_getBoundingClientRect(JSContext* ctx, JSValueConst thi
     int x = 0, y = 0, w = 0, h = 0;
     extern void js_get_node_geometry(TabState* tab, uint32_t node_id, int& x, int& y, int& w, int& h);
     js_get_node_geometry(g_js_engine->tab_state, node->node_id, x, y, w, h);
+
+    // Fall back to width/height attributes when geometry is 0
+    if (w == 0) {
+        auto it = node->attributes.find("width");
+        if (it != node->attributes.end()) {
+            try { w = std::stoi(it->second); } catch (...) {}
+        }
+    }
+    if (h == 0) {
+        auto it = node->attributes.find("height");
+        if (it != node->attributes.end()) {
+            try { h = std::stoi(it->second); } catch (...) {}
+        }
+    }
 
     JSValue r = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, r, "x", JS_NewInt32(ctx, x));
