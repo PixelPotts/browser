@@ -1502,22 +1502,30 @@ uint32_t JSEngine::setTimeout(JSValue func, int delay_ms) {
     entry.gtk_source_id = g_timeout_add(delay_ms, [](gpointer data) -> gboolean {
         auto* td = static_cast<TimerData*>(data);
         auto it = td->engine->timers.find(td->id);
-        if (it != td->engine->timers.end()) {
-            JSValue ret = JS_Call(td->engine->ctx, it->second.func,
-                                  JS_UNDEFINED, 0, nullptr);
-            if (JS_IsException(ret)) {
-                JSValue exc = JS_GetException(td->engine->ctx);
-                const char* s = JS_ToCString(td->engine->ctx, exc);
-                if (s) {
-                    fprintf(stderr, "[JS Timer Error] %s\n", s);
-                    td->engine->addConsoleEntry(ConsoleLevel::ERROR, std::string(s), "setTimeout");
-                    JS_FreeCString(td->engine->ctx, s);
-                }
-                JS_FreeValue(td->engine->ctx, exc);
+        if (it == td->engine->timers.end()) {
+            delete td;
+            return G_SOURCE_REMOVE;
+        }
+        uint32_t timer_id = td->id;
+        JSValue func_copy = JS_DupValue(td->engine->ctx, it->second.func);
+        JSValue ret = JS_Call(td->engine->ctx, func_copy,
+                              JS_UNDEFINED, 0, nullptr);
+        JS_FreeValue(td->engine->ctx, func_copy);
+        if (JS_IsException(ret)) {
+            JSValue exc = JS_GetException(td->engine->ctx);
+            const char* s = JS_ToCString(td->engine->ctx, exc);
+            if (s) {
+                fprintf(stderr, "[JS Timer Error] %s\n", s);
+                td->engine->addConsoleEntry(ConsoleLevel::ERROR, std::string(s), "setTimeout");
+                JS_FreeCString(td->engine->ctx, s);
             }
-            JS_FreeValue(td->engine->ctx, ret);
-            td->engine->executePendingJobs();
-            // One-shot: clean up
+            JS_FreeValue(td->engine->ctx, exc);
+        }
+        JS_FreeValue(td->engine->ctx, ret);
+        td->engine->executePendingJobs();
+        // One-shot: clean up (re-lookup since JS may have cleared it)
+        it = td->engine->timers.find(timer_id);
+        if (it != td->engine->timers.end()) {
             JS_FreeValue(td->engine->ctx, it->second.func);
             td->engine->timers.erase(it);
         }
@@ -1541,25 +1549,43 @@ uint32_t JSEngine::setInterval(JSValue func, int interval_ms) {
     entry.gtk_source_id = g_timeout_add(interval_ms, [](gpointer data) -> gboolean {
         auto* td = static_cast<TimerData*>(data);
         auto it = td->engine->timers.find(td->id);
-        if (it != td->engine->timers.end()) {
-            JSValue ret = JS_Call(td->engine->ctx, it->second.func,
-                                  JS_UNDEFINED, 0, nullptr);
-            if (JS_IsException(ret)) {
-                JSValue exc = JS_GetException(td->engine->ctx);
-                const char* s = JS_ToCString(td->engine->ctx, exc);
-                if (s) {
-                    fprintf(stderr, "[JS Interval Error] %s\n", s);
-                    td->engine->addConsoleEntry(ConsoleLevel::ERROR, std::string(s), "setInterval");
-                    JS_FreeCString(td->engine->ctx, s);
-                }
-                JS_FreeValue(td->engine->ctx, exc);
-            }
-            JS_FreeValue(td->engine->ctx, ret);
-            td->engine->executePendingJobs();
-            return G_SOURCE_CONTINUE;
+        if (it == td->engine->timers.end()) {
+            delete td;
+            return G_SOURCE_REMOVE;
         }
-        delete td;
-        return G_SOURCE_REMOVE;
+        // Copy func and id before call (JS may clear this timer)
+        uint32_t timer_id = td->id;
+        JSValue func_copy = JS_DupValue(td->engine->ctx, it->second.func);
+        JSValue ret = JS_Call(td->engine->ctx, func_copy,
+                              JS_UNDEFINED, 0, nullptr);
+        JS_FreeValue(td->engine->ctx, func_copy);
+        bool had_error = JS_IsException(ret);
+        if (had_error) {
+            JSValue exc = JS_GetException(td->engine->ctx);
+            const char* s = JS_ToCString(td->engine->ctx, exc);
+            if (s) {
+                fprintf(stderr, "[JS Interval Error] %s\n", s);
+                td->engine->addConsoleEntry(ConsoleLevel::ERROR, std::string(s), "setInterval");
+                JS_FreeCString(td->engine->ctx, s);
+            }
+            JS_FreeValue(td->engine->ctx, exc);
+        }
+        JS_FreeValue(td->engine->ctx, ret);
+        // Re-lookup timer (may have been cleared by JS or error)
+        it = td->engine->timers.find(timer_id);
+        if (had_error && it != td->engine->timers.end()) {
+            // Stop interval on error to prevent crash loops
+            JS_FreeValue(td->engine->ctx, it->second.func);
+            td->engine->timers.erase(it);
+            delete td;
+            return G_SOURCE_REMOVE;
+        }
+        if (it == td->engine->timers.end()) {
+            delete td;
+            return G_SOURCE_REMOVE;
+        }
+        td->engine->executePendingJobs();
+        return G_SOURCE_CONTINUE;
     }, td);
 
     timers[id] = entry;

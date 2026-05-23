@@ -1790,6 +1790,15 @@ void js_bindings_init(JSEngine* engine) {
         JS_NewAtom(ctx, "scrollHeight"),
         JS_NewCFunction(ctx, (JSCFunction*)js_element_get_offsetHeight, "get scrollHeight", 0),
         JS_NewCFunction(ctx, js_noop_setter, "set scrollHeight", 1), JS_PROP_CONFIGURABLE);
+    // scrollLeft / scrollTop — return 0, accept writes silently
+    JS_DefinePropertyGetSet(ctx, elem_proto,
+        JS_NewAtom(ctx, "scrollLeft"),
+        JS_NewCFunction(ctx, (JSCFunction*)js_element_get_offsetTop, "get scrollLeft", 0),
+        JS_NewCFunction(ctx, js_noop_setter, "set scrollLeft", 1), JS_PROP_CONFIGURABLE);
+    JS_DefinePropertyGetSet(ctx, elem_proto,
+        JS_NewAtom(ctx, "scrollTop"),
+        JS_NewCFunction(ctx, (JSCFunction*)js_element_get_offsetTop, "get scrollTop", 0),
+        JS_NewCFunction(ctx, js_noop_setter, "set scrollTop", 1), JS_PROP_CONFIGURABLE);
 
     JS_SetClassProto(ctx, js_element_class_id, elem_proto);
 
