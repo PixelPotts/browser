@@ -5579,8 +5579,10 @@ static void run_test_probes(AppState* st) {
 // ---- main ----
 
 int main(int argc, char** argv) {
+    fprintf(stderr, "[MAIN] Browser starting argc=%d\n", argc);
     curl_global_init(CURL_GLOBAL_DEFAULT);
     gtk_init(&argc, &argv);
+    fprintf(stderr, "[MAIN] GTK initialized\n");
 
     AppState* st = new AppState();
     st->window = gtk_window_new(GTK_WINDOW_TOPLEVEL);

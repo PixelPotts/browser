@@ -1571,7 +1571,8 @@ if (typeof HTMLUnknownElement === 'undefined') {
         'HTMLDetailsElement', 'HTMLSummaryElement', 'HTMLDialogElement',
         'HTMLMenuElement', 'HTMLDataElement', 'HTMLTimeElement',
         'HTMLPictureElement', 'HTMLSlotElement',
-        'HTMLModElement', 'HTMLMapElement', 'HTMLAreaElement'
+        'HTMLModElement', 'HTMLMapElement', 'HTMLAreaElement',
+        'HTMLBodyElement', 'HTMLHeadElement', 'HTMLMetaElement', 'HTMLTitleElement'
     ];
     for (var i = 0; i < types.length; i++) {
         if (typeof globalThis[types[i]] === 'undefined') {
