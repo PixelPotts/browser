@@ -1598,6 +1598,7 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
             elem->bg_color = bm.bg_color;
             if (!bm.bg_repeat.empty()) elem->style_props["background-repeat"] = bm.bg_repeat;
             if (!bm.bg_size.empty()) elem->style_props["background-size"] = bm.bg_size;
+            if (!bm.bg_position.empty()) elem->style_props["background-position"] = bm.bg_position;
             if (!bm.box_shadow.empty()) elem->box_shadow = bm.box_shadow;
             if (bm.opacity < 1.0) elem->opacity = bm.opacity;
             if (bm.overflow >= 0) elem->overflow = bm.overflow;
@@ -1634,6 +1635,8 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
                   if (it != elem->style_props.end()) doc->body->style_props["background-repeat"] = it->second; }
                 { auto it = elem->style_props.find("background-size");
                   if (it != elem->style_props.end()) doc->body->style_props["background-size"] = it->second; }
+                { auto it = elem->style_props.find("background-position");
+                  if (it != elem->style_props.end()) doc->body->style_props["background-position"] = it->second; }
                 doc->body->text_transform = elem->text_transform;
                 doc->body->font_family = elem->font_family;
                 doc->body->box_shadow = elem->box_shadow;
