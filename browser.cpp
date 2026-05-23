@@ -1798,13 +1798,13 @@ void js_get_node_geometry(TabState* tab, uint32_t node_id, int& x, int& y, int& 
     auto it = tab->node_widget_map.find(node_id);
     if (it == tab->node_widget_map.end()) return;
     GtkWidget* widget = it->second;
-    if (!gtk_widget_get_realized(widget)) return;
+    if (!widget || !GTK_IS_WIDGET(widget) || !gtk_widget_get_realized(widget)) return;
     GtkAllocation alloc;
     gtk_widget_get_allocation(widget, &alloc);
     w = alloc.width;
     h = alloc.height;
     // Translate to viewport-relative coordinates
-    if (tab->viewport && gtk_widget_get_realized(tab->viewport)) {
+    if (tab->viewport && GTK_IS_WIDGET(tab->viewport) && gtk_widget_get_realized(tab->viewport)) {
         int vx = 0, vy = 0;
         gtk_widget_translate_coordinates(widget, tab->viewport, 0, 0, &vx, &vy);
         x = vx;

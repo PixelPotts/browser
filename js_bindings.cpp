@@ -1237,7 +1237,8 @@ static JSValue js_image_set_src(JSContext* ctx, JSValueConst this_val, JSValueCo
             auto* op = info->first;
             JSValue obj_ref = info->second.first;
             JSEngine* engine = info->second.second;
-            if (engine && engine->ctx) {
+            // Verify engine is still the active one (not freed on navigation)
+            if (engine && engine == g_js_engine && engine->ctx) {
                 JSContext* ctx = engine->ctx;
                 if (op->complete && !JS_IsUndefined(op->onload)) {
                     JSValue ret = JS_Call(ctx, op->onload, obj_ref, 0, nullptr);
@@ -1330,7 +1331,9 @@ static cairo_t* canvas_get_cr(uint32_t node_id) {
 
 static void canvas_queue_draw(uint32_t node_id) {
     auto it = g_canvas_map.find(node_id);
-    if (it != g_canvas_map.end() && it->second.drawing_area)
+    if (it != g_canvas_map.end() && it->second.drawing_area &&
+        GTK_IS_WIDGET(it->second.drawing_area) &&
+        gtk_widget_get_realized(it->second.drawing_area))
         gtk_widget_queue_draw(it->second.drawing_area);
 }
 
