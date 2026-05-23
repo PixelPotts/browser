@@ -4294,42 +4294,15 @@ static void fetch_page(AppState* st, TabState* tab, std::string url, int gen) {
             engine->current_script_node = nullptr;
         }
 
-        // Debug: patch Test (Runner) to trace background tasks
+        // Debug: patch Test (Runner) to dump results
         engine->eval(R"JS(
             if (typeof Test !== 'undefined' && Test.prototype) {
-                var _origStart = Test.prototype.startBackground;
-                var _origStop = Test.prototype.stopBackground;
                 var _origFinished = Test.prototype.finished;
-                Test.prototype.startBackground = function(id) {
-                    console.log('[BG] START: ' + id);
-                    return _origStart.call(this, id);
-                };
-                Test.prototype.stopBackground = function(id) {
-                    console.log('[BG] STOP: ' + id);
-                    return _origStop.call(this, id);
-                };
                 Test.prototype.finished = function() {
-                    console.log('[BG] FINISHED - all background tasks done');
+                    // Dump results for analysis
+                    var results = this.list.toString();
+                    console.log('[RESULTS] ' + results);
                     return _origFinished.call(this);
-                };
-                Test.prototype.checkForBackground = function() {
-                    var running = 0;
-                    var stuck = [];
-                    for (var task = 0; task < this.backgroundTasks.length; task++) {
-                        if (this.backgroundTasks[task]) {
-                            running++;
-                            // Find key for this task
-                            for (var k in this.backgroundIds) {
-                                if (this.backgroundIds[k] === task) { stuck.push(k); break; }
-                            }
-                        }
-                    }
-                    console.log('[BG] check: running=' + running + (stuck.length ? ' stuck=' + stuck.join(',') : ''));
-                    if (running) {
-                        this.waitForBackground();
-                    } else {
-                        this.finished();
-                    }
                 };
             }
         )JS", "<debug>");
