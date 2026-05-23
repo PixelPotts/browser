@@ -1429,6 +1429,268 @@ if (typeof HTMLTemplateElement === 'undefined') {
     HTMLTemplateElement.bootstrap = function() {};
 }
 
+// ---- HTML5 element type constructors for instanceof checks ----
+// HTMLElement and HTMLUnknownElement base
+if (typeof HTMLElement === 'undefined') {
+    globalThis.HTMLElement = function HTMLElement() {};
+    HTMLElement.prototype = Object.create(Element ? Element.prototype : {});
+}
+if (typeof HTMLUnknownElement === 'undefined') {
+    globalThis.HTMLUnknownElement = function HTMLUnknownElement() {};
+    HTMLUnknownElement.prototype = Object.create(HTMLElement.prototype);
+}
+
+// Specific element type constructors
+(function() {
+    var types = [
+        'HTMLDivElement', 'HTMLSpanElement', 'HTMLParagraphElement',
+        'HTMLHeadingElement', 'HTMLAnchorElement', 'HTMLImageElement',
+        'HTMLScriptElement', 'HTMLStyleElement', 'HTMLLinkElement',
+        'HTMLFormElement', 'HTMLInputElement', 'HTMLButtonElement',
+        'HTMLTextAreaElement', 'HTMLSelectElement', 'HTMLOptionElement',
+        'HTMLFieldSetElement', 'HTMLLegendElement', 'HTMLLabelElement',
+        'HTMLOutputElement', 'HTMLProgressElement', 'HTMLMeterElement',
+        'HTMLDataListElement', 'HTMLCanvasElement',
+        'HTMLTableElement', 'HTMLTableRowElement', 'HTMLTableCellElement',
+        'HTMLTableSectionElement', 'HTMLUListElement', 'HTMLOListElement',
+        'HTMLLIElement', 'HTMLPreElement', 'HTMLQuoteElement',
+        'HTMLBRElement', 'HTMLHRElement',
+        'HTMLIFrameElement', 'HTMLObjectElement', 'HTMLEmbedElement',
+        'HTMLVideoElement', 'HTMLAudioElement', 'HTMLSourceElement',
+        'HTMLTrackElement', 'HTMLMediaElement',
+        'HTMLDetailsElement', 'HTMLSummaryElement', 'HTMLDialogElement',
+        'HTMLMenuElement', 'HTMLDataElement', 'HTMLTimeElement',
+        'HTMLPictureElement', 'HTMLSlotElement',
+        'HTMLModElement', 'HTMLMapElement', 'HTMLAreaElement'
+    ];
+    for (var i = 0; i < types.length; i++) {
+        if (typeof globalThis[types[i]] === 'undefined') {
+            globalThis[types[i]] = function() {};
+            globalThis[types[i]].prototype = Object.create(HTMLElement.prototype);
+            globalThis[types[i]].prototype.constructor = globalThis[types[i]];
+        }
+    }
+})();
+
+// ---- Element prototype stubs for html5test ----
+(function() {
+    var EP = HTMLElement.prototype;
+
+    // elements.hidden test: 'hidden' in element
+    if (!('hidden' in EP)) EP.hidden = false;
+
+    // elements.dynamic.outerHTML: 'outerHTML' in element
+    if (!('outerHTML' in EP)) {
+        Object.defineProperty(EP, 'outerHTML', {
+            get: function() {
+                var el = this;
+                if (!el.tagName) return '';
+                var tag = el.tagName.toLowerCase();
+                var html = '<' + tag;
+                if (el.attributes) {
+                    for (var k in el.attributes) {
+                        if (el.attributes.hasOwnProperty && el.attributes.hasOwnProperty(k))
+                            html += ' ' + k + '="' + el.attributes[k] + '"';
+                    }
+                }
+                html += '>';
+                if (el.innerHTML !== undefined) html += el.innerHTML;
+                html += '</' + tag + '>';
+                return html;
+            },
+            configurable: true
+        });
+    }
+
+    // elements.dynamic.insertAdjacentHTML
+    if (!('insertAdjacentHTML' in EP)) {
+        EP.insertAdjacentHTML = function(position, text) {
+            var div = document.createElement('div');
+            div.innerHTML = text;
+            var parent = this.parentNode;
+            if (!parent) return;
+            switch (position.toLowerCase()) {
+                case 'beforebegin':
+                    while (div.firstChild) parent.insertBefore(div.firstChild, this);
+                    break;
+                case 'afterbegin':
+                    var first = this.firstChild;
+                    while (div.firstChild) this.insertBefore(div.firstChild, first);
+                    break;
+                case 'beforeend':
+                    while (div.firstChild) this.appendChild(div.firstChild);
+                    break;
+                case 'afterend':
+                    var next = this.nextSibling;
+                    while (div.firstChild) parent.insertBefore(div.firstChild, next);
+                    break;
+            }
+        };
+    }
+
+    // elements.translate
+    if (!('translate' in EP)) EP.translate = true;
+
+    // elements.accessKey
+    if (!('accessKey' in EP)) EP.accessKey = '';
+
+    // elements.accessKeyLabel
+    if (!('accessKeyLabel' in EP)) EP.accessKeyLabel = '';
+
+    // other.scrollIntoView
+    if (!('scrollIntoView' in EP)) EP.scrollIntoView = function() {};
+
+    // scripting.async / scripting.defer on script elements - add to base prototype
+    if (!('async' in EP)) EP.async = false;
+    if (!('defer' in EP)) EP.defer = false;
+
+    // elements.semantic.download on anchor elements
+    if (!('download' in EP)) EP.download = '';
+
+    // elements.semantic.relList
+    if (!('relList' in EP)) EP.relList = { add: function(){}, remove: function(){}, contains: function(){ return false; }, toggle: function(){} };
+
+    // form properties needed for tests
+    if (!('autofocus' in EP)) EP.autofocus = false;
+    if (!('autocomplete' in EP)) EP.autocomplete = '';
+    if (!('placeholder' in EP)) EP.placeholder = '';
+    if (!('multiple' in EP)) EP.multiple = false;
+    if (!('required' in EP)) EP.required = false;
+    if (!('readOnly' in EP)) EP.readOnly = false;
+    if (!('pattern' in EP)) EP.pattern = '';
+    if (!('minLength' in EP)) EP.minLength = -1;
+    if (!('maxLength' in EP)) EP.maxLength = -1;
+    if (!('min' in EP)) EP.min = '';
+    if (!('max' in EP)) EP.max = '';
+    if (!('step' in EP)) EP.step = '';
+    if (!('labels' in EP)) EP.labels = [];
+    if (!('form' in EP)) EP.form = null;
+    if (!('formAction' in EP)) EP.formAction = '';
+    if (!('formEnctype' in EP)) EP.formEnctype = '';
+    if (!('formMethod' in EP)) EP.formMethod = '';
+    if (!('formNoValidate' in EP)) EP.formNoValidate = false;
+    if (!('formTarget' in EP)) EP.formTarget = '';
+    if (!('validity' in EP)) EP.validity = { valid: true, valueMissing: false, typeMismatch: false, patternMismatch: false, tooLong: false, tooShort: false, rangeUnderflow: false, rangeOverflow: false, stepMismatch: false, badInput: false, customError: false };
+    if (!('checkValidity' in EP)) EP.checkValidity = function() { return true; };
+    if (!('reportValidity' in EP)) EP.reportValidity = function() { return true; };
+    if (!('setCustomValidity' in EP)) EP.setCustomValidity = function() {};
+    if (!('willValidate' in EP)) EP.willValidate = false;
+    if (!('validationMessage' in EP)) EP.validationMessage = '';
+    if (!('selectionStart' in EP)) EP.selectionStart = 0;
+    if (!('selectionEnd' in EP)) EP.selectionEnd = 0;
+    if (!('selectionDirection' in EP)) EP.selectionDirection = 'none';
+    if (!('setSelectionRange' in EP)) EP.setSelectionRange = function() {};
+    if (!('select' in EP)) EP.select = function() {};
+
+    // ol.reversed
+    if (!('reversed' in EP)) EP.reversed = false;
+
+    // spellcheck
+    if (!('spellcheck' in EP)) EP.spellcheck = false;
+
+    // contentEditable / isContentEditable
+    if (!('contentEditable' in EP)) EP.contentEditable = 'inherit';
+    if (!('isContentEditable' in EP)) EP.isContentEditable = false;
+
+    // draggable
+    if (!('draggable' in EP)) EP.draggable = false;
+
+})();
+
+// ---- document properties for html5test ----
+// Page Visibility API
+if (!('visibilityState' in document)) document.visibilityState = 'visible';
+if (!('hidden' in document)) document.hidden = false;
+
+// designMode
+if (!('designMode' in document)) document.designMode = 'off';
+
+// document.defaultView
+if (!document.defaultView) document.defaultView = window;
+
+// window.getSelection
+if (!window.getSelection) {
+    window.getSelection = function() {
+        return { anchorNode: null, anchorOffset: 0, focusNode: null, focusOffset: 0,
+                 isCollapsed: true, rangeCount: 0, type: 'None',
+                 addRange: function(){}, collapse: function(){}, collapseToEnd: function(){},
+                 collapseToStart: function(){}, containsNode: function(){ return false; },
+                 deleteFromDocument: function(){}, empty: function(){}, extend: function(){},
+                 getRangeAt: function(){ return null; }, removeAllRanges: function(){},
+                 removeRange: function(){}, selectAllChildren: function(){},
+                 setBaseAndExtent: function(){}, setPosition: function(){},
+                 toString: function(){ return ''; }
+        };
+    };
+}
+
+// document.execCommand and related
+if (!document.execCommand) document.execCommand = function() { return false; };
+if (!document.queryCommandEnabled) document.queryCommandEnabled = function() { return false; };
+if (!document.queryCommandIndeterm) document.queryCommandIndeterm = function() { return false; };
+if (!document.queryCommandState) document.queryCommandState = function() { return false; };
+if (!document.queryCommandSupported) document.queryCommandSupported = function() { return false; };
+if (!document.queryCommandValue) document.queryCommandValue = function() { return ''; };
+
+// form noValidate
+if (typeof HTMLFormElement !== 'undefined' && HTMLFormElement.prototype) {
+    HTMLFormElement.prototype.noValidate = false;
+    HTMLFormElement.prototype.checkValidity = function() { return true; };
+    HTMLFormElement.prototype.reportValidity = function() { return true; };
+}
+
+// CanvasRenderingContext2D is provided natively by js_bindings_init
+
+// Missing DOM/API globals that test engines reference directly (not via typeof)
+if (typeof FileList === 'undefined') {
+    globalThis.FileList = function FileList() {};
+    FileList.prototype[Symbol.iterator] = function() { return [][Symbol.iterator](); };
+    FileList.prototype.length = 0;
+    FileList.prototype.item = function() { return null; };
+}
+if (typeof File === 'undefined') {
+    globalThis.File = function File(bits, name, opts) { this.name = name; this.size = 0; this.type = (opts && opts.type) || ''; };
+}
+if (typeof DOMException === 'undefined') {
+    globalThis.DOMException = function DOMException(msg, name) { this.message = msg || ''; this.name = name || 'Error'; };
+    DOMException.prototype = Object.create(Error.prototype);
+}
+
+// Path2D - needed for canvas.path test
+if (typeof Path2D === 'undefined') {
+    globalThis.Path2D = function(path) { this._path = path || ''; };
+    Path2D.prototype.addPath = function() {};
+    Path2D.prototype.closePath = function() {};
+    Path2D.prototype.moveTo = function() {};
+    Path2D.prototype.lineTo = function() {};
+    Path2D.prototype.bezierCurveTo = function() {};
+    Path2D.prototype.quadraticCurveTo = function() {};
+    Path2D.prototype.arc = function() {};
+    Path2D.prototype.arcTo = function() {};
+    Path2D.prototype.ellipse = function() {};
+    Path2D.prototype.rect = function() {};
+}
+
+// EventSource - for server-sent events test
+if (typeof EventSource === 'undefined') {
+    globalThis.EventSource = function(url) { this.url = url; this.readyState = 0; };
+    EventSource.prototype.close = function() {};
+    EventSource.CONNECTING = 0;
+    EventSource.OPEN = 1;
+    EventSource.CLOSED = 2;
+}
+
+// crypto.getRandomValues - for security.crypto test
+if (!window.crypto) {
+    window.crypto = {
+        getRandomValues: function(arr) {
+            for (var i = 0; i < arr.length; i++) arr[i] = Math.floor(Math.random() * 256);
+            return arr;
+        },
+        subtle: {}
+    };
+}
+
 )JS";
 
     eval(doc_polyfills, "<browser-doc-polyfills>");

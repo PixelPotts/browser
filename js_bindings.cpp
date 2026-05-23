@@ -1668,6 +1668,95 @@ static JSValue js_element_getContext(JSContext* ctx, JSValueConst this_val,
         JS_NewCFunction(ctx, (JSCFunction*)js_ctx_get_canvas, "get canvas", 0),
         JS_UNDEFINED, JS_PROP_CONFIGURABLE);
 
+    // Stub methods needed for html5test canvas tests
+    auto noop = [](JSContext* c, JSValueConst, int, JSValueConst*) -> JSValue { return JS_UNDEFINED; };
+    JS_SetPropertyStr(ctx, obj, "fillText", JS_NewCFunction(ctx, noop, "fillText", 4));
+    JS_SetPropertyStr(ctx, obj, "strokeText", JS_NewCFunction(ctx, noop, "strokeText", 4));
+    JS_SetPropertyStr(ctx, obj, "measureText", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst, int, JSValueConst*) -> JSValue {
+        JSValue r = JS_NewObject(c);
+        JS_SetPropertyStr(c, r, "width", JS_NewFloat64(c, 0));
+        return r;
+    }, "measureText", 1));
+    JS_SetPropertyStr(ctx, obj, "ellipse", JS_NewCFunction(ctx, noop, "ellipse", 8));
+    JS_SetPropertyStr(ctx, obj, "setLineDash", JS_NewCFunction(ctx, noop, "setLineDash", 1));
+    JS_SetPropertyStr(ctx, obj, "getLineDash", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst, int, JSValueConst*) -> JSValue {
+        return JS_NewArray(c);
+    }, "getLineDash", 0));
+    JS_SetPropertyStr(ctx, obj, "beginPath", JS_NewCFunction(ctx, noop, "beginPath", 0));
+    JS_SetPropertyStr(ctx, obj, "closePath", JS_NewCFunction(ctx, noop, "closePath", 0));
+    JS_SetPropertyStr(ctx, obj, "moveTo", JS_NewCFunction(ctx, noop, "moveTo", 2));
+    JS_SetPropertyStr(ctx, obj, "lineTo", JS_NewCFunction(ctx, noop, "lineTo", 2));
+    JS_SetPropertyStr(ctx, obj, "arc", JS_NewCFunction(ctx, noop, "arc", 6));
+    JS_SetPropertyStr(ctx, obj, "arcTo", JS_NewCFunction(ctx, noop, "arcTo", 5));
+    JS_SetPropertyStr(ctx, obj, "bezierCurveTo", JS_NewCFunction(ctx, noop, "bezierCurveTo", 6));
+    JS_SetPropertyStr(ctx, obj, "quadraticCurveTo", JS_NewCFunction(ctx, noop, "quadraticCurveTo", 4));
+    JS_SetPropertyStr(ctx, obj, "rect", JS_NewCFunction(ctx, noop, "rect", 4));
+    JS_SetPropertyStr(ctx, obj, "fill", JS_NewCFunction(ctx, noop, "fill", 0));
+    JS_SetPropertyStr(ctx, obj, "stroke", JS_NewCFunction(ctx, noop, "stroke", 0));
+    JS_SetPropertyStr(ctx, obj, "clip", JS_NewCFunction(ctx, noop, "clip", 0));
+    JS_SetPropertyStr(ctx, obj, "save", JS_NewCFunction(ctx, noop, "save", 0));
+    JS_SetPropertyStr(ctx, obj, "restore", JS_NewCFunction(ctx, noop, "restore", 0));
+    JS_SetPropertyStr(ctx, obj, "translate", JS_NewCFunction(ctx, noop, "translate", 2));
+    JS_SetPropertyStr(ctx, obj, "rotate", JS_NewCFunction(ctx, noop, "rotate", 1));
+    JS_SetPropertyStr(ctx, obj, "scale", JS_NewCFunction(ctx, noop, "scale", 2));
+    JS_SetPropertyStr(ctx, obj, "transform", JS_NewCFunction(ctx, noop, "transform", 6));
+    JS_SetPropertyStr(ctx, obj, "setTransform", JS_NewCFunction(ctx, noop, "setTransform", 6));
+    JS_SetPropertyStr(ctx, obj, "createLinearGradient", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst, int, JSValueConst*) -> JSValue {
+        JSValue g = JS_NewObject(c);
+        JS_SetPropertyStr(c, g, "addColorStop", JS_NewCFunction(c, [](JSContext* cc, JSValueConst, int, JSValueConst*) -> JSValue { return JS_UNDEFINED; }, "addColorStop", 2));
+        return g;
+    }, "createLinearGradient", 4));
+    JS_SetPropertyStr(ctx, obj, "createRadialGradient", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst, int, JSValueConst*) -> JSValue {
+        JSValue g = JS_NewObject(c);
+        JS_SetPropertyStr(c, g, "addColorStop", JS_NewCFunction(c, [](JSContext* cc, JSValueConst, int, JSValueConst*) -> JSValue { return JS_UNDEFINED; }, "addColorStop", 2));
+        return g;
+    }, "createRadialGradient", 6));
+    JS_SetPropertyStr(ctx, obj, "createPattern", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst, int, JSValueConst*) -> JSValue {
+        return JS_NewObject(c);
+    }, "createPattern", 2));
+    JS_SetPropertyStr(ctx, obj, "getImageData", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst, int argc, JSValueConst* argv) -> JSValue {
+        int w = 1, h = 1;
+        if (argc >= 4) { JS_ToInt32(c, &w, argv[2]); JS_ToInt32(c, &h, argv[3]); }
+        if (w < 1) w = 1; if (h < 1) h = 1;
+        JSValue imgData = JS_NewObject(c);
+        JS_SetPropertyStr(c, imgData, "width", JS_NewInt32(c, w));
+        JS_SetPropertyStr(c, imgData, "height", JS_NewInt32(c, h));
+        int len = w * h * 4;
+        JSValue data = JS_NewArray(c);
+        for (int i = 0; i < len; i++) JS_SetPropertyUint32(c, data, i, JS_NewInt32(c, 255));
+        JS_SetPropertyStr(c, imgData, "data", data);
+        return imgData;
+    }, "getImageData", 4));
+    JS_SetPropertyStr(ctx, obj, "putImageData", JS_NewCFunction(ctx, noop, "putImageData", 3));
+    JS_SetPropertyStr(ctx, obj, "createImageData", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst, int argc, JSValueConst* argv) -> JSValue {
+        int w = 1, h = 1;
+        if (argc >= 2) { JS_ToInt32(c, &w, argv[0]); JS_ToInt32(c, &h, argv[1]); }
+        JSValue imgData = JS_NewObject(c);
+        JS_SetPropertyStr(c, imgData, "width", JS_NewInt32(c, w));
+        JS_SetPropertyStr(c, imgData, "height", JS_NewInt32(c, h));
+        int len = w * h * 4;
+        JSValue data = JS_NewArray(c);
+        for (int i = 0; i < len; i++) JS_SetPropertyUint32(c, data, i, JS_NewInt32(c, 0));
+        JS_SetPropertyStr(c, imgData, "data", data);
+        return imgData;
+    }, "createImageData", 2));
+    // globalCompositeOperation
+    JS_SetPropertyStr(ctx, obj, "globalCompositeOperation", JS_NewString(ctx, "source-over"));
+    JS_SetPropertyStr(ctx, obj, "globalAlpha", JS_NewFloat64(ctx, 1.0));
+    JS_SetPropertyStr(ctx, obj, "lineWidth", JS_NewFloat64(ctx, 1.0));
+    JS_SetPropertyStr(ctx, obj, "lineCap", JS_NewString(ctx, "butt"));
+    JS_SetPropertyStr(ctx, obj, "lineJoin", JS_NewString(ctx, "miter"));
+    JS_SetPropertyStr(ctx, obj, "miterLimit", JS_NewFloat64(ctx, 10.0));
+    JS_SetPropertyStr(ctx, obj, "shadowBlur", JS_NewFloat64(ctx, 0));
+    JS_SetPropertyStr(ctx, obj, "shadowColor", JS_NewString(ctx, "rgba(0, 0, 0, 0)"));
+    JS_SetPropertyStr(ctx, obj, "shadowOffsetX", JS_NewFloat64(ctx, 0));
+    JS_SetPropertyStr(ctx, obj, "shadowOffsetY", JS_NewFloat64(ctx, 0));
+    JS_SetPropertyStr(ctx, obj, "font", JS_NewString(ctx, "10px sans-serif"));
+    JS_SetPropertyStr(ctx, obj, "textAlign", JS_NewString(ctx, "start"));
+    JS_SetPropertyStr(ctx, obj, "textBaseline", JS_NewString(ctx, "alphabetic"));
+    JS_SetPropertyStr(ctx, obj, "lineDashOffset", JS_NewFloat64(ctx, 0));
+    JS_SetPropertyStr(ctx, obj, "imageSmoothingEnabled", JS_TRUE);
+
     return obj;
 }
 
@@ -2011,6 +2100,28 @@ void js_bindings_init(JSEngine* engine) {
             JS_CFUNC_constructor, 0);
         JS_SetConstructor(ctx, img_ctor, img_proto);
         JS_SetPropertyStr(ctx, global, "Image", img_ctor);
+    }
+
+    // CanvasRenderingContext2D constructor for instanceof checks
+    {
+        JSValue ctx_proto = JS_NewObject(ctx);
+        JS_SetClassProto(ctx, js_canvas_ctx_class_id, ctx_proto);
+        JSValue ctx_ctor = JS_NewCFunction2(ctx, [](JSContext* c, JSValueConst, int, JSValueConst*) -> JSValue {
+            return JS_NewObjectClass(c, js_canvas_ctx_class_id);
+        }, "CanvasRenderingContext2D", 0, JS_CFUNC_constructor, 0);
+        JS_SetConstructor(ctx, ctx_ctor, ctx_proto);
+        JS_SetPropertyStr(ctx, global, "CanvasRenderingContext2D", ctx_ctor);
+    }
+
+    // HTMLElement constructor for instanceof checks
+    {
+        JSValue he_proto = JS_DupValue(ctx, elem_proto);
+        JSValue he_ctor = JS_NewCFunction2(ctx, [](JSContext* c, JSValueConst, int, JSValueConst*) -> JSValue {
+            return JS_UNDEFINED;
+        }, "HTMLElement", 0, JS_CFUNC_constructor, 0);
+        JS_SetConstructor(ctx, he_ctor, he_proto);
+        JS_SetPropertyStr(ctx, global, "HTMLElement", he_ctor);
+        JS_FreeValue(ctx, he_proto);
     }
 
     JS_FreeValue(ctx, global);
