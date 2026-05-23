@@ -225,6 +225,26 @@ void DOMNode::setInnerHTML(const std::string& html, uint32_t& next_id,
                     tag_name.c_str(), elem->node_id, elem->fw_computed, elem->fs_computed,
                     cur->tag_name.c_str());
 
+            // Implicit closing: certain elements close an open <p>
+            static const char* p_closers[] = {
+                "address", "article", "aside", "blockquote", "details", "dialog",
+                "dd", "div", "dl", "dt", "fieldset", "figcaption", "figure",
+                "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6",
+                "header", "hgroup", "hr", "li", "main", "menu", "nav",
+                "ol", "p", "pre", "section", "summary", "table", "ul",
+                nullptr
+            };
+            if (cur->tag_name == "p") {
+                bool closes_p = false;
+                for (int ci = 0; p_closers[ci]; ci++) {
+                    if (tag_name == p_closers[ci]) { closes_p = true; break; }
+                }
+                if (closes_p && cur->parent) {
+                    cur = cur->parent; // close the <p>
+                    elem->parent = cur;
+                }
+            }
+
             cur->children.push_back(elem);
 
             if (!self_close && !is_void_element(tag_name)) {

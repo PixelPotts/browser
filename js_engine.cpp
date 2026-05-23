@@ -527,18 +527,94 @@ static JSValue js_noop_func(JSContext* ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-// ---- getComputedStyle stub ----
+// ---- getComputedStyle ----
 static JSValue js_getComputedStyle(JSContext* ctx, JSValueConst this_val,
                                     int argc, JSValueConst* argv) {
-    // Return the element's style object as a simple proxy
     if (argc < 1) return JS_NewObject(ctx);
-    // Try to get the element's style
-    JSValue style = JS_GetPropertyStr(ctx, argv[0], "style");
-    if (JS_IsUndefined(style) || JS_IsNull(style)) {
-        JS_FreeValue(ctx, style);
-        return JS_NewObject(ctx);
+
+    // Get the element's tag name for default style lookup
+    JSValue tagVal = JS_GetPropertyStr(ctx, argv[0], "tagName");
+    std::string tag;
+    if (!JS_IsUndefined(tagVal) && !JS_IsNull(tagVal)) {
+        const char* s = JS_ToCString(ctx, tagVal);
+        if (s) { tag = s; JS_FreeCString(ctx, s); }
     }
-    return style;
+    JS_FreeValue(ctx, tagVal);
+
+    // Lowercase for comparison
+    for (auto& c : tag) c = tolower(c);
+
+    // Determine default display based on HTML spec
+    std::string defaultDisplay = "inline";
+    static const char* blockElements[] = {
+        "div", "p", "h1", "h2", "h3", "h4", "h5", "h6",
+        "section", "nav", "article", "aside", "header", "footer", "main",
+        "figure", "figcaption", "details", "summary", "dialog",
+        "blockquote", "pre", "ol", "ul", "li", "dl", "dt", "dd",
+        "form", "fieldset", "legend", "table", "hr", "address",
+        "hgroup", "search", "menu", nullptr
+    };
+    for (int i = 0; blockElements[i]; i++) {
+        if (tag == blockElements[i]) { defaultDisplay = "block"; break; }
+    }
+    if (tag == "mark") defaultDisplay = "inline"; // mark is inline with bg color
+
+    // Get inline style overrides
+    JSValue inlineStyle = JS_GetPropertyStr(ctx, argv[0], "style");
+
+    // Build computed style object with getPropertyValue
+    JSValue result = JS_NewObject(ctx);
+
+    // Store defaults on the object for direct property access
+    JS_SetPropertyStr(ctx, result, "display", JS_NewString(ctx, defaultDisplay.c_str()));
+
+    // Default background-color (mark has yellow)
+    std::string bgColor = "transparent";
+    if (tag == "mark") bgColor = "rgb(255, 255, 0)";
+    JS_SetPropertyStr(ctx, result, "backgroundColor", JS_NewString(ctx, bgColor.c_str()));
+    JS_SetPropertyStr(ctx, result, "background-color", JS_NewString(ctx, bgColor.c_str()));
+
+    // Copy inline style properties if available
+    if (!JS_IsUndefined(inlineStyle) && !JS_IsNull(inlineStyle)) {
+        // Check for display override
+        JSValue dv = JS_GetPropertyStr(ctx, inlineStyle, "display");
+        if (!JS_IsUndefined(dv) && !JS_IsNull(dv)) {
+            const char* ds = JS_ToCString(ctx, dv);
+            if (ds && ds[0]) {
+                JS_SetPropertyStr(ctx, result, "display", JS_NewString(ctx, ds));
+                defaultDisplay = ds;
+            }
+            if (ds) JS_FreeCString(ctx, ds);
+        }
+        JS_FreeValue(ctx, dv);
+    }
+    JS_FreeValue(ctx, inlineStyle);
+
+    // Add getPropertyValue method
+    JS_SetPropertyStr(ctx, result, "getPropertyValue",
+        JS_NewCFunction(ctx, [](JSContext* c, JSValueConst tv, int ac, JSValueConst* av) -> JSValue {
+            if (ac < 1) return JS_NewString(c, "");
+            const char* prop = JS_ToCString(c, av[0]);
+            if (!prop) return JS_NewString(c, "");
+            // Convert CSS property name to camelCase for lookup
+            std::string camel;
+            bool nextUpper = false;
+            for (const char* p = prop; *p; p++) {
+                if (*p == '-') { nextUpper = true; continue; }
+                camel += nextUpper ? (char)toupper(*p) : *p;
+                nextUpper = false;
+            }
+            JS_FreeCString(c, prop);
+            // Look up on this object
+            JSValue val = JS_GetPropertyStr(c, tv, camel.c_str());
+            if (JS_IsUndefined(val) || JS_IsNull(val)) {
+                JS_FreeValue(c, val);
+                return JS_NewString(c, "");
+            }
+            return val;
+        }, "getPropertyValue", 1));
+
+    return result;
 }
 
 // ---- matchMedia stub ----
