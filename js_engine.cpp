@@ -547,11 +547,11 @@ static JSValue js_matchMedia(JSContext* ctx, JSValueConst this_val,
     const char* media = argc > 0 ? JS_ToCString(ctx, argv[0]) : nullptr;
     JS_SetPropertyStr(ctx, result, "media", JS_NewString(ctx, media ? media : ""));
     if (media) JS_FreeCString(ctx, media);
-    JS_SetPropertyStr(ctx, result, "addEventListener", JS_NewCFunction(ctx, js_window_addEventListener, "addEventListener", 2));
-    JS_SetPropertyStr(ctx, result, "removeEventListener", JS_NewCFunction(ctx, js_window_removeEventListener, "removeEventListener", 2));
+    JS_SetPropertyStr(ctx, result, "addEventListener", JS_NewCFunction(ctx, js_noop_func, "addEventListener", 2));
+    JS_SetPropertyStr(ctx, result, "removeEventListener", JS_NewCFunction(ctx, js_noop_func, "removeEventListener", 2));
     // addListener/removeListener (deprecated but still used)
-    JS_SetPropertyStr(ctx, result, "addListener", JS_NewCFunction(ctx, js_window_addEventListener, "addListener", 1));
-    JS_SetPropertyStr(ctx, result, "removeListener", JS_NewCFunction(ctx, js_window_removeEventListener, "removeListener", 1));
+    JS_SetPropertyStr(ctx, result, "addListener", JS_NewCFunction(ctx, js_noop_func, "addListener", 1));
+    JS_SetPropertyStr(ctx, result, "removeListener", JS_NewCFunction(ctx, js_noop_func, "removeListener", 1));
     return result;
 }
 
@@ -656,9 +656,9 @@ void JSEngine::setupGlobals() {
     JS_SetPropertyStr(ctx, loc, "search", JS_NewString(ctx, pu.search.c_str()));
     JS_SetPropertyStr(ctx, loc, "hash", JS_NewString(ctx, pu.hash.c_str()));
     JS_SetPropertyStr(ctx, loc, "origin", JS_NewString(ctx, pu.origin.c_str()));
-    JS_SetPropertyStr(ctx, loc, "assign", JS_NewCFunction(ctx, js_window_addEventListener, "assign", 1)); // no-op
-    JS_SetPropertyStr(ctx, loc, "replace", JS_NewCFunction(ctx, js_window_addEventListener, "replace", 1)); // no-op
-    JS_SetPropertyStr(ctx, loc, "reload", JS_NewCFunction(ctx, js_window_addEventListener, "reload", 0)); // no-op
+    JS_SetPropertyStr(ctx, loc, "assign", JS_NewCFunction(ctx, js_noop_func, "assign", 1));
+    JS_SetPropertyStr(ctx, loc, "replace", JS_NewCFunction(ctx, js_noop_func, "replace", 1));
+    JS_SetPropertyStr(ctx, loc, "reload", JS_NewCFunction(ctx, js_noop_func, "reload", 0));
     JS_SetPropertyStr(ctx, loc, "toString",
         JS_NewCFunction(ctx, [](JSContext* cx, JSValueConst tv, int ac, JSValueConst* av) -> JSValue {
             JSValue h = JS_GetPropertyStr(cx, tv, "href");
@@ -670,11 +670,11 @@ void JSEngine::setupGlobals() {
     JSValue history = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, history, "length", JS_NewInt32(ctx, 1));
     JS_SetPropertyStr(ctx, history, "state", JS_NULL);
-    JS_SetPropertyStr(ctx, history, "pushState", JS_NewCFunction(ctx, js_window_addEventListener, "pushState", 3));
-    JS_SetPropertyStr(ctx, history, "replaceState", JS_NewCFunction(ctx, js_window_addEventListener, "replaceState", 3));
-    JS_SetPropertyStr(ctx, history, "back", JS_NewCFunction(ctx, js_window_addEventListener, "back", 0));
-    JS_SetPropertyStr(ctx, history, "forward", JS_NewCFunction(ctx, js_window_addEventListener, "forward", 0));
-    JS_SetPropertyStr(ctx, history, "go", JS_NewCFunction(ctx, js_window_addEventListener, "go", 1));
+    JS_SetPropertyStr(ctx, history, "pushState", JS_NewCFunction(ctx, js_noop_func, "pushState", 3));
+    JS_SetPropertyStr(ctx, history, "replaceState", JS_NewCFunction(ctx, js_noop_func, "replaceState", 3));
+    JS_SetPropertyStr(ctx, history, "back", JS_NewCFunction(ctx, js_noop_func, "back", 0));
+    JS_SetPropertyStr(ctx, history, "forward", JS_NewCFunction(ctx, js_noop_func, "forward", 0));
+    JS_SetPropertyStr(ctx, history, "go", JS_NewCFunction(ctx, js_noop_func, "go", 1));
     JS_SetPropertyStr(ctx, global, "history", history);
 
     // ---- screen object ----
@@ -701,8 +701,8 @@ void JSEngine::setupGlobals() {
         [](JSContext* cx, JSValueConst, int, JSValueConst*) -> JSValue { return JS_NewArray(cx); }, "getEntriesByType", 1));
     JS_SetPropertyStr(ctx, perf, "getEntriesByName", JS_NewCFunction(ctx,
         [](JSContext* cx, JSValueConst, int, JSValueConst*) -> JSValue { return JS_NewArray(cx); }, "getEntriesByName", 1));
-    JS_SetPropertyStr(ctx, perf, "mark", JS_NewCFunction(ctx, js_window_addEventListener, "mark", 1));
-    JS_SetPropertyStr(ctx, perf, "measure", JS_NewCFunction(ctx, js_window_addEventListener, "measure", 1));
+    JS_SetPropertyStr(ctx, perf, "mark", JS_NewCFunction(ctx, js_noop_func, "mark", 1));
+    JS_SetPropertyStr(ctx, perf, "measure", JS_NewCFunction(ctx, js_noop_func, "measure", 1));
     JS_SetPropertyStr(ctx, global, "performance", perf);
 
     // ---- window properties ----
@@ -727,16 +727,16 @@ void JSEngine::setupGlobals() {
     JS_SetPropertyStr(ctx, global, "frameElement", JS_NULL);
 
     // scrollTo / scrollBy / scroll (no-op stubs)
-    JS_SetPropertyStr(ctx, global, "scrollTo", JS_NewCFunction(ctx, js_window_addEventListener, "scrollTo", 2));
-    JS_SetPropertyStr(ctx, global, "scrollBy", JS_NewCFunction(ctx, js_window_addEventListener, "scrollBy", 2));
-    JS_SetPropertyStr(ctx, global, "scroll", JS_NewCFunction(ctx, js_window_addEventListener, "scroll", 2));
-    JS_SetPropertyStr(ctx, global, "focus", JS_NewCFunction(ctx, js_window_addEventListener, "focus", 0));
-    JS_SetPropertyStr(ctx, global, "blur", JS_NewCFunction(ctx, js_window_addEventListener, "blur", 0));
-    JS_SetPropertyStr(ctx, global, "print", JS_NewCFunction(ctx, js_window_addEventListener, "print", 0));
-    JS_SetPropertyStr(ctx, global, "stop", JS_NewCFunction(ctx, js_window_addEventListener, "stop", 0));
-    JS_SetPropertyStr(ctx, global, "open", JS_NewCFunction(ctx, js_window_addEventListener, "open", 1));
-    JS_SetPropertyStr(ctx, global, "close", JS_NewCFunction(ctx, js_window_addEventListener, "close", 0));
-    JS_SetPropertyStr(ctx, global, "postMessage", JS_NewCFunction(ctx, js_window_addEventListener, "postMessage", 1));
+    JS_SetPropertyStr(ctx, global, "scrollTo", JS_NewCFunction(ctx, js_noop_func, "scrollTo", 2));
+    JS_SetPropertyStr(ctx, global, "scrollBy", JS_NewCFunction(ctx, js_noop_func, "scrollBy", 2));
+    JS_SetPropertyStr(ctx, global, "scroll", JS_NewCFunction(ctx, js_noop_func, "scroll", 2));
+    JS_SetPropertyStr(ctx, global, "focus", JS_NewCFunction(ctx, js_noop_func, "focus", 0));
+    JS_SetPropertyStr(ctx, global, "blur", JS_NewCFunction(ctx, js_noop_func, "blur", 0));
+    JS_SetPropertyStr(ctx, global, "print", JS_NewCFunction(ctx, js_noop_func, "print", 0));
+    JS_SetPropertyStr(ctx, global, "stop", JS_NewCFunction(ctx, js_noop_func, "stop", 0));
+    JS_SetPropertyStr(ctx, global, "open", JS_NewCFunction(ctx, js_noop_func, "open", 1));
+    JS_SetPropertyStr(ctx, global, "close", JS_NewCFunction(ctx, js_noop_func, "close", 0));
+    JS_SetPropertyStr(ctx, global, "postMessage", JS_NewCFunction(ctx, js_noop_func, "postMessage", 1));
     JS_SetPropertyStr(ctx, global, "dispatchEvent",
         JS_NewCFunction(ctx, [](JSContext* cx, JSValueConst, int, JSValueConst*) -> JSValue {
             return JS_TRUE;
