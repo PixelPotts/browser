@@ -323,6 +323,27 @@ void JSEngine::init(AppState* as, Document* doc) {
     js_event_init(this);
     setupDocPolyfills(); // must run after js_bindings_init creates document
 
+    // Wire mutation observer hook
+    if (document) {
+        document->on_mutation = [this](uint32_t node_id, const std::string& type) {
+            if (!ctx) return;
+            JSValue global = JS_GetGlobalObject(ctx);
+            JSValue notify = JS_GetPropertyStr(ctx, global, "__mutationObserverNotify");
+            if (JS_IsFunction(ctx, notify)) {
+                JSValue args[2] = {
+                    JS_NewInt32(ctx, (int32_t)node_id),
+                    JS_NewString(ctx, type.c_str())
+                };
+                JSValue ret = JS_Call(ctx, notify, JS_UNDEFINED, 2, args);
+                JS_FreeValue(ctx, ret);
+                JS_FreeValue(ctx, args[0]);
+                JS_FreeValue(ctx, args[1]);
+            }
+            JS_FreeValue(ctx, notify);
+            JS_FreeValue(ctx, global);
+        };
+    }
+
     // Start the job pump (16ms interval for microtask execution)
     job_pump_id = g_timeout_add(16, job_pump_callback, this);
 }
@@ -879,12 +900,102 @@ globalThis.FocusEvent = function FocusEvent(type, opts) {
     this.relatedTarget = (opts && opts.relatedTarget) || null;
 };
 
-// MutationObserver stub
-globalThis.MutationObserver = function MutationObserver(cb) {
-    this.observe = function() {};
-    this.disconnect = function() {};
-    this.takeRecords = function() { return []; };
-};
+// MutationObserver - functional implementation
+(function() {
+    var _observers = [];
+    var _pendingRecords = new Map(); // observer -> records[]
+    var _scheduled = false;
+
+    function MutationObserver(callback) {
+        this._callback = callback;
+        this._targets = [];
+        this._records = [];
+    }
+    MutationObserver.prototype.observe = function(target, options) {
+        if (!target || !target.nodeType) return;
+        var entry = { target: target, options: options || {} };
+        this._targets.push(entry);
+        // Register globally
+        if (_observers.indexOf(this) === -1) _observers.push(this);
+        // Store on target element for the C++ hook to find
+        if (!target._mutationObservers) target._mutationObservers = [];
+        target._mutationObservers.push({ observer: this, options: entry.options });
+    };
+    MutationObserver.prototype.disconnect = function() {
+        // Remove from all targets
+        for (var i = 0; i < this._targets.length; i++) {
+            var t = this._targets[i].target;
+            if (t && t._mutationObservers) {
+                t._mutationObservers = t._mutationObservers.filter(function(e) {
+                    return e.observer !== this;
+                }.bind(this));
+            }
+        }
+        this._targets = [];
+        this._records = [];
+        var idx = _observers.indexOf(this);
+        if (idx >= 0) _observers.splice(idx, 1);
+    };
+    MutationObserver.prototype.takeRecords = function() {
+        var r = this._records.slice();
+        this._records = [];
+        return r;
+    };
+
+    // Internal: queue a record and schedule delivery
+    MutationObserver._notify = function(nodeId, mutationType) {
+        // Find observers registered on this node
+        // We need to search through all observers since we can't easily look up by nodeId from JS
+        for (var i = 0; i < _observers.length; i++) {
+            var obs = _observers[i];
+            for (var j = 0; j < obs._targets.length; j++) {
+                var entry = obs._targets[j];
+                var target = entry.target;
+                // Match by checking if the target's internal ID matches
+                // We use a simple approach: check subtree option
+                var opts = entry.options;
+                var match = false;
+                if (mutationType === 'childList' && opts.childList) match = true;
+                if (mutationType === 'attributes' && opts.attributes) match = true;
+                if (mutationType === 'characterData' && opts.characterData) match = true;
+                if (opts.subtree) match = true; // subtree watches everything
+                if (match) {
+                    var record = {
+                        type: mutationType,
+                        target: target,
+                        addedNodes: [],
+                        removedNodes: [],
+                        previousSibling: null,
+                        nextSibling: null,
+                        attributeName: null,
+                        attributeNamespace: null,
+                        oldValue: null
+                    };
+                    obs._records.push(record);
+                }
+            }
+        }
+        // Schedule microtask delivery
+        if (!_scheduled) {
+            _scheduled = true;
+            Promise.resolve().then(function() {
+                _scheduled = false;
+                for (var i = 0; i < _observers.length; i++) {
+                    var obs = _observers[i];
+                    if (obs._records.length > 0) {
+                        var records = obs._records.slice();
+                        obs._records = [];
+                        try { obs._callback(records, obs); } catch(e) { console.error('MutationObserver error:', e); }
+                    }
+                }
+            });
+        }
+    };
+
+    globalThis.MutationObserver = MutationObserver;
+    // Store reference for C++ to call
+    globalThis.__mutationObserverNotify = MutationObserver._notify;
+})();
 
 // ResizeObserver stub
 globalThis.ResizeObserver = function ResizeObserver(cb) {

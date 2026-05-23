@@ -174,6 +174,8 @@ static JSValue js_element_set_textContent(JSContext* ctx, JSValueConst this_val,
         node->setTextContent(s, g_js_engine->document->next_id);
         JS_FreeCString(ctx, s);
         g_js_engine->scheduleRerender();
+        if (g_js_engine->document->on_mutation)
+            g_js_engine->document->on_mutation(node->node_id, "characterData");
     }
     return JS_UNDEFINED;
 }
@@ -193,6 +195,8 @@ static JSValue js_element_set_innerHTML(JSContext* ctx, JSValueConst this_val, i
         node->setInnerHTML(s, doc->next_id, doc->node_map, doc->id_map);
         JS_FreeCString(ctx, s);
         g_js_engine->scheduleRerender();
+        if (doc->on_mutation)
+            doc->on_mutation(node->node_id, "childList");
     }
     return JS_UNDEFINED;
 }
@@ -486,6 +490,8 @@ static JSValue js_element_setAttribute(JSContext* ctx, JSValueConst this_val,
         }
         node->markDirty();
         if (g_js_engine) g_js_engine->scheduleRerender();
+        if (g_js_engine && g_js_engine->document && g_js_engine->document->on_mutation)
+            g_js_engine->document->on_mutation(node->node_id, "attributes");
     }
     if (name) JS_FreeCString(ctx, name);
     if (val) JS_FreeCString(ctx, val);
@@ -501,6 +507,8 @@ static JSValue js_element_removeAttribute(JSContext* ctx, JSValueConst this_val,
         node->attributes.erase(name);
         JS_FreeCString(ctx, name);
         node->markDirty();
+        if (g_js_engine && g_js_engine->document && g_js_engine->document->on_mutation)
+            g_js_engine->document->on_mutation(node->node_id, "attributes");
         if (g_js_engine) g_js_engine->scheduleRerender();
     }
     return JS_UNDEFINED;

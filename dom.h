@@ -173,6 +173,10 @@ public:
     // Mutation callback (triggers re-render)
     std::function<void()> on_mutated;
 
+    // Mutation observer hook: (node_id, mutation_type)
+    // mutation_type: "childList", "attributes", "characterData"
+    std::function<void(uint32_t node_id, const std::string& type)> on_mutation;
+
     // Orphan nodes: created but not yet appended to tree
     // Keeps shared_ptr alive until appendChild or discard
     std::vector<std::shared_ptr<DOMNode>> orphans;

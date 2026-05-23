@@ -756,6 +756,7 @@ void Document::appendChild(DOMNode* parent, std::shared_ptr<DOMNode> child) {
     registerNode(child.get());
     parent->markDirty();
     if (on_mutated) on_mutated();
+    if (on_mutation) on_mutation(parent->node_id, "childList");
 }
 
 void Document::removeChild(DOMNode* parent, DOMNode* child) {
@@ -767,6 +768,7 @@ void Document::removeChild(DOMNode* parent, DOMNode* child) {
             siblings.erase(it);
             parent->markDirty();
             if (on_mutated) on_mutated();
+            if (on_mutation) on_mutation(parent->node_id, "childList");
             return;
         }
     }
@@ -793,6 +795,7 @@ void Document::insertBefore(DOMNode* parent, std::shared_ptr<DOMNode> newChild, 
             registerNode(newChild.get());
             parent->markDirty();
             if (on_mutated) on_mutated();
+            if (on_mutation) on_mutation(parent->node_id, "childList");
             return;
         }
     }
@@ -801,4 +804,5 @@ void Document::insertBefore(DOMNode* parent, std::shared_ptr<DOMNode> newChild, 
     registerNode(newChild.get());
     parent->markDirty();
     if (on_mutated) on_mutated();
+    if (on_mutation) on_mutation(parent->node_id, "childList");
 }
