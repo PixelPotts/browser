@@ -4294,34 +4294,46 @@ static void fetch_page(AppState* st, TabState* tab, std::string url, int gen) {
             engine->current_script_node = nullptr;
         }
 
-        // Debug: patch Test (Runner) to dump results and trace stuck background tasks
-        fprintf(stderr, "[DEBUG] About to apply Test patch, checking if Test exists...\n");
+        // Debug: patch Runner to dump results and trace stuck background tasks
         engine->eval(R"JS(
-            console.log('[DEBUG-JS] typeof Test = ' + typeof Test);
-            if (typeof Test !== 'undefined' && Test.prototype) {
-                var _origFinished = Test.prototype.finished;
-                Test.prototype.finished = function() {
-                    var results = this.list.toString();
-                    console.log('[RESULTS] ' + results);
-                    return _origFinished.call(this);
+            // The test engine may use different names. Patch both Runner and Test.
+            var _patchTarget = (typeof Runner !== 'undefined') ? Runner :
+                               (typeof Test !== 'undefined') ? Test : null;
+            if (_patchTarget && _patchTarget.prototype) {
+                console.warn('[DEBUG] Patching: ' + (_patchTarget.name || 'unknown'));
+                console.warn('[DEBUG] Proto keys: ' + Object.getOwnPropertyNames(_patchTarget.prototype).slice(0,20).join(', '));
+
+                var _origFinished = _patchTarget.prototype.finished;
+                if (_origFinished) {
+                    _patchTarget.prototype.finished = function() {
+                        var results = this.list ? this.list.toString() : 'NO LIST';
+                        console.warn('[RESULTS] ' + results);
+                        return _origFinished.call(this);
+                    };
+                }
+
+                // No per-test wrapping - will fix root cause instead
+                // Also patch checkForBackground to dump stuck tasks
+                var _origCheck = _patchTarget.prototype.checkForBackground;
+                var _checkCount = 0;
+                _patchTarget.prototype.checkForBackground = function() {
+                    _checkCount++;
+                    if (_checkCount % 50 === 1) {
+                        var bg = this.background || [];
+                        if (bg.length > 0) {
+                            var keys = [];
+                            for (var i = 0; i < bg.length; i++) {
+                                keys.push(bg[i].key || bg[i].name || 'item-' + i);
+                            }
+                            console.warn('[BG-STUCK] count=' + bg.length + ' keys=' + keys.join(', '));
+                        } else {
+                            console.warn('[BG-CHECK] no background tasks, but still polling? bgCount=' + this.backgroundCount);
+                        }
+                    }
+                    return _origCheck.call(this);
                 };
-                var _origStartBg = Test.prototype.startBackground;
-                var _origStopBg = Test.prototype.stopBackground;
-                var _bgTasks = {};
-                Test.prototype.startBackground = function() {
-                    var key = this.key || 'unknown';
-                    _bgTasks[key] = true;
-                    return _origStartBg.call(this);
-                };
-                Test.prototype.stopBackground = function() {
-                    var key = this.key || 'unknown';
-                    delete _bgTasks[key];
-                    return _origStopBg.call(this);
-                };
-                setInterval(function() {
-                    var stuck = Object.keys(_bgTasks);
-                    if (stuck.length > 0) console.log('[BG-STUCK] ' + stuck.join(', '));
-                }, 5000);
+            } else {
+                console.warn('[DEBUG] No Runner or Test found!');
             }
         )JS", "<debug>");
 

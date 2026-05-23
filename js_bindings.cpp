@@ -1125,6 +1125,47 @@ static JSValue js_doc_querySelectorAll(JSContext* ctx, JSValueConst this_val,
     return js_wrap_nodelist(ctx, nodes);
 }
 
+static JSValue js_doc_getElementsByTagName(JSContext* ctx, JSValueConst this_val,
+                                            int argc, JSValueConst* argv) {
+    if (!g_js_engine || !g_js_engine->document || argc < 1) return js_wrap_nodelist(ctx, {});
+    DOMNode* root = g_js_engine->document->root.get();
+    if (!root) return js_wrap_nodelist(ctx, {});
+    const char* tag = JS_ToCString(ctx, argv[0]);
+    if (!tag) return js_wrap_nodelist(ctx, {});
+    std::string ltag = tag;
+    for (auto& c : ltag) c = tolower((unsigned char)c);
+    JS_FreeCString(ctx, tag);
+    bool match_all = (ltag == "*");
+    std::vector<DOMNode*> results;
+    std::function<void(DOMNode*)> search = [&](DOMNode* n) {
+        if (n->node_type == DOMNode::ELEMENT && (match_all || n->tag_name == ltag))
+            results.push_back(n);
+        for (auto& c : n->children) search(c.get());
+    };
+    search(root);
+    return js_wrap_nodelist(ctx, results);
+}
+
+static JSValue js_doc_getElementsByClassName(JSContext* ctx, JSValueConst this_val,
+                                              int argc, JSValueConst* argv) {
+    if (!g_js_engine || !g_js_engine->document || argc < 1) return js_wrap_nodelist(ctx, {});
+    DOMNode* root = g_js_engine->document->root.get();
+    if (!root) return js_wrap_nodelist(ctx, {});
+    const char* cls = JS_ToCString(ctx, argv[0]);
+    if (!cls) return js_wrap_nodelist(ctx, {});
+    std::string lcls = cls;
+    for (auto& c : lcls) c = tolower((unsigned char)c);
+    JS_FreeCString(ctx, cls);
+    std::vector<DOMNode*> results;
+    std::function<void(DOMNode*)> search = [&](DOMNode* n) {
+        if (n->node_type == DOMNode::ELEMENT && n->hasClass(lcls))
+            results.push_back(n);
+        for (auto& c : n->children) search(c.get());
+    };
+    search(root);
+    return js_wrap_nodelist(ctx, results);
+}
+
 static JSValue js_doc_createElement(JSContext* ctx, JSValueConst this_val,
                                      int argc, JSValueConst* argv) {
     if (!g_js_engine || !g_js_engine->document || argc < 1) return JS_NULL;
@@ -2302,6 +2343,10 @@ void js_bindings_init(JSEngine* engine) {
         JS_NewCFunction(ctx, js_doc_createElement, "createElement", 1));
     JS_SetPropertyStr(ctx, doc_obj, "createTextNode",
         JS_NewCFunction(ctx, js_doc_createTextNode, "createTextNode", 1));
+    JS_SetPropertyStr(ctx, doc_obj, "getElementsByTagName",
+        JS_NewCFunction(ctx, js_doc_getElementsByTagName, "getElementsByTagName", 1));
+    JS_SetPropertyStr(ctx, doc_obj, "getElementsByClassName",
+        JS_NewCFunction(ctx, js_doc_getElementsByClassName, "getElementsByClassName", 1));
 
     JS_DefinePropertyGetSet(ctx, doc_obj,
         JS_NewAtom(ctx, "body"),

@@ -1305,6 +1305,24 @@ NamedNodeMap.prototype = { length: 0, getNamedItem: function(){ return null; }, 
 void JSEngine::setupDocPolyfills() {
     // These polyfills need 'document' to exist (set by js_bindings_init)
     const char* doc_polyfills = R"JS(
+// WhichBrowser stub - html5test.co waits for this before running tests.
+// Define it via setTimeout so loadWhichBrowser's load() runs first, then wait() polls and finds it.
+setTimeout(function() {
+    if (typeof WhichBrowser === 'undefined') {
+        globalThis.WhichBrowser = function WhichBrowser(opts) {
+            this.browser = { name: 'Custom', version: '1.0' };
+            this.engine = { name: 'Custom', version: '1.0' };
+            this.os = { name: 'Linux', version: '' };
+            this.device = { type: 'desktop' };
+            this.isType = function() { return false; };
+            this.isBrowser = function() { return false; };
+            this.isDevice = function() { return false; };
+            this.isOs = function() { return false; };
+            this.isEngine = function() { return false; };
+        };
+    }
+}, 50);
+
 // document additions
 document.addEventListener = function() {};
 document.removeEventListener = function() {};
@@ -2256,6 +2274,12 @@ uint32_t JSEngine::setTimeout(JSValue func, int delay_ms) {
                 td->engine->addConsoleEntry(ConsoleLevel::ERROR, std::string(s), "setTimeout");
                 JS_FreeCString(td->engine->ctx, s);
             }
+            JSValue stack = JS_GetPropertyStr(td->engine->ctx, exc, "stack");
+            if (!JS_IsUndefined(stack)) {
+                const char* st = JS_ToCString(td->engine->ctx, stack);
+                if (st) { fprintf(stderr, "[JS Timer Stack] %s\n", st); JS_FreeCString(td->engine->ctx, st); }
+            }
+            JS_FreeValue(td->engine->ctx, stack);
             JS_FreeValue(td->engine->ctx, exc);
         }
         JS_FreeValue(td->engine->ctx, ret);
