@@ -3624,6 +3624,19 @@ static void fetch_page(AppState* st, std::string url, int gen) {
         // Execute pending microtasks after all scripts
         engine->executePendingJobs();
 
+        // Fire DOMContentLoaded and load events on window listeners
+        {
+            extern void js_dispatch_to_window_listeners(JSEngine* engine, const std::string& type, JSValue event);
+            extern JSValue js_create_event(JSContext* ctx, const std::string& type, DOMNode* target, int clientX, int clientY);
+            JSValue dcl_event = js_create_event(engine->ctx, "DOMContentLoaded", nullptr, 0, 0);
+            js_dispatch_to_window_listeners(engine, "DOMContentLoaded", dcl_event);
+            JS_FreeValue(engine->ctx, dcl_event);
+            JSValue load_event = js_create_event(engine->ctx, "load", nullptr, 0, 0);
+            js_dispatch_to_window_listeners(engine, "load", load_event);
+            JS_FreeValue(engine->ctx, load_event);
+            engine->executePendingJobs();
+        }
+
         // Run C++ DOM probes if --test mode
         if (g_test_mode) {
             // Schedule probes after a short delay so timers (setTimeout 500ms) fire first
@@ -4856,12 +4869,74 @@ int main(int argc, char** argv) {
     gtk_widget_set_vexpand(st->content_box, TRUE);
     gtk_container_add(GTK_CONTAINER(viewport), st->content_box);
 
-    // F12 to toggle inspector
+    // Keyboard event handler: F12 for inspector + dispatch to JS
     g_signal_connect(st->window, "key-press-event",
         G_CALLBACK(+[](GtkWidget*, GdkEventKey* ev, gpointer d) -> gboolean {
+            auto* st = static_cast<AppState*>(d);
             if (ev->keyval == GDK_KEY_F12) {
-                inspector_toggle(static_cast<AppState*>(d));
+                inspector_toggle(st);
                 return TRUE;
+            }
+            // Dispatch keydown to JS
+            if (st->js_engine && st->document) {
+                const char* keyname = gdk_keyval_name(ev->keyval);
+                std::string key = keyname ? keyname : "";
+                // Map common GDK key names to DOM key values
+                if (key == "Return") key = "Enter";
+                else if (key == "Escape") key = "Escape";
+                else if (key == "BackSpace") key = "Backspace";
+                else if (key == "Tab") key = "Tab";
+                else if (key == "space") key = " ";
+                else if (key.size() > 1 && key.substr(0,5) == "Shift") key = "Shift";
+                else if (key.size() > 1 && key.substr(0,7) == "Control") key = "Control";
+                else if (key.size() > 1 && key.substr(0,3) == "Alt") key = "Alt";
+                // For single chars, use lowercase for non-shifted
+                if (key.size() == 1 && !(ev->state & GDK_SHIFT_MASK))
+                    key[0] = tolower((unsigned char)key[0]);
+
+                std::string code = keyname ? std::string("Key") + (char)toupper((unsigned char)(keyname[0])) : "";
+                if (ev->keyval >= GDK_KEY_0 && ev->keyval <= GDK_KEY_9)
+                    code = std::string("Digit") + (char)('0' + (ev->keyval - GDK_KEY_0));
+                else if (ev->keyval == GDK_KEY_space) code = "Space";
+                else if (ev->keyval == GDK_KEY_Return) code = "Enter";
+                else if (ev->keyval == GDK_KEY_Escape) code = "Escape";
+                else if (ev->keyval == GDK_KEY_BackSpace) code = "Backspace";
+                else if (ev->keyval == GDK_KEY_Tab) code = "Tab";
+                else if (ev->keyval >= GDK_KEY_F1 && ev->keyval <= GDK_KEY_F12)
+                    code = "F" + std::to_string(ev->keyval - GDK_KEY_F1 + 1);
+
+                uint32_t target = st->focused_node_id;
+                if (!target && st->document->body) target = st->document->body->node_id;
+                js_dispatch_key_event(st->js_engine, target,
+                    "keydown", key, code, ev->hardware_keycode,
+                    (ev->state & GDK_SHIFT_MASK) != 0,
+                    (ev->state & GDK_CONTROL_MASK) != 0,
+                    (ev->state & GDK_MOD1_MASK) != 0,
+                    (ev->state & GDK_META_MASK) != 0);
+            }
+            return FALSE;
+        }), st);
+
+    // key-release-event for keyup
+    g_signal_connect(st->window, "key-release-event",
+        G_CALLBACK(+[](GtkWidget*, GdkEventKey* ev, gpointer d) -> gboolean {
+            auto* st = static_cast<AppState*>(d);
+            if (st->js_engine && st->document) {
+                const char* keyname = gdk_keyval_name(ev->keyval);
+                std::string key = keyname ? keyname : "";
+                if (key == "Return") key = "Enter";
+                else if (key == "BackSpace") key = "Backspace";
+                else if (key == "space") key = " ";
+                if (key.size() == 1) key[0] = tolower((unsigned char)key[0]);
+                std::string code = keyname ? std::string("Key") + (char)toupper((unsigned char)(keyname[0])) : "";
+                uint32_t target = st->focused_node_id;
+                if (!target && st->document->body) target = st->document->body->node_id;
+                js_dispatch_key_event(st->js_engine, target,
+                    "keyup", key, code, ev->hardware_keycode,
+                    (ev->state & GDK_SHIFT_MASK) != 0,
+                    (ev->state & GDK_CONTROL_MASK) != 0,
+                    (ev->state & GDK_MOD1_MASK) != 0,
+                    (ev->state & GDK_META_MASK) != 0);
             }
             return FALSE;
         }), st);

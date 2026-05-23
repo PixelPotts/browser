@@ -61,6 +61,11 @@ public:
     Document* document = nullptr;
     std::string page_url; // current page URL for location object
 
+    // Window event listener storage
+    struct WindowListener { std::string type; uint32_t handler_id; };
+    std::vector<WindowListener> window_listeners;
+    uint32_t next_window_handler_id = 100000; // start high to avoid collision
+
     // Track currently executing script for document.currentScript
     std::string current_script_src; // empty for inline scripts
     bool has_current_script = false;

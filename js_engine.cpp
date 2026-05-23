@@ -425,15 +425,82 @@ static JSValue js_cancel_animation_frame(JSContext* ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-// ---- window.addEventListener / removeEventListener (store DOMContentLoaded/load handlers) ----
+// ---- window.addEventListener / removeEventListener ----
 static JSValue js_window_addEventListener(JSContext* ctx, JSValueConst this_val,
                                            int argc, JSValueConst* argv) {
-    // No-op stub - DOMContentLoaded/load already fired by the time scripts run
+    if (argc < 2 || !g_js_engine) return JS_UNDEFINED;
+    const char* type = JS_ToCString(ctx, argv[0]);
+    if (!type) return JS_UNDEFINED;
+    JSValue func = argv[1];
+    if (!JS_IsFunction(ctx, func)) {
+        JS_FreeCString(ctx, type);
+        return JS_UNDEFINED;
+    }
+    uint32_t hid = g_js_engine->next_window_handler_id++;
+    g_js_engine->window_listeners.push_back({type, hid});
+    // Store handler on global
+    JSValue global = JS_GetGlobalObject(ctx);
+    std::string key = "__whandler_" + std::to_string(hid);
+    JS_SetPropertyStr(ctx, global, key.c_str(), JS_DupValue(ctx, func));
+    JS_FreeValue(ctx, global);
+    JS_FreeCString(ctx, type);
     return JS_UNDEFINED;
 }
 
 static JSValue js_window_removeEventListener(JSContext* ctx, JSValueConst this_val,
                                               int argc, JSValueConst* argv) {
+    if (argc < 2 || !g_js_engine) return JS_UNDEFINED;
+    const char* type = JS_ToCString(ctx, argv[0]);
+    if (!type) return JS_UNDEFINED;
+    for (auto it = g_js_engine->window_listeners.begin();
+         it != g_js_engine->window_listeners.end(); ++it) {
+        if (it->type == type) {
+            JSValue global = JS_GetGlobalObject(ctx);
+            std::string key = "__whandler_" + std::to_string(it->handler_id);
+            JSAtom atom = JS_NewAtom(ctx, key.c_str());
+            JS_DeleteProperty(ctx, global, atom, 0);
+            JS_FreeAtom(ctx, atom);
+            JS_FreeValue(ctx, global);
+            g_js_engine->window_listeners.erase(it);
+            break;
+        }
+    }
+    JS_FreeCString(ctx, type);
+    return JS_UNDEFINED;
+}
+
+// Helper: dispatch to window listeners (called from js_event.cpp and browser.cpp)
+void js_dispatch_to_window_listeners(JSEngine* engine, const std::string& type, JSValue event) {
+    if (!engine || !engine->ctx) return;
+    JSValue global = JS_GetGlobalObject(engine->ctx);
+    // Copy listeners in case they modify the list during dispatch
+    auto listeners = engine->window_listeners;
+    for (const auto& wl : listeners) {
+        if (wl.type != type) continue;
+        std::string key = "__whandler_" + std::to_string(wl.handler_id);
+        JSValue handler = JS_GetPropertyStr(engine->ctx, global, key.c_str());
+        if (JS_IsFunction(engine->ctx, handler)) {
+            JSValue ret = JS_Call(engine->ctx, handler, global, 1, &event);
+            if (JS_IsException(ret)) {
+                JSValue exc = JS_GetException(engine->ctx);
+                const char* s = JS_ToCString(engine->ctx, exc);
+                if (s) {
+                    fprintf(stderr, "[JS Window Event Error] %s\n", s);
+                    engine->addConsoleEntry(ConsoleLevel::ERROR, std::string(s), "window:" + type);
+                    JS_FreeCString(engine->ctx, s);
+                }
+                JS_FreeValue(engine->ctx, exc);
+            }
+            JS_FreeValue(engine->ctx, ret);
+        }
+        JS_FreeValue(engine->ctx, handler);
+    }
+    JS_FreeValue(engine->ctx, global);
+}
+
+// No-op stub for properties that don't need implementation
+static JSValue js_noop_func(JSContext* ctx, JSValueConst this_val,
+                             int argc, JSValueConst* argv) {
     return JS_UNDEFINED;
 }
 
