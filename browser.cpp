@@ -3045,6 +3045,22 @@ static void render_node(AppState* st, DOMNode* node, int gen,
                     if (n) n->attributes["value"] = gtk_entry_get_text(GTK_ENTRY(e));
                     if (st->js_engine) st->js_engine->dispatchEvent(nid, "input", 0, 0);
                 }), st);
+            // Dispatch change event on focus-out
+            g_signal_connect(entry, "focus-out-event",
+                G_CALLBACK(+[](GtkWidget* w, GdkEventFocus*, gpointer d) -> gboolean {
+                    auto* st = static_cast<AppState*>(d);
+                    uint32_t nid = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(w), "dom_node_id"));
+                    if (st->js_engine) st->js_engine->dispatchEvent(nid, "change", 0, 0);
+                    st->focused_node_id = 0;
+                    return FALSE;
+                }), st);
+            // Track focus for keyboard routing
+            g_signal_connect(entry, "focus-in-event",
+                G_CALLBACK(+[](GtkWidget* w, GdkEventFocus*, gpointer d) -> gboolean {
+                    auto* st = static_cast<AppState*>(d);
+                    st->focused_node_id = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(w), "dom_node_id"));
+                    return FALSE;
+                }), st);
             gtk_box_pack_start(GTK_BOX(cur), entry, FALSE, FALSE, 2);
             gtk_widget_show(entry);
             st->node_widget_map[nid] = entry;
@@ -3073,10 +3089,40 @@ static void render_node(AppState* st, DOMNode* node, int gen,
         if (disabled) gtk_widget_set_sensitive(tv, FALSE);
         gtk_container_add(GTK_CONTAINER(scroll), tv);
         g_object_set_data(G_OBJECT(tv), "dom_node_id", GUINT_TO_POINTER(nid));
+        // Store AppState and node_id on buffer too for the changed callback
+        g_object_set_data(G_OBJECT(gtk_text_view_get_buffer(GTK_TEXT_VIEW(tv))),
+            "dom_node_id", GUINT_TO_POINTER(nid));
+        g_object_set_data(G_OBJECT(gtk_text_view_get_buffer(GTK_TEXT_VIEW(tv))),
+            "app_state", st);
+        auto textarea_changed_cb = +[](GtkTextBuffer* buf, gpointer d) {
+            (void)d;
+            auto* st = static_cast<AppState*>(g_object_get_data(G_OBJECT(buf), "app_state"));
+            uint32_t nid = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(buf), "dom_node_id"));
+            if (!st) return;
+            GtkTextIter start, end;
+            gtk_text_buffer_get_bounds(buf, &start, &end);
+            char* text = gtk_text_buffer_get_text(buf, &start, &end, FALSE);
+            DOMNode* n = st->document ? st->document->node_map.count(nid) ? st->document->node_map[nid] : nullptr : nullptr;
+            if (n) n->attributes["value"] = text ? text : "";
+            g_free(text);
+            if (st->js_engine) st->js_engine->dispatchEvent(nid, "input", 0, 0);
+        };
         g_signal_connect(gtk_text_view_get_buffer(GTK_TEXT_VIEW(tv)), "changed",
-            G_CALLBACK(+[](GtkTextBuffer* buf, gpointer d) {
-                // Can't easily get node_id from buffer, so use data on the parent widget
-                // This is simplified - just dispatch input event
+            G_CALLBACK(textarea_changed_cb), nullptr);
+        // Focus tracking
+        g_signal_connect(tv, "focus-in-event",
+            G_CALLBACK(+[](GtkWidget* w, GdkEventFocus*, gpointer d) -> gboolean {
+                auto* st = static_cast<AppState*>(d);
+                st->focused_node_id = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(w), "dom_node_id"));
+                return FALSE;
+            }), st);
+        g_signal_connect(tv, "focus-out-event",
+            G_CALLBACK(+[](GtkWidget* w, GdkEventFocus*, gpointer d) -> gboolean {
+                auto* st = static_cast<AppState*>(d);
+                uint32_t nid = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(w), "dom_node_id"));
+                if (st->js_engine) st->js_engine->dispatchEvent(nid, "change", 0, 0);
+                st->focused_node_id = 0;
+                return FALSE;
             }), st);
         gtk_box_pack_start(GTK_BOX(cur), scroll, FALSE, FALSE, 2);
         gtk_widget_show_all(scroll);
