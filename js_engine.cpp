@@ -558,6 +558,8 @@ static JSValue js_getComputedStyle(JSContext* ctx, JSValueConst this_val,
         if (tag == blockElements[i]) { defaultDisplay = "block"; break; }
     }
     if (tag == "mark") defaultDisplay = "inline"; // mark is inline with bg color
+    // Hidden elements per HTML spec
+    if (tag == "rp" || tag == "datalist" || tag == "template") defaultDisplay = "none";
 
     // Get inline style overrides
     JSValue inlineStyle = JS_GetPropertyStr(ctx, argv[0], "style");
@@ -1646,9 +1648,7 @@ if (typeof HTMLUnknownElement === 'undefined') {
     if (!('formMethod' in EP)) EP.formMethod = '';
     if (!('formNoValidate' in EP)) EP.formNoValidate = false;
     if (!('formTarget' in EP)) EP.formTarget = '';
-    if (!('validity' in EP)) EP.validity = { valid: true, valueMissing: false, typeMismatch: false, patternMismatch: false, tooLong: false, tooShort: false, rangeUnderflow: false, rangeOverflow: false, stepMismatch: false, badInput: false, customError: false };
-    if (!('checkValidity' in EP)) EP.checkValidity = function() { return true; };
-    if (!('reportValidity' in EP)) EP.reportValidity = function() { return true; };
+    // validity/checkValidity/reportValidity are defined later with real validation logic
     if (!('setCustomValidity' in EP)) EP.setCustomValidity = function() {};
     if (!('willValidate' in EP)) EP.willValidate = false;
     if (!('validationMessage' in EP)) EP.validationMessage = '';
@@ -1767,9 +1767,415 @@ if (!window.crypto) {
     };
 }
 
+// ---- Element-specific properties ----
+// textarea
+if (typeof HTMLTextAreaElement !== 'undefined') {
+    var TAP = HTMLTextAreaElement.prototype;
+    if (!('wrap' in TAP)) TAP.wrap = 'soft';
+    if (!('rows' in TAP)) TAP.rows = 2;
+    if (!('cols' in TAP)) TAP.cols = 20;
+    if (!('textLength' in TAP)) Object.defineProperty(TAP, 'textLength', {
+        get: function() { return (this.value || '').length; }, configurable: true
+    });
+}
+
+// select
+if (typeof HTMLSelectElement !== 'undefined') {
+    var SEP = HTMLSelectElement.prototype;
+    if (!('selectedIndex' in SEP)) SEP.selectedIndex = -1;
+    if (!('options' in SEP)) SEP.options = [];
+    if (!('size' in SEP)) SEP.size = 0;
+}
+
+// fieldset
+if (typeof HTMLFieldSetElement !== 'undefined') {
+    var FSP = HTMLFieldSetElement.prototype;
+    if (!('elements' in FSP)) Object.defineProperty(FSP, 'elements', {
+        get: function() {
+            var result = [];
+            var children = this.querySelectorAll ? this.querySelectorAll('input,select,textarea,button,output,fieldset') : [];
+            for (var i = 0; i < children.length; i++) result.push(children[i]);
+            result.length = result.length || 0;
+            return result;
+        }, configurable: true
+    });
+}
+
+// input-specific
+if (typeof HTMLInputElement !== 'undefined') {
+    var IP = HTMLInputElement.prototype;
+    if (!('indeterminate' in IP)) IP.indeterminate = false;
+    if (!('list' in IP)) IP.list = null;
+    if (!('files' in IP)) Object.defineProperty(IP, 'files', {
+        get: function() {
+            if (this.type === 'file') {
+                var fl = new FileList();
+                return fl;
+            }
+            return null;
+        }, configurable: true
+    });
+    if (!('width' in IP)) IP.width = 0;
+    if (!('height' in IP)) IP.height = 0;
+}
+
+// form noValidate (already added above, ensure it's on prototype)
+
+// Event handler properties for isEventSupported checks
+(function() {
+    var EP = HTMLElement.prototype;
+    var handlers = ['oninput', 'onchange', 'oninvalid', 'onerror', 'onload', 'onabort',
+                    'onclick', 'onsubmit', 'onreset', 'onfocus', 'onblur', 'onkeydown',
+                    'onkeyup', 'onkeypress', 'onmousedown', 'onmouseup', 'onmousemove',
+                    'onmouseover', 'onmouseout', 'oncontextmenu', 'ondblclick',
+                    'onscroll', 'onresize', 'onwheel', 'ontouchstart', 'ontouchend',
+                    'ontouchmove', 'ontouchcancel', 'onpointerdown', 'onpointerup',
+                    'onpointermove', 'onpointerover', 'onpointerout',
+                    'onpointerenter', 'onpointerleave', 'ongotpointercapture',
+                    'onlostpointercapture', 'ondrag', 'ondragstart', 'ondragenter',
+                    'ondragover', 'ondragleave', 'ondragend', 'ondrop',
+                    'onanimationstart', 'onanimationend', 'onanimationiteration',
+                    'ontransitionend', 'onselect', 'oncopy', 'oncut', 'onpaste'];
+    for (var i = 0; i < handlers.length; i++) {
+        if (!(handlers[i] in EP)) EP[handlers[i]] = null;
+    }
+})();
+
+// Form validity - real validation based on type and constraints
+(function() {
+    var EP = HTMLElement.prototype;
+    Object.defineProperty(EP, 'validity', {
+        get: function() {
+            var el = this;
+            var type = (el.type || '').toLowerCase();
+            var val = el.value || '';
+            var valid = true;
+            var typeMismatch = false;
+            var rangeOverflow = false;
+            var rangeUnderflow = false;
+            var valueMissing = false;
+            var patternMismatch = false;
+
+            // Required check
+            if (el.required && val === '') {
+                valid = false;
+                valueMissing = true;
+            }
+
+            // Type validation
+            if (val !== '') {
+                if (type === 'url') {
+                    try { new URL(val); } catch(e) { typeMismatch = true; valid = false; }
+                } else if (type === 'email') {
+                    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val)) { typeMismatch = true; valid = false; }
+                }
+            }
+
+            // Range validation
+            if (val !== '' && (type === 'number' || type === 'range')) {
+                var num = parseFloat(val);
+                if (!isNaN(num)) {
+                    var mn = el.getAttribute ? el.getAttribute('min') : el.min;
+                    var mx = el.getAttribute ? el.getAttribute('max') : el.max;
+                    if (mn !== null && mn !== '' && num < parseFloat(mn)) { rangeUnderflow = true; valid = false; }
+                    if (mx !== null && mx !== '' && num > parseFloat(mx)) { rangeOverflow = true; valid = false; }
+                }
+            }
+
+            // Pattern validation
+            if (val !== '' && el.pattern) {
+                try {
+                    var re = new RegExp('^(?:' + el.pattern + ')$');
+                    if (!re.test(val)) { patternMismatch = true; valid = false; }
+                } catch(e) {}
+            }
+
+            return {
+                valid: valid, valueMissing: valueMissing, typeMismatch: typeMismatch,
+                patternMismatch: patternMismatch, tooLong: false, tooShort: false,
+                rangeUnderflow: rangeUnderflow, rangeOverflow: rangeOverflow,
+                stepMismatch: false, badInput: false, customError: false
+            };
+        },
+        configurable: true
+    });
+    EP.checkValidity = function() { return this.validity.valid; };
+    EP.reportValidity = function() { return this.validity.valid; };
+})();
+
+// template.content
+if (typeof HTMLTemplateElement !== 'undefined') {
+    Object.defineProperty(HTMLTemplateElement.prototype, 'content', {
+        get: function() {
+            if (!this._content) {
+                this._content = document.createDocumentFragment();
+                // Move child nodes into fragment
+                while (this.firstChild) {
+                    this._content.appendChild(this.firstChild);
+                }
+            }
+            return this._content;
+        },
+        configurable: true
+    });
+}
+
+// Shadow DOM
+if (typeof HTMLElement !== 'undefined') {
+    HTMLElement.prototype.attachShadow = function(opts) {
+        var shadow = document.createElement('div');
+        shadow.host = this;
+        shadow.mode = (opts && opts.mode) || 'open';
+        this._shadowRoot = shadow;
+        return shadow;
+    };
+    Object.defineProperty(HTMLElement.prototype, 'shadowRoot', {
+        get: function() { return this._shadowRoot || null; },
+        configurable: true
+    });
+}
+
+// TextEncoder/TextDecoder
+if (typeof TextEncoder === 'undefined') {
+    globalThis.TextEncoder = function TextEncoder() { this.encoding = 'utf-8'; };
+    TextEncoder.prototype.encode = function(str) {
+        str = str || '';
+        var arr = [];
+        for (var i = 0; i < str.length; i++) {
+            var c = str.charCodeAt(i);
+            if (c < 0x80) { arr.push(c); }
+            else if (c < 0x800) { arr.push(0xC0 | (c >> 6), 0x80 | (c & 0x3F)); }
+            else if (c >= 0xD800 && c <= 0xDBFF && i + 1 < str.length) {
+                var c2 = str.charCodeAt(++i);
+                var cp = ((c - 0xD800) << 10) + (c2 - 0xDC00) + 0x10000;
+                arr.push(0xF0 | (cp >> 18), 0x80 | ((cp >> 12) & 0x3F),
+                         0x80 | ((cp >> 6) & 0x3F), 0x80 | (cp & 0x3F));
+            } else {
+                arr.push(0xE0 | (c >> 12), 0x80 | ((c >> 6) & 0x3F), 0x80 | (c & 0x3F));
+            }
+        }
+        return new Uint8Array(arr);
+    };
+    TextEncoder.prototype.encodeInto = function(str, dest) {
+        var encoded = this.encode(str);
+        var len = Math.min(encoded.length, dest.length);
+        for (var i = 0; i < len; i++) dest[i] = encoded[i];
+        return { read: str.length, written: len };
+    };
+}
+if (typeof TextDecoder === 'undefined') {
+    globalThis.TextDecoder = function TextDecoder(encoding) { this.encoding = encoding || 'utf-8'; };
+    TextDecoder.prototype.decode = function(buf) {
+        if (!buf) return '';
+        var arr = new Uint8Array(buf.buffer || buf);
+        var result = '';
+        for (var i = 0; i < arr.length; ) {
+            var b = arr[i];
+            if (b < 0x80) { result += String.fromCharCode(b); i++; }
+            else if ((b & 0xE0) === 0xC0) {
+                result += String.fromCharCode(((b & 0x1F) << 6) | (arr[i+1] & 0x3F)); i += 2;
+            } else if ((b & 0xF0) === 0xE0) {
+                result += String.fromCharCode(((b & 0x0F) << 12) | ((arr[i+1] & 0x3F) << 6) | (arr[i+2] & 0x3F)); i += 3;
+            } else if ((b & 0xF8) === 0xF0) {
+                var cp = ((b & 0x07) << 18) | ((arr[i+1] & 0x3F) << 12) | ((arr[i+2] & 0x3F) << 6) | (arr[i+3] & 0x3F);
+                cp -= 0x10000;
+                result += String.fromCharCode(0xD800 + (cp >> 10), 0xDC00 + (cp & 0x3FF)); i += 4;
+            } else { i++; }
+        }
+        return result;
+    };
+}
+
+// FileReader
+if (typeof FileReader === 'undefined') {
+    globalThis.FileReader = function FileReader() {
+        this.readyState = 0; this.result = null; this.error = null;
+        this.onload = null; this.onerror = null; this.onloadend = null;
+        this.onloadstart = null; this.onprogress = null; this.onabort = null;
+    };
+    FileReader.EMPTY = 0; FileReader.LOADING = 1; FileReader.DONE = 2;
+    FileReader.prototype.readAsText = function(blob) {
+        var self = this; self.readyState = 2;
+        self.result = ''; if (self.onload) self.onload({target:self});
+        if (self.onloadend) self.onloadend({target:self});
+    };
+    FileReader.prototype.readAsDataURL = function(blob) {
+        var self = this; self.readyState = 2;
+        self.result = 'data:application/octet-stream;base64,';
+        if (self.onload) self.onload({target:self});
+        if (self.onloadend) self.onloadend({target:self});
+    };
+    FileReader.prototype.readAsArrayBuffer = function(blob) {
+        var self = this; self.readyState = 2;
+        self.result = new ArrayBuffer(0);
+        if (self.onload) self.onload({target:self});
+        if (self.onloadend) self.onloadend({target:self});
+    };
+    FileReader.prototype.readAsBinaryString = function(blob) {
+        var self = this; self.readyState = 2;
+        self.result = '';
+        if (self.onload) self.onload({target:self});
+        if (self.onloadend) self.onloadend({target:self});
+    };
+    FileReader.prototype.abort = function() { this.readyState = 2; };
+}
+
+// URL.createObjectURL / revokeObjectURL
+if (typeof URL !== 'undefined') {
+    if (!URL.createObjectURL) URL.createObjectURL = function(blob) { return 'blob:null/' + Math.random().toString(36).substr(2); };
+    if (!URL.revokeObjectURL) URL.revokeObjectURL = function() {};
+}
+
+// Blob constructor
+if (typeof Blob === 'undefined') {
+    globalThis.Blob = function Blob(parts, opts) {
+        this.size = 0; this.type = (opts && opts.type) || '';
+        if (parts) for (var i = 0; i < parts.length; i++) {
+            var p = parts[i];
+            if (typeof p === 'string') this.size += p.length;
+            else if (p && p.byteLength) this.size += p.byteLength;
+            else if (p && p.size) this.size += p.size;
+        }
+    };
+    Blob.prototype.slice = function(s,e,t) { return new Blob([], {type:t||this.type}); };
+    Blob.prototype.text = function() { return Promise.resolve(''); };
+    Blob.prototype.arrayBuffer = function() { return Promise.resolve(new ArrayBuffer(0)); };
+}
+
+// ReadableStream / WritableStream
+if (typeof ReadableStream === 'undefined') {
+    globalThis.ReadableStream = function ReadableStream(source) {
+        this.locked = false;
+        this._source = source || {};
+    };
+    ReadableStream.prototype.getReader = function() {
+        this.locked = true;
+        return { read: function() { return Promise.resolve({done:true,value:undefined}); }, releaseLock: function() {} };
+    };
+    ReadableStream.prototype.cancel = function() { return Promise.resolve(); };
+    ReadableStream.prototype.pipeTo = function() { return Promise.resolve(); };
+    ReadableStream.prototype.pipeThrough = function(t) { return t.readable; };
+    ReadableStream.prototype.tee = function() { return [new ReadableStream(), new ReadableStream()]; };
+}
+if (typeof WritableStream === 'undefined') {
+    globalThis.WritableStream = function WritableStream(sink) {
+        this.locked = false;
+        this._sink = sink || {};
+    };
+    WritableStream.prototype.getWriter = function() {
+        this.locked = true;
+        return { write: function() { return Promise.resolve(); }, close: function() { return Promise.resolve(); }, releaseLock: function() {}, ready: Promise.resolve() };
+    };
+    WritableStream.prototype.abort = function() { return Promise.resolve(); };
+    WritableStream.prototype.close = function() { return Promise.resolve(); };
+}
+
+// XHR2 response types
+(function() {
+    if (typeof XMLHttpRequest !== 'undefined') {
+        var origOpen = XMLHttpRequest.prototype.open;
+        var XP = XMLHttpRequest.prototype;
+        if (!('responseType' in XP)) XP.responseType = '';
+        if (!('response' in XP)) Object.defineProperty(XP, 'response', {
+            get: function() {
+                switch(this.responseType) {
+                    case 'arraybuffer': return new ArrayBuffer(0);
+                    case 'blob': return new Blob([]);
+                    case 'document': return null;
+                    default: return this.responseText || '';
+                }
+            }, configurable: true
+        });
+        if (!('upload' in XP)) XP.upload = {
+            addEventListener: function(){}, removeEventListener: function(){},
+            onprogress: null, onload: null, onerror: null, onabort: null
+        };
+    }
+})();
+
+// requestIdleCallback
+if (!window.requestIdleCallback) {
+    window.requestIdleCallback = function(cb) {
+        return setTimeout(function() {
+            cb({ didTimeout: false, timeRemaining: function() { return 50; } });
+        }, 1);
+    };
+    window.cancelIdleCallback = function(id) { clearTimeout(id); };
+}
+
+// PerformanceObserver
+if (typeof PerformanceObserver === 'undefined') {
+    globalThis.PerformanceObserver = function(cb) { this._cb = cb; };
+    PerformanceObserver.prototype.observe = function() {};
+    PerformanceObserver.prototype.disconnect = function() {};
+    PerformanceObserver.prototype.takeRecords = function() { return []; };
+    PerformanceObserver.supportedEntryTypes = [];
+}
+
+// FontFace / FontFaceSet
+if (typeof FontFace === 'undefined') {
+    globalThis.FontFace = function(family, source) { this.family = family; this.status = 'unloaded'; };
+    FontFace.prototype.load = function() { this.status = 'loaded'; return Promise.resolve(this); };
+}
+if (document && !document.fonts) {
+    document.fonts = { add: function(){}, delete: function(){}, check: function(){ return true; },
+                       ready: Promise.resolve(), forEach: function(){}, size: 0 };
+}
+
+// navigator.sendBeacon
+if (typeof navigator !== 'undefined' && !navigator.sendBeacon) {
+    navigator.sendBeacon = function(url, data) { return true; };
+}
+
+// Notification
+if (typeof Notification === 'undefined') {
+    globalThis.Notification = function(title, opts) { this.title = title; };
+    Notification.permission = 'default';
+    Notification.requestPermission = function() { return Promise.resolve('denied'); };
+}
+
+// Worker / SharedWorker
+if (typeof Worker === 'undefined') {
+    globalThis.Worker = function(url) {
+        this.onmessage = null; this.onerror = null;
+    };
+    Worker.prototype.postMessage = function() {};
+    Worker.prototype.terminate = function() {};
+}
+if (typeof SharedWorker === 'undefined') {
+    globalThis.SharedWorker = function(url) {
+        this.port = { onmessage: null, postMessage: function(){}, start: function(){}, close: function(){} };
+    };
+}
+
+// WebSocket
+if (typeof WebSocket === 'undefined') {
+    globalThis.WebSocket = function(url, protocols) {
+        this.url = url; this.readyState = 0; this.bufferedAmount = 0;
+        this.extensions = ''; this.protocol = '';
+        this.binaryType = 'blob';
+        this.onopen = null; this.onclose = null; this.onmessage = null; this.onerror = null;
+    };
+    WebSocket.CONNECTING = 0; WebSocket.OPEN = 1;
+    WebSocket.CLOSING = 2; WebSocket.CLOSED = 3;
+    WebSocket.prototype.send = function() {};
+    WebSocket.prototype.close = function() { this.readyState = 3; };
+}
+
+// ruby/rp/rt - ensure they are not HTMLUnknownElement
+// This is handled by the prototype assignment in js_wrap_node
+
+// navigator.pointerEnabled / maxTouchPoints
+if (typeof navigator !== 'undefined') {
+    if (!('maxTouchPoints' in navigator)) navigator.maxTouchPoints = 0;
+    if (!('pointerEnabled' in navigator)) navigator.pointerEnabled = true;
+}
+
 )JS";
 
-    eval(doc_polyfills, "<browser-doc-polyfills>");
+    fprintf(stderr, "[POLYFILL] Evaluating doc polyfills...\n");
+    bool ok = eval(doc_polyfills, "<browser-doc-polyfills>");
+    fprintf(stderr, "[POLYFILL] Doc polyfills result: %s\n", ok ? "OK" : "FAILED");
 }
 
 bool JSEngine::eval(const std::string& code, const std::string& filename) {

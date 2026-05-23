@@ -4294,16 +4294,34 @@ static void fetch_page(AppState* st, TabState* tab, std::string url, int gen) {
             engine->current_script_node = nullptr;
         }
 
-        // Debug: patch Test (Runner) to dump results
+        // Debug: patch Test (Runner) to dump results and trace stuck background tasks
+        fprintf(stderr, "[DEBUG] About to apply Test patch, checking if Test exists...\n");
         engine->eval(R"JS(
+            console.log('[DEBUG-JS] typeof Test = ' + typeof Test);
             if (typeof Test !== 'undefined' && Test.prototype) {
                 var _origFinished = Test.prototype.finished;
                 Test.prototype.finished = function() {
-                    // Dump results for analysis
                     var results = this.list.toString();
                     console.log('[RESULTS] ' + results);
                     return _origFinished.call(this);
                 };
+                var _origStartBg = Test.prototype.startBackground;
+                var _origStopBg = Test.prototype.stopBackground;
+                var _bgTasks = {};
+                Test.prototype.startBackground = function() {
+                    var key = this.key || 'unknown';
+                    _bgTasks[key] = true;
+                    return _origStartBg.call(this);
+                };
+                Test.prototype.stopBackground = function() {
+                    var key = this.key || 'unknown';
+                    delete _bgTasks[key];
+                    return _origStopBg.call(this);
+                };
+                setInterval(function() {
+                    var stuck = Object.keys(_bgTasks);
+                    if (stuck.length > 0) console.log('[BG-STUCK] ' + stuck.join(', '));
+                }, 5000);
             }
         )JS", "<debug>");
 

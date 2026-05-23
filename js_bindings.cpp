@@ -79,11 +79,69 @@ DOMNode* js_get_node(JSContext* ctx, JSValueConst val) {
     return get_node_by_id(op->node_id);
 }
 
+// Map tag name to HTML*Element constructor name
+static const char* tag_to_constructor(const std::string& tag) {
+    static const std::unordered_map<std::string, const char*> map = {
+        {"div", "HTMLDivElement"}, {"span", "HTMLSpanElement"},
+        {"p", "HTMLParagraphElement"}, {"a", "HTMLAnchorElement"},
+        {"img", "HTMLImageElement"}, {"input", "HTMLInputElement"},
+        {"button", "HTMLButtonElement"}, {"form", "HTMLFormElement"},
+        {"select", "HTMLSelectElement"}, {"option", "HTMLOptionElement"},
+        {"textarea", "HTMLTextAreaElement"}, {"label", "HTMLLabelElement"},
+        {"fieldset", "HTMLFieldSetElement"}, {"legend", "HTMLLegendElement"},
+        {"output", "HTMLOutputElement"}, {"progress", "HTMLProgressElement"},
+        {"meter", "HTMLMeterElement"}, {"datalist", "HTMLDataListElement"},
+        {"canvas", "HTMLCanvasElement"}, {"video", "HTMLVideoElement"},
+        {"audio", "HTMLAudioElement"}, {"source", "HTMLSourceElement"},
+        {"track", "HTMLTrackElement"}, {"iframe", "HTMLIFrameElement"},
+        {"script", "HTMLScriptElement"}, {"link", "HTMLLinkElement"},
+        {"style", "HTMLStyleElement"}, {"table", "HTMLTableElement"},
+        {"tr", "HTMLTableRowElement"}, {"td", "HTMLTableCellElement"},
+        {"th", "HTMLTableCellElement"}, {"thead", "HTMLTableSectionElement"},
+        {"tbody", "HTMLTableSectionElement"}, {"tfoot", "HTMLTableSectionElement"},
+        {"ul", "HTMLUListElement"}, {"ol", "HTMLOListElement"},
+        {"li", "HTMLLIElement"}, {"pre", "HTMLPreElement"},
+        {"blockquote", "HTMLQuoteElement"}, {"q", "HTMLQuoteElement"},
+        {"br", "HTMLBRElement"}, {"hr", "HTMLHRElement"},
+        {"details", "HTMLDetailsElement"}, {"summary", "HTMLSummaryElement"},
+        {"dialog", "HTMLDialogElement"}, {"menu", "HTMLMenuElement"},
+        {"data", "HTMLDataElement"}, {"time", "HTMLTimeElement"},
+        {"picture", "HTMLPictureElement"}, {"slot", "HTMLSlotElement"},
+        {"object", "HTMLObjectElement"}, {"embed", "HTMLEmbedElement"},
+        {"template", "HTMLTemplateElement"},
+        {"h1", "HTMLHeadingElement"}, {"h2", "HTMLHeadingElement"},
+        {"h3", "HTMLHeadingElement"}, {"h4", "HTMLHeadingElement"},
+        {"h5", "HTMLHeadingElement"}, {"h6", "HTMLHeadingElement"},
+        {"body", "HTMLBodyElement"}, {"head", "HTMLHeadElement"},
+        {"meta", "HTMLMetaElement"}, {"title", "HTMLTitleElement"},
+        {"map", "HTMLMapElement"}, {"area", "HTMLAreaElement"},
+        {"ins", "HTMLModElement"}, {"del", "HTMLModElement"},
+    };
+    auto it = map.find(tag);
+    return it != map.end() ? it->second : nullptr;
+}
+
 JSValue js_wrap_node(JSContext* ctx, DOMNode* node) {
     if (!node) return JS_NULL;
     JSValue obj = JS_NewObjectClass(ctx, js_element_class_id);
     auto* op = new ElementOpaque{node->node_id};
     JS_SetOpaque(obj, op);
+
+    // Set specific element prototype based on tag name for instanceof support
+    const char* ctor_name = tag_to_constructor(node->tag_name);
+    if (ctor_name) {
+        JSValue global = JS_GetGlobalObject(ctx);
+        JSValue ctor = JS_GetPropertyStr(ctx, global, ctor_name);
+        if (!JS_IsUndefined(ctor)) {
+            JSValue proto = JS_GetPropertyStr(ctx, ctor, "prototype");
+            if (!JS_IsUndefined(proto)) {
+                JS_SetPrototype(ctx, obj, proto);
+            }
+            JS_FreeValue(ctx, proto);
+        }
+        JS_FreeValue(ctx, ctor);
+        JS_FreeValue(ctx, global);
+    }
     return obj;
 }
 
