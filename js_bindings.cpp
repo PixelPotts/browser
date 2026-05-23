@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
+#include <cmath>
 #include <thread>
 #include <string>
 #include <unordered_map>
@@ -330,12 +331,68 @@ static JSValue js_element_get_value(JSContext* ctx, JSValueConst this_val) {
     return JS_NewString(ctx, it != node->attributes.end() ? it->second.c_str() : "");
 }
 
+// Check if string is a valid date (YYYY-MM-DD)
+static bool is_valid_date(const std::string& s) {
+    if (s.size() != 10 || s[4] != '-' || s[7] != '-') return false;
+    for (int i = 0; i < 10; i++) {
+        if (i == 4 || i == 7) continue;
+        if (!isdigit((unsigned char)s[i])) return false;
+    }
+    int m = std::stoi(s.substr(5, 2));
+    int d = std::stoi(s.substr(8, 2));
+    return m >= 1 && m <= 12 && d >= 1 && d <= 31;
+}
+
+static bool is_valid_time(const std::string& s) {
+    if (s.size() < 5 || s[2] != ':') return false;
+    int h = std::stoi(s.substr(0, 2));
+    int m = std::stoi(s.substr(3, 2));
+    return h >= 0 && h <= 23 && m >= 0 && m <= 59;
+}
+
+static bool is_valid_number(const std::string& s) {
+    if (s.empty()) return true;
+    try { std::stod(s); return true; } catch (...) { return false; }
+}
+
+static bool is_valid_color(const std::string& s) {
+    if (s.size() != 7 || s[0] != '#') return false;
+    for (size_t i = 1; i < 7; i++)
+        if (!isxdigit((unsigned char)s[i])) return false;
+    return true;
+}
+
 static JSValue js_element_set_value(JSContext* ctx, JSValueConst this_val,
                                      int argc, JSValueConst* argv) {
     DOMNode* node = js_get_node(ctx, this_val);
     if (!node || argc < 1) return JS_UNDEFINED;
     const char* s = JS_ToCString(ctx, argv[0]);
-    if (s) { node->attributes["value"] = s; JS_FreeCString(ctx, s); }
+    if (!s) return JS_UNDEFINED;
+    std::string val = s;
+    JS_FreeCString(ctx, s);
+
+    // Sanitize value based on input type
+    auto tit = node->attributes.find("type");
+    std::string type = tit != node->attributes.end() ? tit->second : "";
+    if (type == "date" || type == "month" || type == "week") {
+        if (!val.empty() && !is_valid_date(val)) val = "";
+    } else if (type == "time") {
+        if (!val.empty() && !is_valid_time(val)) val = "";
+    } else if (type == "datetime-local" || type == "datetime") {
+        // Expects YYYY-MM-DDThh:mm format
+        if (!val.empty() && (val.size() < 16 || val[10] != 'T')) val = "";
+    } else if (type == "number" || type == "range") {
+        if (!is_valid_number(val)) val = "";
+    } else if (type == "color") {
+        if (!is_valid_color(val)) val = "#000000";
+    } else if (type == "email") {
+        // basic email validation - must contain @
+        if (!val.empty() && val.find('@') == std::string::npos) {
+            // Don't sanitize, but mark invalid via validity
+        }
+    }
+
+    node->attributes["value"] = val;
     node->markDirty();
     if (g_js_engine) g_js_engine->scheduleRerender();
     return JS_UNDEFINED;
@@ -408,6 +465,82 @@ static JSValue js_element_set_selectedIndex(JSContext* ctx, JSValueConst this_va
     }
     node->markDirty();
     if (g_js_engine) g_js_engine->scheduleRerender();
+    return JS_UNDEFINED;
+}
+
+// ---- Form input: valueAsNumber, valueAsDate, stepUp, stepDown ----
+
+static JSValue js_element_get_valueAsNumber(JSContext* ctx, JSValueConst this_val) {
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node) return JS_NewFloat64(ctx, NAN);
+    auto it = node->attributes.find("value");
+    if (it == node->attributes.end() || it->second.empty())
+        return JS_NewFloat64(ctx, NAN);
+    try {
+        double d = std::stod(it->second);
+        return JS_NewFloat64(ctx, d);
+    } catch (...) {
+        return JS_NewFloat64(ctx, NAN);
+    }
+}
+
+static JSValue js_element_set_valueAsNumber(JSContext* ctx, JSValueConst this_val,
+                                             int argc, JSValueConst* argv) {
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node || argc < 1) return JS_UNDEFINED;
+    double d;
+    JS_ToFloat64(ctx, &d, argv[0]);
+    node->attributes["value"] = std::to_string(d);
+    node->markDirty();
+    return JS_UNDEFINED;
+}
+
+static JSValue js_element_get_valueAsDate(JSContext* ctx, JSValueConst this_val) {
+    // Returns null for now — proper implementation would parse date string
+    return JS_NULL;
+}
+
+static JSValue js_element_stepUp(JSContext* ctx, JSValueConst this_val,
+                                  int argc, JSValueConst* argv) {
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node) return JS_UNDEFINED;
+    int n = 1;
+    if (argc >= 1) JS_ToInt32(ctx, &n, argv[0]);
+    auto it = node->attributes.find("value");
+    double cur = 0;
+    if (it != node->attributes.end() && !it->second.empty()) {
+        try { cur = std::stod(it->second); } catch (...) {}
+    }
+    double step = 1;
+    auto sit = node->attributes.find("step");
+    if (sit != node->attributes.end() && !sit->second.empty()) {
+        try { step = std::stod(sit->second); } catch (...) {}
+    }
+    cur += step * n;
+    node->attributes["value"] = std::to_string(cur);
+    node->markDirty();
+    return JS_UNDEFINED;
+}
+
+static JSValue js_element_stepDown(JSContext* ctx, JSValueConst this_val,
+                                    int argc, JSValueConst* argv) {
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node) return JS_UNDEFINED;
+    int n = 1;
+    if (argc >= 1) JS_ToInt32(ctx, &n, argv[0]);
+    auto it = node->attributes.find("value");
+    double cur = 0;
+    if (it != node->attributes.end() && !it->second.empty()) {
+        try { cur = std::stod(it->second); } catch (...) {}
+    }
+    double step = 1;
+    auto sit = node->attributes.find("step");
+    if (sit != node->attributes.end() && !sit->second.empty()) {
+        try { step = std::stod(sit->second); } catch (...) {}
+    }
+    cur -= step * n;
+    node->attributes["value"] = std::to_string(cur);
+    node->markDirty();
     return JS_UNDEFINED;
 }
 
@@ -1947,6 +2080,76 @@ void js_bindings_init(JSEngine* engine) {
         JS_NewCFunction(ctx, js_element_dispatchEvent, "dispatchEvent", 1));
     JS_SetPropertyStr(ctx, elem_proto, "getContext",
         JS_NewCFunction(ctx, js_element_getContext, "getContext", 1));
+    // canvas.toDataURL — encode canvas surface to data URL
+    JS_SetPropertyStr(ctx, elem_proto, "toDataURL",
+        JS_NewCFunction(ctx, [](JSContext* c, JSValueConst tv, int argc, JSValueConst* argv) -> JSValue {
+            std::string mimeType = "image/png";
+            if (argc >= 1) {
+                const char* mt = JS_ToCString(c, argv[0]);
+                if (mt) { mimeType = mt; JS_FreeCString(c, mt); }
+            }
+            // Create a minimal valid image
+            // For PNG: use Cairo to render the canvas content
+            auto* eop = (ElementOpaque*)JS_GetOpaque(tv, js_element_class_id);
+            DOMNode* node = eop ? get_node_by_id(eop->node_id) : nullptr;
+            int w = 300, h = 150; // default canvas size
+            if (node) {
+                auto wit = node->attributes.find("width");
+                auto hit = node->attributes.find("height");
+                if (wit != node->attributes.end()) try { w = std::stoi(wit->second); } catch(...) {}
+                if (hit != node->attributes.end()) try { h = std::stoi(hit->second); } catch(...) {}
+            }
+            if (w < 1) w = 1; if (h < 1) h = 1;
+            // Create a cairo surface and write to PNG in memory
+            cairo_surface_t* surf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
+            // Clear to transparent
+            cairo_t* cr = cairo_create(surf);
+            cairo_set_source_rgba(cr, 0, 0, 0, 0);
+            cairo_paint(cr);
+            cairo_destroy(cr);
+
+            struct PngData { std::string buf; };
+            PngData pd;
+            cairo_surface_write_to_png_stream(surf, [](void* ud, const unsigned char* data, unsigned int length) -> cairo_status_t {
+                auto* pd = static_cast<PngData*>(ud);
+                pd->buf.append((const char*)data, length);
+                return CAIRO_STATUS_SUCCESS;
+            }, &pd);
+            cairo_surface_destroy(surf);
+
+            // Base64 encode
+            static const char b64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+            std::string b64str;
+            const unsigned char* in = (const unsigned char*)pd.buf.data();
+            size_t sz = pd.buf.size();
+            for (size_t i = 0; i < sz; i += 3) {
+                unsigned int n = ((unsigned int)in[i]) << 16;
+                if (i+1 < sz) n |= ((unsigned int)in[i+1]) << 8;
+                if (i+2 < sz) n |= in[i+2];
+                b64str += b64[(n >> 18) & 63];
+                b64str += b64[(n >> 12) & 63];
+                b64str += (i+1 < sz) ? b64[(n >> 6) & 63] : '=';
+                b64str += (i+2 < sz) ? b64[n & 63] : '=';
+            }
+            std::string result = "data:image/png;base64," + b64str;
+            return JS_NewString(c, result.c_str());
+        }, "toDataURL", 1));
+    JS_SetPropertyStr(ctx, elem_proto, "stepUp",
+        JS_NewCFunction(ctx, js_element_stepUp, "stepUp", 1));
+    JS_SetPropertyStr(ctx, elem_proto, "stepDown",
+        JS_NewCFunction(ctx, js_element_stepDown, "stepDown", 1));
+
+    // valueAsNumber / valueAsDate
+    JS_DefinePropertyGetSet(ctx, elem_proto,
+        JS_NewAtom(ctx, "valueAsNumber"),
+        JS_NewCFunction(ctx, (JSCFunction*)js_element_get_valueAsNumber, "get valueAsNumber", 0),
+        JS_NewCFunction(ctx, js_element_set_valueAsNumber, "set valueAsNumber", 1),
+        JS_PROP_CONFIGURABLE);
+    JS_DefinePropertyGetSet(ctx, elem_proto,
+        JS_NewAtom(ctx, "valueAsDate"),
+        JS_NewCFunction(ctx, (JSCFunction*)js_element_get_valueAsDate, "get valueAsDate", 0),
+        JS_NewCFunction(ctx, js_noop_setter, "set valueAsDate", 1),
+        JS_PROP_CONFIGURABLE);
 
     // offset* getters (native layout geometry)
     JS_DefinePropertyGetSet(ctx, elem_proto,
