@@ -1225,7 +1225,43 @@ bool dom_simple_match(const std::string& raw, DOMNode* node) {
             if (!is_last) return false;
         } else if (ps.substr(0, 4) == "not(") {
             std::string inner = ps.substr(4, ps.size() - 5);
-            if (dom_simple_match(inner, node)) return false; // :not matches if inner doesn't
+            if (dom_sel_matches(inner, node)) return false;
+        } else if (ps.substr(0, 3) == "is(" || ps.substr(0, 6) == "where(") {
+            bool is_where = (ps[0] == 'w');
+            size_t start = is_where ? 6 : 3;
+            std::string inner = ps.substr(start, ps.size() - start - 1);
+            if (!dom_sel_matches(inner, node)) return false;
+        } else if (ps.substr(0, 4) == "has(") {
+            std::string inner = ps.substr(4, ps.size() - 5);
+            // :has(> .x) means direct child, :has(.x) means descendant
+            bool found = false;
+            // Check if inner starts with '>' (direct child combinator)
+            std::string trimmed = inner;
+            size_t ts = 0;
+            while (ts < trimmed.size() && trimmed[ts] == ' ') ++ts;
+            if (ts < trimmed.size() && trimmed[ts] == '>') {
+                // Direct child: match inner selector against children
+                std::string child_sel = trimmed.substr(ts + 1);
+                while (!child_sel.empty() && child_sel[0] == ' ') child_sel.erase(child_sel.begin());
+                for (auto& c : node->children) {
+                    if (c->node_type == DOMNode::ELEMENT && dom_sel_matches(child_sel, c.get())) {
+                        found = true; break;
+                    }
+                }
+            } else {
+                // Descendant: search all descendants
+                std::function<bool(DOMNode*)> search = [&](DOMNode* n) -> bool {
+                    for (auto& c : n->children) {
+                        if (c->node_type == DOMNode::ELEMENT) {
+                            if (dom_sel_matches(inner, c.get())) return true;
+                            if (search(c.get())) return true;
+                        }
+                    }
+                    return false;
+                };
+                found = search(node);
+            }
+            if (!found) return false;
         } else if (ps == "required") {
             if (node->attributes.find("required") == node->attributes.end()) return false;
         } else if (ps == "optional") {
