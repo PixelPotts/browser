@@ -195,6 +195,10 @@ public:
     std::vector<std::string> script_srcs; // external script URLs
     std::vector<std::string> script_types; // type attribute for each script_src
 
+    // Script execution order (document order, interleaved)
+    // Each entry: {is_external, index} where index into script_srcs or scripts
+    std::vector<std::pair<bool, size_t>> script_order;
+
 private:
     // CSS selector matching helpers
     bool selectorMatchesNode(const std::string& selector, DOMNode* node) const;

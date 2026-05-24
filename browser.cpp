@@ -983,8 +983,10 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
             if (!script_src.empty()) {
                 doc->script_srcs.push_back(script_src);
                 doc->script_types.push_back(script_type);
+                doc->script_order.push_back({true, doc->script_srcs.size() - 1});
             } else if (!script_content.empty()) {
                 doc->scripts.push_back(script_content);
+                doc->script_order.push_back({false, doc->scripts.size() - 1});
             }
             script_content.clear();
             script_src.clear();
@@ -4176,14 +4178,15 @@ static void fetch_page(AppState* st, TabState* tab, std::string url, int gen) {
         fprintf(stderr, "[JS-TRACE]   inline[%zu] = %.80s...\n", si, doc->scripts[si].c_str());
 
     // Fetch external scripts synchronously (blocking, matches <script src> behavior)
-    std::vector<std::string> external_scripts;
-    for (const auto& src_url : doc->script_srcs) {
+    // Use map keyed by index to maintain alignment with script_srcs
+    std::unordered_map<size_t, std::string> external_scripts;
+    for (size_t si = 0; si < doc->script_srcs.size(); si++) {
         if (gen != tab->generation) return;
         Buf sbuf;
-        if (fetch(src_url, sbuf)) {
-            external_scripts.push_back(std::move(sbuf.data));
+        if (fetch(doc->script_srcs[si], sbuf)) {
+            external_scripts[si] = std::move(sbuf.data);
         } else {
-            fprintf(stderr, "[script] Failed to fetch: %s\n", src_url.c_str());
+            fprintf(stderr, "[script] Failed to fetch: %s\n", doc->script_srcs[si].c_str());
         }
     }
 
@@ -4234,31 +4237,48 @@ static void fetch_page(AppState* st, TabState* tab, std::string url, int gen) {
             inspector_refresh_console(st);
         }
 
-        // Execute external scripts first (in document order they were found)
+        // Execute scripts in document order (interleaved external + inline)
         DOMNode* script_parent = doc->head ? doc->head : doc->body;
-        for (size_t i = 0; i < external_scripts.size(); i++) {
-            std::string fname = i < doc->script_srcs.size() ? doc->script_srcs[i] : "<external>";
-            std::string stype = i < doc->script_types.size() ? doc->script_types[i] : "";
-            bool is_module = (stype == "module");
-            auto script_el = doc->createElement("script");
-            script_el->attributes["src"] = fname;
-            if (!stype.empty()) script_el->attributes["type"] = stype;
-            if (script_parent) doc->appendChild(script_parent, script_el);
-            engine->has_current_script = true;
-            engine->current_script_src = fname;
-            engine->current_script_node = script_el.get();
-            fprintf(stderr, "[JS-TRACE] Eval external%s: %s (%zu bytes)\n",
-                    is_module ? " (module)" : "", fname.c_str(), external_scripts[i].size());
-            bool ok;
-            if (is_module) {
-                ok = engine->evalModule(external_scripts[i], fname);
+
+        for (const auto& [is_external, idx] : doc->script_order) {
+            if (is_external) {
+                auto it = external_scripts.find(idx);
+                if (it == external_scripts.end()) continue; // fetch failed
+                std::string fname = idx < doc->script_srcs.size() ? doc->script_srcs[idx] : "<external>";
+                std::string stype = idx < doc->script_types.size() ? doc->script_types[idx] : "";
+                bool is_module = (stype == "module");
+                auto script_el = doc->createElement("script");
+                script_el->attributes["src"] = fname;
+                if (!stype.empty()) script_el->attributes["type"] = stype;
+                if (script_parent) doc->appendChild(script_parent, script_el);
+                engine->has_current_script = true;
+                engine->current_script_src = fname;
+                engine->current_script_node = script_el.get();
+                fprintf(stderr, "[JS-TRACE] Eval external%s: %s (%zu bytes)\n",
+                        is_module ? " (module)" : "", fname.c_str(), it->second.size());
+                bool ok;
+                if (is_module) {
+                    ok = engine->evalModule(it->second, fname);
+                } else {
+                    ok = engine->eval(it->second, fname);
+                }
+                fprintf(stderr, "[JS-TRACE]   => %s\n", ok ? "OK" : "FAILED");
+                engine->has_current_script = false;
+                engine->current_script_src.clear();
+                engine->current_script_node = nullptr;
             } else {
-                ok = engine->eval(external_scripts[i], fname);
+                if (idx >= doc->scripts.size()) continue;
+                fprintf(stderr, "[JS-TRACE] Eval inline[%zu] (%zu bytes)\n", idx, doc->scripts[idx].size());
+                auto script_el = doc->createElement("script");
+                if (script_parent) doc->appendChild(script_parent, script_el);
+                engine->has_current_script = true;
+                engine->current_script_src.clear();
+                engine->current_script_node = script_el.get();
+                bool ok = engine->eval(doc->scripts[idx], "<script>");
+                fprintf(stderr, "[JS-TRACE]   => %s\n", ok ? "OK" : "FAILED");
+                engine->has_current_script = false;
+                engine->current_script_node = nullptr;
             }
-            fprintf(stderr, "[JS-TRACE]   => %s\n", ok ? "OK" : "FAILED");
-            engine->has_current_script = false;
-            engine->current_script_src.clear();
-            engine->current_script_node = nullptr;
         }
 
         // Debug: check module exports and patch scoring to log per-category results
@@ -4397,20 +4417,6 @@ static void fetch_page(AppState* st, TabState* tab, std::string url, int gen) {
                 };
             }
         )JS", "<debug-css3>");
-
-        // Execute inline scripts
-        for (size_t i = 0; i < doc->scripts.size(); i++) {
-            fprintf(stderr, "[JS-TRACE] Eval inline[%zu] (%zu bytes)\n", i, doc->scripts[i].size());
-            auto script_el = doc->createElement("script");
-            if (script_parent) doc->appendChild(script_parent, script_el);
-            engine->has_current_script = true;
-            engine->current_script_src.clear();
-            engine->current_script_node = script_el.get();
-            bool ok = engine->eval(doc->scripts[i], "<script>");
-            fprintf(stderr, "[JS-TRACE]   => %s\n", ok ? "OK" : "FAILED");
-            engine->has_current_script = false;
-            engine->current_script_node = nullptr;
-        }
 
         // Execute pending microtasks after all scripts
         engine->executePendingJobs();
