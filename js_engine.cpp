@@ -1774,8 +1774,7 @@ globalThis.PointerEvent = globalThis.PointerEvent || function PointerEvent(type,
 };
 PointerEvent.prototype = Object.create(Event.prototype);
 
-// Fullscreen API
-if (!document) { /* skip if no document yet */ }
+// Fullscreen API - stubs added in setupDocPolyfills
 
 // CSS Font Loading API
 globalThis.FontFace = globalThis.FontFace || function FontFace(family, source, descriptors) {
@@ -1800,8 +1799,8 @@ FontFaceSet.prototype = {
 
 // Ensure document.fonts exists (will be set up after document is created)
 
-// CSS.number, CSS.percent, etc. factory methods
-if (typeof CSS !== 'undefined') {
+// CSS factory methods for Typed OM
+if (typeof CSS !== 'undefined' && CSS) {
     var _units = ['number','percent','em','ex','ch','rem','vw','vh','vmin','vmax',
                   'cm','mm','Q','in','pt','pc','px','deg','grad','rad','turn',
                   's','ms','Hz','kHz','dpi','dpcm','dppx','fr',
