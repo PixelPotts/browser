@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Image Sizing Tests</title>
+<style>
+body { font-family: sans-serif; font-size: 14px; margin: 10px; background: #f0f0f0; }
+.test { border: 1px solid #999; margin: 5px 0; padding: 5px; background: white; }
+.test-label { font-weight: bold; margin-bottom: 3px; }
+.result { font-size: 12px; margin-top: 3px; }
+.pass { color: green; }
+.fail { color: red; }
+img.bordered { outline: 1px dashed #ccc; }
+
+/* Test-specific styles */
+#t2 { width: 100px; }
+#t3 { height: 50px; }
+#t4 { width: 150px; height: 75px; }
+#t5 { max-width: 120px; }
+#t6 { max-height: 60px; }
+#t7 { min-width: 300px; }
+#t8 { width: 300px; height: 300px; object-fit: contain; }
+#t9 { width: 300px; height: 300px; object-fit: cover; }
+#t10 { width: 300px; height: 300px; object-fit: fill; }
+#t11 { width: 300px; height: 300px; object-fit: none; }
+#t12 { width: 300px; height: 300px; object-fit: scale-down; }
+#t13 { width: 50px; height: 50px; object-fit: scale-down; }
+#t14 { max-width: 150px; max-height: 100px; }
+</style>
+</head>
+<body>
+<h2>Image CSS Sizing Tests</h2>
+
+<div class="test">
+  <div class="test-label">T1: No CSS — intrinsic size (200x100)</div>
+  <img id="t1" class="bordered" src="test_img_200x100.png">
+  <div id="r1" class="result"></div>
+</div>
+
+<div class="test">
+  <div class="test-label">T2: CSS width:100px only — should be 100x50 (AR preserved)</div>
+  <img id="t2" class="bordered" src="test_img_200x100.png">
+  <div id="r2" class="result"></div>
+</div>
+
+<div class="test">
+  <div class="test-label">T3: CSS height:50px only — should be 100x50 (AR preserved)</div>
+  <img id="t3" class="bordered" src="test_img_200x100.png">
+  <div id="r3" class="result"></div>
+</div>
+
+<div class="test">
+  <div class="test-label">T4: CSS width:150px height:75px — exact 150x75</div>
+  <img id="t4" class="bordered" src="test_img_200x100.png">
+  <div id="r4" class="result"></div>
+</div>
+
+<div class="test">
+  <div class="test-label">T5: max-width:120px on 200px intrinsic — should be 120x60</div>
+  <img id="t5" class="bordered" src="test_img_200x100.png">
+  <div id="r5" class="result"></div>
+</div>
+
+<div class="test">
+  <div class="test-label">T6: max-height:60px on 200x100 — should be 120x60</div>
+  <img id="t6" class="bordered" src="test_img_200x100.png">
+  <div id="r6" class="result"></div>
+</div>
+
+<div class="test">
+  <div class="test-label">T7: min-width:300px on 200px intrinsic — should be 300x150</div>
+  <img id="t7" class="bordered" src="test_img_200x100.png">
+  <div id="r7" class="result"></div>
+</div>
+
+<div class="test">
+  <div class="test-label">T8: 300x300 box + object-fit:contain (200x100 img) — box 300x300</div>
+  <img id="t8" class="bordered" src="test_img_200x100.png">
+  <div id="r8" class="result"></div>
+</div>
+
+<div class="test">
+  <div class="test-label">T9: 300x300 box + object-fit:cover (200x100 img) — box 300x300</div>
+  <img id="t9" class="bordered" src="test_img_200x100.png">
+  <div id="r9" class="result"></div>
+</div>
+
+<div class="test">
+  <div class="test-label">T10: 300x300 box + object-fit:fill (200x100 img) — box 300x300</div>
+  <img id="t10" class="bordered" src="test_img_200x100.png">
+  <div id="r10" class="result"></div>
+</div>
+
+<div class="test">
+  <div class="test-label">T11: 300x300 box + object-fit:none (200x100 img) — box 300x300</div>
+  <img id="t11" class="bordered" src="test_img_200x100.png">
+  <div id="r11" class="result"></div>
+</div>
+
+<div class="test">
+  <div class="test-label">T12: 300x300 box + object-fit:scale-down (200x100 img, smaller than box) — box 300x300</div>
+  <img id="t12" class="bordered" src="test_img_200x100.png">
+  <div id="r12" class="result"></div>
+</div>
+
+<div class="test">
+  <div class="test-label">T13: 50x50 box + object-fit:scale-down (200x100 img, larger than box) — box 50x50</div>
+  <img id="t13" class="bordered" src="test_img_200x100.png">
+  <div id="r13" class="result"></div>
+</div>
+
+<div class="test">
+  <div class="test-label">T14: max-width:150 + max-height:100 on 400x300 img — should be ~133x100</div>
+  <img id="t14" class="bordered" src="test_img_400x300.png">
+  <div id="r14" class="result"></div>
+</div>
+
+<div class="test">
+  <div class="test-label">T15: HTML attrs width=80 height=40 — should be 80x40</div>
+  <img id="t15" class="bordered" src="test_img_200x100.png" width="80" height="40">
+  <div id="r15" class="result"></div>
+</div>
+
+<div class="test">
+  <div class="test-label">T16: HTML width=150 only — should be 150x75 (AR preserved)</div>
+  <img id="t16" class="bordered" src="test_img_200x100.png" width="150">
+  <div id="r16" class="result"></div>
+</div>
+
+<div class="test">
+  <div class="test-label">T17: HTML width=150 + CSS width:250px — CSS wins, should be 250x125</div>
+  <img id="t17" class="bordered" src="test_img_200x100.png" width="150" style="width:250px">
+  <div id="r17" class="result"></div>
+</div>
+
+<div class="test">
+  <div class="test-label">T18: 100x100 square, no CSS — intrinsic 100x100</div>
+  <img id="t18" class="bordered" src="test_img_100x100.png">
+  <div id="r18" class="result"></div>
+</div>
+
+<div id="summary" style="margin-top:10px; padding:10px; font-weight:bold; font-size:16px;"></div>
+
+<script>
+var tests = [
+  { id: "t1",  ew: 200, eh: 100 },
+  { id: "t2",  ew: 100, eh: 50  },
+  { id: "t3",  ew: 100, eh: 50  },
+  { id: "t4",  ew: 150, eh: 75  },
+  { id: "t5",  ew: 120, eh: 60  },
+  { id: "t6",  ew: 120, eh: 60  },
+  { id: "t7",  ew: 300, eh: 150 },
+  { id: "t8",  ew: 300, eh: 300 },
+  { id: "t9",  ew: 300, eh: 300 },
+  { id: "t10", ew: 300, eh: 300 },
+  { id: "t11", ew: 300, eh: 300 },
+  { id: "t12", ew: 300, eh: 300 },
+  { id: "t13", ew: 50,  eh: 50  },
+  { id: "t14", ew: 133, eh: 100 },
+  { id: "t15", ew: 80,  eh: 40  },
+  { id: "t16", ew: 150, eh: 75  },
+  { id: "t17", ew: 250, eh: 125 },
+  { id: "t18", ew: 100, eh: 100 }
+];
+
+function runTests() {
+  var pass = 0, fail = 0;
+  var margin = 4; // px tolerance
+  for (var i = 0; i < tests.length; i++) {
+    var t = tests[i];
+    var el = document.getElementById(t.id);
+    var rEl = document.getElementById("r" + t.id.substring(1));
+    if (!el || !rEl) continue;
+    var aw = el.offsetWidth;
+    var ah = el.offsetHeight;
+    var wOk = Math.abs(aw - t.ew) <= margin;
+    var hOk = Math.abs(ah - t.eh) <= margin;
+    var ok = wOk && hOk;
+    if (ok) pass++; else fail++;
+    var cls = ok ? "pass" : "fail";
+    var sym = ok ? "PASS" : "FAIL";
+    rEl.innerHTML = "<span class='" + cls + "'>" + sym + "</span> — got " + aw + "x" + ah + ", expected " + t.ew + "x" + t.eh + " (margin " + margin + "px)";
+    console.log("[IMG-TEST] " + t.id + ": " + sym + " got=" + aw + "x" + ah + " expected=" + t.ew + "x" + t.eh);
+  }
+  var sumEl = document.getElementById("summary");
+  if (sumEl) {
+    sumEl.innerHTML = pass + "/" + (pass + fail) + " tests passed" + (fail > 0 ? " (" + fail + " FAILED)" : " — ALL PASS");
+    sumEl.style.color = fail > 0 ? "red" : "green";
+  }
+  console.log("[IMG-TEST] SUMMARY: " + pass + "/" + (pass + fail) + " passed, " + fail + " failed");
+}
+
+// Run after images have loaded — delay to allow async fetch + render
+setTimeout(runTests, 3000);
+</script>
+</body>
+</html>

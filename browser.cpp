@@ -660,7 +660,11 @@ static std::vector<CSSRule> parse_css(const std::string& css) {
                     || !prop_val(decls,"text-overflow").empty()
                     || !prop_val(decls,"font-stretch").empty()
                     || !prop_val(decls,"text-shadow").empty()
-                    || !prop_val(decls,"font").empty();
+                    || !prop_val(decls,"font").empty()
+                    || !prop_val(decls,"max-height").empty()
+                    || !prop_val(decls,"min-width").empty()
+                    || !prop_val(decls,"min-height").empty()
+                    || !prop_val(decls,"object-fit").empty();
         if (fw==-1 && fs_raw.empty() && lh_raw.empty() && !has_box) continue;
         // split comma-separated selectors
         size_t j=0;
@@ -1092,16 +1096,63 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
         if (!tname.empty() && tname[0] == '!') continue;
 
         if (!closing && tname == "img") {
-            std::string src = extract_attr(tag, "src");
-            if (!src.empty()) {
-                std::string u = resolve(base, src);
-                if (!u.empty()) {
-                    auto img_node = doc->createElement("img");
-                    img_node->attributes["src"] = u;
-                    cur_parent->children.push_back(img_node);
-                    img_node->parent = cur_parent;
-                    doc->registerNode(img_node.get());
+            auto img_node = doc->createElement("img");
+            img_node->attributes = extract_all_attrs(tag);
+            auto id_it = img_node->attributes.find("id");
+            img_node->id = id_it != img_node->attributes.end() ? id_it->second : "";
+            auto cls_it = img_node->attributes.find("class");
+            img_node->class_list = cls_it != img_node->attributes.end() ? split_classes(cls_it->second) : std::vector<std::string>{};
+            // Resolve src URL
+            auto src_it = img_node->attributes.find("src");
+            if (src_it != img_node->attributes.end() && !src_it->second.empty())
+                src_it->second = resolve(base, src_it->second);
+            cur_parent->children.push_back(img_node);
+            img_node->parent = cur_parent;
+            doc->registerNode(img_node.get());
+            if (!img_node->id.empty()) doc->id_map[img_node->id] = img_node.get();
+
+            // Apply CSS cascade for img sizing/box model
+            {
+                BoxModel bm;
+                for (const auto& r : css) {
+                    if (!dom_sel_matches(r.sel, img_node.get())) continue;
+                    apply_box(r.decls, bm);
+                    // object-fit
+                    { auto s = tolower_s(prop_val(r.decls, "object-fit"));
+                      if      (s == "fill")       img_node->object_fit = 0;
+                      else if (s == "contain")    img_node->object_fit = 1;
+                      else if (s == "cover")      img_node->object_fit = 2;
+                      else if (s == "scale-down") img_node->object_fit = 3;
+                      else if (s == "none")       img_node->object_fit = 4; }
                 }
+                // Inline style overrides
+                auto style_it = img_node->attributes.find("style");
+                if (style_it != img_node->attributes.end() && !style_it->second.empty()) {
+                    apply_box(style_it->second, bm);
+                    auto s = tolower_s(prop_val(style_it->second, "object-fit"));
+                    if      (s == "fill")       img_node->object_fit = 0;
+                    else if (s == "contain")    img_node->object_fit = 1;
+                    else if (s == "cover")      img_node->object_fit = 2;
+                    else if (s == "scale-down") img_node->object_fit = 3;
+                    else if (s == "none")       img_node->object_fit = 4;
+                }
+                // Transfer box model to node
+                for (int j = 0; j < 4; ++j) img_node->margin[j] = bm.margin[j];
+                for (int j = 0; j < 4; ++j) img_node->padding[j] = bm.padding[j];
+                if (bm.width > 0) img_node->width = bm.width;
+                if (bm.max_width > 0) img_node->max_width = bm.max_width;
+                if (bm.height > 0) img_node->height = bm.height;
+                if (bm.min_width >= 0) img_node->min_width = bm.min_width;
+                if (bm.min_height >= 0) img_node->min_height = bm.min_height;
+                if (bm.max_height >= 0) img_node->max_height = bm.max_height;
+                if (bm.width_pct >= 0) img_node->width_pct = bm.width_pct;
+                if (bm.height_pct >= 0) img_node->height_pct = bm.height_pct;
+                for (int j = 0; j < 4; ++j) img_node->border_width[j] = bm.border_width[j];
+                img_node->border_radius = bm.border_radius;
+                img_node->border_color = bm.border_color;
+                img_node->border_style = bm.border_style;
+                img_node->halign_center = bm.halign_center;
+                img_node->display = static_cast<DOMNode::Display>(static_cast<int>(bm.display));
             }
             continue;
         }
@@ -3703,6 +3754,10 @@ static void render_node(AppState* st, TabState* tab, DOMNode* node, int gen,
             }
         }
 
+        gtk_widget_set_hexpand(da, FALSE);
+        gtk_widget_set_vexpand(da, FALSE);
+        gtk_widget_set_halign(da, GTK_ALIGN_START);
+        gtk_widget_set_valign(da, GTK_ALIGN_START);
         gtk_box_pack_start(GTK_BOX(cur), da, FALSE, FALSE, 2);
         gtk_widget_show(da);
         g_object_ref(da);

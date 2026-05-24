@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head><title>Simple IMG Test</title></head>
+<body>
+<div id="d1">hello</div>
+<img id="myimg" src="test_img_200x100.png">
+<div id="out"></div>
+<script>
+var d = document.getElementById("d1");
+console.log("div d1 = " + d);
+var im = document.getElementById("myimg");
+console.log("img myimg = " + im);
+if (im) {
+  console.log("img offsetWidth=" + im.offsetWidth + " offsetHeight=" + im.offsetHeight);
+} else {
+  console.log("ERROR: getElementById('myimg') returned null");
+}
+// Also test by tagName
+var imgs = document.getElementsByTagName("img");
+console.log("imgs count = " + imgs.length);
+for (var i = 0; i < imgs.length; i++) {
+  console.log("img[" + i + "] id=" + imgs[i].id + " w=" + imgs[i].offsetWidth + " h=" + imgs[i].offsetHeight);
+}
+</script>
+</body>
+</html>
