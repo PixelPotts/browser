@@ -15,6 +15,7 @@
 #include "js_engine.h"
 #include "js_event.h"
 #include <unordered_map>
+#include <unordered_set>
 
 // ---- Canvas state (shared with js_bindings.cpp) ----
 struct CanvasState {
@@ -3499,6 +3500,332 @@ static void render_node(AppState* st, TabState* tab, DOMNode* node, int gen,
                 });
             }).detach();
         }
+        return;
+    }
+
+    // <table> element — render as GtkGrid for proper table layout
+    if (node->tag_name == "table") {
+        float_rows.back() = nullptr;
+        GtkWidget* cur = cstack.back();
+        BoxModel bm = dom_node_to_boxmodel(node);
+
+        // Create outer box for table styling (borders, bg, margins)
+        GtkWidget* table_outer = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+        {
+            std::string props;
+            if (!bm.bg_color.empty() && !has_css_var(bm.bg_color))
+                props += "background-color: " + bm.bg_color + "; ";
+            bool has_border = bm.border_width[0]||bm.border_width[1]||bm.border_width[2]||bm.border_width[3];
+            if (has_border) {
+                std::string bstyle = bm.border_style.empty() ? "solid" : bm.border_style;
+                std::string bcolor = bm.border_color.empty() ? "currentColor" : bm.border_color;
+                if (!has_css_var(bcolor))
+                    props += "border: " + std::to_string(bm.border_width[0]) + "px " + bstyle + " " + bcolor + "; ";
+            }
+            if (!props.empty()) {
+                GtkCssProvider* cp = gtk_css_provider_new();
+                gtk_css_provider_load_from_data(cp, ("box { " + props + "}").c_str(), -1, nullptr);
+                gtk_style_context_add_provider(gtk_widget_get_style_context(table_outer),
+                    GTK_STYLE_PROVIDER(cp), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+                g_object_unref(cp);
+            }
+        }
+        gtk_widget_set_margin_top(table_outer, std::max(0, bm.margin[0]));
+        gtk_widget_set_margin_end(table_outer, std::max(0, bm.margin[1]));
+        gtk_widget_set_margin_bottom(table_outer, std::max(0, bm.margin[2]));
+        gtk_widget_set_margin_start(table_outer, std::max(0, bm.margin[3]));
+        if (bm.width > 0) {
+            gtk_widget_set_size_request(table_outer, bm.width, -1);
+            gtk_widget_set_hexpand(table_outer, FALSE);
+        } else {
+            gtk_widget_set_hexpand(table_outer, TRUE);
+        }
+        if (bm.halign_center) gtk_widget_set_halign(table_outer, GTK_ALIGN_CENTER);
+        gtk_box_pack_start(GTK_BOX(cur), table_outer, FALSE, FALSE, 0);
+        gtk_widget_show(table_outer);
+
+        // Check for width attribute
+        int table_width = bm.width;
+        if (table_width <= 0) {
+            auto wit = node->attributes.find("width");
+            if (wit != node->attributes.end()) {
+                try { table_width = std::stoi(wit->second); } catch(...) {}
+                if (table_width > 0) {
+                    gtk_widget_set_size_request(table_outer, table_width, -1);
+                    gtk_widget_set_hexpand(table_outer, FALSE);
+                }
+            }
+        }
+        // Check for align=center
+        {
+            auto ait = node->attributes.find("align");
+            if (ait != node->attributes.end() && ait->second == "center")
+                gtk_widget_set_halign(table_outer, GTK_ALIGN_CENTER);
+        }
+
+        // Check for cellpadding/cellspacing/border attributes
+        int cellpadding = 1, cellspacing = 2;
+        {
+            auto cp_it = node->attributes.find("cellpadding");
+            if (cp_it != node->attributes.end()) {
+                try { cellpadding = std::stoi(cp_it->second); } catch(...) {}
+            }
+            auto cs_it = node->attributes.find("cellspacing");
+            if (cs_it != node->attributes.end()) {
+                try { cellspacing = std::stoi(cs_it->second); } catch(...) {}
+            }
+        }
+        // Check table border attribute
+        int table_border = 0;
+        {
+            auto b_it = node->attributes.find("border");
+            if (b_it != node->attributes.end()) {
+                try { table_border = std::stoi(b_it->second); } catch(...) { table_border = 1; }
+            }
+        }
+        // Check bgcolor attribute
+        {
+            auto bg_it = node->attributes.find("bgcolor");
+            if (bg_it != node->attributes.end() && bm.bg_color.empty()) {
+                std::string bgcol = bg_it->second;
+                GtkCssProvider* cp = gtk_css_provider_new();
+                gtk_css_provider_load_from_data(cp, ("box { background-color: " + bgcol + "; }").c_str(), -1, nullptr);
+                gtk_style_context_add_provider(gtk_widget_get_style_context(table_outer),
+                    GTK_STYLE_PROVIDER(cp), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+                g_object_unref(cp);
+            }
+        }
+
+        // Create GtkGrid
+        GtkWidget* grid = gtk_grid_new();
+        gtk_grid_set_row_spacing(GTK_GRID(grid), cellspacing);
+        gtk_grid_set_column_spacing(GTK_GRID(grid), cellspacing);
+        gtk_widget_set_hexpand(grid, TRUE);
+        gtk_box_pack_start(GTK_BOX(table_outer), grid, FALSE, FALSE, 0);
+        gtk_widget_show(grid);
+
+        // Store node_id
+        g_object_set_data(G_OBJECT(table_outer), "dom_node_id", GUINT_TO_POINTER(node->node_id));
+        tab->node_widget_map[node->node_id] = table_outer;
+
+        // Collect all <tr> rows from thead/tbody/tfoot or direct children
+        std::vector<DOMNode*> all_rows;
+        for (auto& child : node->children) {
+            if (child->tag_name == "tr") {
+                all_rows.push_back(child.get());
+            } else if (child->tag_name == "thead" || child->tag_name == "tbody" ||
+                       child->tag_name == "tfoot" || child->tag_name == "colgroup") {
+                for (auto& gc : child->children) {
+                    if (gc->tag_name == "tr") all_rows.push_back(gc.get());
+                }
+            } else if (child->tag_name == "caption") {
+                // Render caption above the grid
+                GtkWidget* cap_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+                gtk_widget_set_hexpand(cap_box, TRUE);
+                // Insert caption before the grid
+                gtk_box_pack_start(GTK_BOX(table_outer), cap_box, FALSE, FALSE, 0);
+                gtk_box_reorder_child(GTK_BOX(table_outer), cap_box, 0);
+                gtk_widget_show(cap_box);
+                cstack.push_back(cap_box);
+                float_rows.push_back(nullptr);
+                for (auto& cc : child->children)
+                    render_node(st, tab, cc.get(), gen, cstack, float_rows);
+                cstack.pop_back();
+                float_rows.pop_back();
+            }
+        }
+
+        // Track occupied cells for rowspan support
+        // occupied[row*1000+col] = true if cell is occupied by a rowspan from above
+        std::unordered_set<int> occupied;
+
+        int row_idx = 0;
+        for (auto* tr_node : all_rows) {
+            int col_idx = 0;
+            // Skip columns occupied by rowspan from previous rows
+            while (occupied.count(row_idx * 1000 + col_idx)) col_idx++;
+
+            // Get row bgcolor
+            std::string row_bgcolor;
+            {
+                auto bg_it = tr_node->attributes.find("bgcolor");
+                if (bg_it != tr_node->attributes.end()) row_bgcolor = bg_it->second;
+            }
+            BoxModel tr_bm = dom_node_to_boxmodel(tr_node);
+            if (!tr_bm.bg_color.empty()) row_bgcolor = tr_bm.bg_color;
+
+            for (auto& cell_child : tr_node->children) {
+                if (cell_child->tag_name != "td" && cell_child->tag_name != "th") continue;
+
+                // Skip occupied columns
+                while (occupied.count(row_idx * 1000 + col_idx)) col_idx++;
+
+                int colspan = 1, rowspan = 1;
+                {
+                    auto cs_it = cell_child->attributes.find("colspan");
+                    if (cs_it != cell_child->attributes.end()) {
+                        try { colspan = std::stoi(cs_it->second); } catch(...) {}
+                        if (colspan < 1) colspan = 1;
+                    }
+                    auto rs_it = cell_child->attributes.find("rowspan");
+                    if (rs_it != cell_child->attributes.end()) {
+                        try { rowspan = std::stoi(rs_it->second); } catch(...) {}
+                        if (rowspan < 1) rowspan = 1;
+                    }
+                }
+
+                // Mark cells as occupied for rowspan
+                for (int r = 0; r < rowspan; r++)
+                    for (int c = 0; c < colspan; c++)
+                        occupied.insert((row_idx + r) * 1000 + (col_idx + c));
+
+                // Create cell container
+                GtkWidget* cell_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+                gtk_widget_set_hexpand(cell_box, TRUE);
+                gtk_widget_set_vexpand(cell_box, FALSE);
+
+                // Apply cell styling
+                BoxModel cell_bm = dom_node_to_boxmodel(cell_child.get());
+                std::string cell_css;
+                std::string cell_bg;
+                // Priority: cell CSS bg > cell bgcolor attr > row bg > table bg
+                if (!cell_bm.bg_color.empty()) cell_bg = cell_bm.bg_color;
+                else {
+                    auto cbg = cell_child->attributes.find("bgcolor");
+                    if (cbg != cell_child->attributes.end()) cell_bg = cbg->second;
+                    else if (!row_bgcolor.empty()) cell_bg = row_bgcolor;
+                }
+                if (!cell_bg.empty() && !has_css_var(cell_bg))
+                    cell_css += "background-color: " + cell_bg + "; ";
+
+                // Cell border from table border attribute or CSS
+                if (table_border > 0) {
+                    cell_css += "border: " + std::to_string(table_border) + "px solid #666; ";
+                }
+                bool cell_has_border = cell_bm.border_width[0]||cell_bm.border_width[1]||cell_bm.border_width[2]||cell_bm.border_width[3];
+                if (cell_has_border) {
+                    std::string bstyle = cell_bm.border_style.empty() ? "solid" : cell_bm.border_style;
+                    std::string bcolor = cell_bm.border_color.empty() ? "currentColor" : cell_bm.border_color;
+                    if (!has_css_var(bcolor))
+                        cell_css += "border: " + std::to_string(cell_bm.border_width[0]) + "px " + bstyle + " " + bcolor + "; ";
+                }
+
+                if (!cell_css.empty()) {
+                    GtkCssProvider* cp = gtk_css_provider_new();
+                    gtk_css_provider_load_from_data(cp, ("box { " + cell_css + "}").c_str(), -1, nullptr);
+                    gtk_style_context_add_provider(gtk_widget_get_style_context(cell_box),
+                        GTK_STYLE_PROVIDER(cp), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+                    g_object_unref(cp);
+                }
+
+                // Cell padding
+                int cp_val = cellpadding;
+                if (cell_bm.padding[0] || cell_bm.padding[1] || cell_bm.padding[2] || cell_bm.padding[3]) {
+                    gtk_widget_set_margin_top(cell_box, cell_bm.padding[0]);
+                    gtk_widget_set_margin_end(cell_box, cell_bm.padding[1]);
+                    gtk_widget_set_margin_bottom(cell_box, cell_bm.padding[2]);
+                    gtk_widget_set_margin_start(cell_box, cell_bm.padding[3]);
+                } else {
+                    gtk_widget_set_margin_top(cell_box, cp_val);
+                    gtk_widget_set_margin_end(cell_box, cp_val);
+                    gtk_widget_set_margin_bottom(cell_box, cp_val);
+                    gtk_widget_set_margin_start(cell_box, cp_val);
+                }
+
+                // Cell width from attribute or CSS
+                int cell_w = cell_bm.width;
+                if (cell_w <= 0) {
+                    auto cw_it = cell_child->attributes.find("width");
+                    if (cw_it != cell_child->attributes.end()) {
+                        std::string ws = cw_it->second;
+                        // Handle percentage widths
+                        if (!ws.empty() && ws.back() == '%' && table_width > 0) {
+                            try {
+                                int pct = std::stoi(ws.substr(0, ws.size()-1));
+                                cell_w = table_width * pct / 100;
+                            } catch(...) {}
+                        } else {
+                            try { cell_w = std::stoi(ws); } catch(...) {}
+                        }
+                    }
+                }
+                if (cell_w > 0) {
+                    gtk_widget_set_size_request(cell_box, cell_w, -1);
+                    gtk_widget_set_hexpand(cell_box, FALSE);
+                }
+
+                // Cell height
+                int cell_h = cell_bm.height;
+                if (cell_h <= 0) {
+                    auto ch_it = cell_child->attributes.find("height");
+                    if (ch_it != cell_child->attributes.end()) {
+                        try { cell_h = std::stoi(ch_it->second); } catch(...) {}
+                    }
+                }
+                if (cell_h > 0) {
+                    gtk_widget_set_size_request(cell_box,
+                        cell_w > 0 ? cell_w : -1, cell_h);
+                }
+
+                // Vertical alignment
+                {
+                    auto va_it = cell_child->attributes.find("valign");
+                    std::string va = va_it != cell_child->attributes.end() ? va_it->second : "top";
+                    if (va == "middle" || va == "center") gtk_widget_set_valign(cell_box, GTK_ALIGN_CENTER);
+                    else if (va == "bottom") gtk_widget_set_valign(cell_box, GTK_ALIGN_END);
+                    else gtk_widget_set_valign(cell_box, GTK_ALIGN_START);
+                }
+
+                // Horizontal alignment
+                {
+                    auto ha_it = cell_child->attributes.find("align");
+                    if (ha_it != cell_child->attributes.end()) {
+                        if (ha_it->second == "center") {
+                            cell_child->text_align_computed = 1;
+                        } else if (ha_it->second == "right") {
+                            cell_child->text_align_computed = 2;
+                        }
+                    }
+                }
+
+                // th defaults to bold and centered
+                if (cell_child->tag_name == "th") {
+                    if (cell_child->fw_computed <= 0) cell_child->fw_computed = PANGO_WEIGHT_BOLD;
+                    if (cell_child->text_align_computed < 0) cell_child->text_align_computed = 1;
+                }
+
+                // Attach to grid
+                gtk_grid_attach(GTK_GRID(grid), cell_box, col_idx, row_idx, colspan, rowspan);
+                gtk_widget_show(cell_box);
+
+                // Store node_id
+                g_object_set_data(G_OBJECT(cell_box), "dom_node_id", GUINT_TO_POINTER(cell_child->node_id));
+                tab->node_widget_map[cell_child->node_id] = cell_box;
+
+                // Render cell contents
+                cstack.push_back(cell_box);
+                float_rows.push_back(nullptr);
+                for (auto& cc : cell_child->children)
+                    render_node(st, tab, cc.get(), gen, cstack, float_rows);
+                cstack.pop_back();
+                float_rows.pop_back();
+
+                col_idx += colspan;
+            }
+            row_idx++;
+        }
+
+        return;
+    }
+
+    // Skip table sub-elements that are handled by the table renderer above
+    if (node->tag_name == "tr" || node->tag_name == "td" || node->tag_name == "th" ||
+        node->tag_name == "thead" || node->tag_name == "tbody" || node->tag_name == "tfoot" ||
+        node->tag_name == "colgroup" || node->tag_name == "col" || node->tag_name == "caption") {
+        // These should only appear inside a <table>, which handles them.
+        // If they appear outside a table context, render children inline.
+        for (auto& child : node->children)
+            render_node(st, tab, child.get(), gen, cstack, float_rows);
         return;
     }
 
