@@ -3251,7 +3251,23 @@ static void layout_and_paint(TabState* tab) {
     if (tab->drawing_area) {
         int h = std::max(1, (int)tab->content_height);
         gtk_widget_set_size_request(tab->drawing_area, -1, h);
+        fprintf(stderr, "[LAYOUT] queue_draw: da=%p visible=%d mapped=%d realized=%d h=%d dl=%zu\n",
+                tab->drawing_area,
+                gtk_widget_get_visible(tab->drawing_area),
+                gtk_widget_get_mapped(tab->drawing_area),
+                gtk_widget_get_realized(tab->drawing_area),
+                h, tab->display_list.size());
         gtk_widget_queue_draw(tab->drawing_area);
+        // Also queue redraw on the viewport/scroll parent to force propagation
+        GtkWidget* parent = gtk_widget_get_parent(tab->drawing_area);
+        if (parent) gtk_widget_queue_draw(parent);
+        // Force invalidation via GDK window
+        GdkWindow* gdkwin = gtk_widget_get_window(tab->drawing_area);
+        if (gdkwin) {
+            gdk_window_invalidate_rect(gdkwin, NULL, TRUE);
+            gdk_window_process_updates(gdkwin, TRUE);
+            fprintf(stderr, "[LAYOUT] forced GDK window invalidation\n");
+        }
     }
 }
 
@@ -5486,7 +5502,11 @@ static void fetch_page(AppState* st, TabState* tab, std::string url, int gen) {
         }
 
         // Redraw tab bar for updated title
-        if (st->tab_bar_area) gtk_widget_queue_draw(st->tab_bar_area);
+        if (st->tab_bar_area) {
+            gtk_widget_queue_draw(st->tab_bar_area);
+            GdkWindow* tbwin = gtk_widget_get_window(st->tab_bar_area);
+            if (tbwin) gdk_window_process_updates(tbwin, TRUE);
+        }
 
         // Run C++ DOM probes if --test mode
         if (g_test_mode) {
