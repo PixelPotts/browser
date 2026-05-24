@@ -1639,6 +1639,25 @@ static JSValue js_doc_createTextNode(JSContext* ctx, JSValueConst this_val,
     return js_wrap_node(ctx, node.get());
 }
 
+// document.write / document.writeln — no-op after initial parse (matches real browser behavior)
+static JSValue js_doc_write(JSContext* ctx, JSValueConst this_val,
+                             int argc, JSValueConst* argv) {
+    // After the initial parse, document.write is a no-op in real browsers too
+    // (it would normally wipe the document if called after load, but we just ignore it)
+    std::string content;
+    for (int i = 0; i < argc; i++) {
+        const char* s = JS_ToCString(ctx, argv[i]);
+        if (s) { content += s; JS_FreeCString(ctx, s); }
+    }
+    fprintf(stderr, "[document.write] Called with %zu bytes (no-op after parse)\n", content.size());
+    return JS_UNDEFINED;
+}
+
+static JSValue js_doc_writeln(JSContext* ctx, JSValueConst this_val,
+                               int argc, JSValueConst* argv) {
+    return js_doc_write(ctx, this_val, argc, argv);
+}
+
 static JSValue js_doc_get_body(JSContext* ctx, JSValueConst this_val) {
     if (!g_js_engine || !g_js_engine->document || !g_js_engine->document->body)
         return JS_NULL;
@@ -3009,6 +3028,10 @@ void js_bindings_init(JSEngine* engine) {
         JS_NewCFunction(ctx, js_doc_getElementsByTagName, "getElementsByTagName", 1));
     JS_SetPropertyStr(ctx, doc_obj, "getElementsByClassName",
         JS_NewCFunction(ctx, js_doc_getElementsByClassName, "getElementsByClassName", 1));
+    JS_SetPropertyStr(ctx, doc_obj, "write",
+        JS_NewCFunction(ctx, js_doc_write, "write", 1));
+    JS_SetPropertyStr(ctx, doc_obj, "writeln",
+        JS_NewCFunction(ctx, js_doc_writeln, "writeln", 1));
 
     JS_DefinePropertyGetSet(ctx, doc_obj,
         JS_NewAtom(ctx, "body"),

@@ -189,10 +189,70 @@ JSEngine* g_js_engine = nullptr;
 // ---- Helper: build message string from JS args ----
 
 static std::string js_args_to_string(JSContext* ctx, int argc, JSValueConst* argv) {
+    if (argc == 0) return "";
+    // Check if first arg is a format string with %c/%s/%d/%i/%f/%o specifiers
+    const char* fmt = JS_ToCString(ctx, argv[0]);
+    if (!fmt) return "";
+    std::string fmt_str(fmt);
+    JS_FreeCString(ctx, fmt);
+
+    // If no format specifiers or only one arg, use simple concatenation
+    bool has_format = false;
+    for (size_t i = 0; i < fmt_str.size() - 1; i++) {
+        if (fmt_str[i] == '%' && strchr("csdifoCSSo", fmt_str[i+1])) { has_format = true; break; }
+    }
+    if (!has_format || argc <= 1) {
+        std::string msg = fmt_str;
+        for (int i = 1; i < argc; i++) {
+            msg += ' ';
+            const char* str = JS_ToCString(ctx, argv[i]);
+            if (str) { msg += str; JS_FreeCString(ctx, str); }
+        }
+        return msg;
+    }
+
+    // Process format string: substitute %s/%d/%i/%f/%o with args, skip %c + its style arg
     std::string msg;
-    for (int i = 0; i < argc; i++) {
-        if (i > 0) msg += ' ';
-        const char* str = JS_ToCString(ctx, argv[i]);
+    int arg_idx = 1;
+    for (size_t i = 0; i < fmt_str.size(); i++) {
+        if (fmt_str[i] == '%' && i + 1 < fmt_str.size()) {
+            char spec = fmt_str[i + 1];
+            if (spec == 'c') {
+                // Skip %c and consume the style argument (discard it)
+                i++;
+                arg_idx++;
+            } else if (spec == 's' && arg_idx < argc) {
+                const char* s = JS_ToCString(ctx, argv[arg_idx++]);
+                if (s) { msg += s; JS_FreeCString(ctx, s); }
+                i++;
+            } else if ((spec == 'd' || spec == 'i') && arg_idx < argc) {
+                int32_t val = 0;
+                JS_ToInt32(ctx, &val, argv[arg_idx++]);
+                msg += std::to_string(val);
+                i++;
+            } else if (spec == 'f' && arg_idx < argc) {
+                double val = 0;
+                JS_ToFloat64(ctx, &val, argv[arg_idx++]);
+                msg += std::to_string(val);
+                i++;
+            } else if ((spec == 'o' || spec == 'O') && arg_idx < argc) {
+                const char* s = JS_ToCString(ctx, argv[arg_idx++]);
+                if (s) { msg += s; JS_FreeCString(ctx, s); }
+                i++;
+            } else if (spec == '%') {
+                msg += '%';
+                i++;
+            } else {
+                msg += fmt_str[i];
+            }
+        } else {
+            msg += fmt_str[i];
+        }
+    }
+    // Append remaining args
+    for (; arg_idx < argc; arg_idx++) {
+        msg += ' ';
+        const char* str = JS_ToCString(ctx, argv[arg_idx]);
         if (str) { msg += str; JS_FreeCString(ctx, str); }
     }
     return msg;
@@ -264,16 +324,40 @@ static JSValue js_alert(JSContext* ctx, JSValueConst this_val,
 
 // ---- setTimeout / setInterval / clearTimeout / clearInterval ----
 
+// Helper: wrap a string argument into a function for setTimeout/setInterval
+static JSValue js_wrap_string_as_func(JSContext* ctx, const char* code) {
+    // Create: (function(){ eval(code) })  — mirrors browser behavior
+    std::string wrapper = "(function(){ " + std::string(code) + "\n})";
+    JSValue func = JS_Eval(ctx, wrapper.c_str(), wrapper.size(), "<setTimeout>", JS_EVAL_TYPE_GLOBAL);
+    if (JS_IsException(func)) {
+        JSValue exc = JS_GetException(ctx);
+        const char* s = JS_ToCString(ctx, exc);
+        if (s) { fprintf(stderr, "[TIMER] Failed to compile string arg: %s\n", s); JS_FreeCString(ctx, s); }
+        JS_FreeValue(ctx, exc);
+        return JS_UNDEFINED;
+    }
+    return func;
+}
+
 static JSValue js_set_timeout(JSContext* ctx, JSValueConst this_val,
                                int argc, JSValueConst* argv) {
     if (argc < 1 || !g_js_engine) return JS_UNDEFINED;
     JSValue func = argv[0];
-    if (!JS_IsFunction(ctx, func)) return JS_UNDEFINED;
+    bool owns_func = false;
+    if (!JS_IsFunction(ctx, func)) {
+        // Support string arguments: setTimeout("code()", delay)
+        const char* str = JS_ToCString(ctx, func);
+        if (!str) return JS_UNDEFINED;
+        func = js_wrap_string_as_func(ctx, str);
+        JS_FreeCString(ctx, str);
+        if (JS_IsUndefined(func)) return JS_UNDEFINED;
+        owns_func = true;
+    }
     int delay = 0;
     if (argc >= 2) JS_ToInt32(ctx, &delay, argv[1]);
     if (delay < 0) delay = 0;
 
-    uint32_t id = g_js_engine->setTimeout(JS_DupValue(ctx, func), delay);
+    uint32_t id = g_js_engine->setTimeout(owns_func ? func : JS_DupValue(ctx, func), delay);
     fprintf(stderr, "[TIMER] setTimeout registered id=%u delay=%dms\n", id, delay);
     return JS_NewInt32(ctx, (int32_t)id);
 }
@@ -282,12 +366,21 @@ static JSValue js_set_interval(JSContext* ctx, JSValueConst this_val,
                                 int argc, JSValueConst* argv) {
     if (argc < 1 || !g_js_engine) return JS_UNDEFINED;
     JSValue func = argv[0];
-    if (!JS_IsFunction(ctx, func)) return JS_UNDEFINED;
+    bool owns_func = false;
+    if (!JS_IsFunction(ctx, func)) {
+        // Support string arguments: setInterval("code()", delay)
+        const char* str = JS_ToCString(ctx, func);
+        if (!str) return JS_UNDEFINED;
+        func = js_wrap_string_as_func(ctx, str);
+        JS_FreeCString(ctx, str);
+        if (JS_IsUndefined(func)) return JS_UNDEFINED;
+        owns_func = true;
+    }
     int interval = 0;
     if (argc >= 2) JS_ToInt32(ctx, &interval, argv[1]);
     if (interval < 1) interval = 1;
 
-    uint32_t id = g_js_engine->setInterval(JS_DupValue(ctx, func), interval);
+    uint32_t id = g_js_engine->setInterval(owns_func ? func : JS_DupValue(ctx, func), interval);
     return JS_NewInt32(ctx, (int32_t)id);
 }
 
@@ -3059,29 +3152,84 @@ if (typeof window.adsbygoogle === 'undefined') window.adsbygoogle = [];
 if (typeof window.__google_ad_request_done === 'undefined') window.__google_ad_request_done = function() {};
 if (typeof window._gaq === 'undefined') window._gaq = { push: function() {} };
 
-// Piano/Tinypass SDK stubs (used by media sites)
-// tp starts as array; tinypass SDK replaces it. Use defineProperty to catch access after replacement.
-if (typeof window.tp === 'undefined') window.tp = [];
-// Set properties on the initial tp array
-window.tp.piano = { id: { show: function(){}, logout: function(){}, getUser: function(){ return null; } } };
-window.tp.pianoId = { show: function(){}, logout: function(){}, getUser: function(){ return null; }, isUserValid: function(){ return false; } };
-window.tp.offer = { show: function(){}, close: function(){} };
-window.tp.experience = { execute: function(){}, init: function(){} };
-window.tp.user = { isUserValid: function(){ return false; }, getProvider: function(){ return ''; } };
-window.tp.aid = '';
-window.tp.init = function() {};
-// Intercept tp replacement: when SDK sets window.tp = newObj, ensure piano property exists
+// Piano/Tinypass SDK stubs (used by media sites like hollywoodreporter.com)
+// tp is a command queue: sites push ["method", args...] tuples before SDK loads.
+// When SDK loads, it replaces window.tp with its own object and replays the queue.
 (function() {
-    var _origTp = window.tp;
-    var _pianoDefault = { id: { show: function(){}, logout: function(){}, getUser: function(){ return null; } } };
-    // Periodically ensure tp.piano exists (handles SDK replacing tp)
+    var _pianoStub = {
+        id: { show: function(){}, logout: function(){}, getUser: function(){ return null; }, init: function(){} },
+        initialize: function() {},
+        enableExternalCheckout: function() {},
+        setExternalCheckoutURL: function() {}
+    };
+    var _pianoIdStub = {
+        show: function(){}, logout: function(){}, getUser: function(){ return null; },
+        isUserValid: function(){ return false; }, init: function(){},
+        initialize: function() {}
+    };
+    function _makeTp() {
+        var tp = {
+            push: function() {
+                // Process command tuples: tp.push(["method", args...])
+                for (var i = 0; i < arguments.length; i++) {
+                    var cmd = arguments[i];
+                    if (typeof cmd === 'function') { try { cmd(); } catch(e){} }
+                    else if (Array.isArray(cmd) && cmd.length > 0) {
+                        var method = cmd[0];
+                        if (typeof tp[method] === 'function') {
+                            try { tp[method].apply(tp, cmd.slice(1)); } catch(e){}
+                        }
+                    }
+                }
+            },
+            piano: _pianoStub,
+            pianoId: _pianoIdStub,
+            offer: { show: function(){}, close: function(){}, init: function(){} },
+            experience: { execute: function(){}, init: function(){}, show: function(){} },
+            user: { isUserValid: function(){ return false; }, getProvider: function(){ return ''; } },
+            aid: '',
+            init: function() {},
+            initialize: function() {},
+            enableExternalCheckout: function() {},
+            setExternalCheckoutURL: function() {},
+            setCustomVariable: function() {},
+            setContentCreated: function() {},
+            setContentAuthor: function() {},
+            setContentSection: function() {},
+            setTags: function() {},
+            setZone: function() {},
+            setDebug: function() {},
+            setUsePianoIdUserProvider: function() {},
+            setUseTinypassAccounts: function() {},
+            setAid: function(aid) { tp.aid = aid; },
+            setSandbox: function() {},
+            setEndpoint: function() {},
+            buildExperience: function() { return { show: function(){}, execute: function(){} }; },
+            addHandler: function() {},
+            getUser: function() { return null; },
+            fetchCustomFormParams: function(cb) { if (cb) cb({}); }
+        };
+        return tp;
+    }
+    if (typeof window.tp === 'undefined' || Array.isArray(window.tp)) {
+        var _pending = Array.isArray(window.tp) ? window.tp.slice() : [];
+        window.tp = _makeTp();
+        // Replay any commands pushed before we initialized
+        for (var i = 0; i < _pending.length; i++) {
+            window.tp.push(_pending[i]);
+        }
+    }
+    // Intercept tp reassignment: ensure piano/pianoId/initialize always exist
     var _checkCount = 0;
     var _timer = setInterval(function() {
-        if (window.tp && typeof window.tp === 'object' && !Array.isArray(window.tp)) {
-            if (!window.tp.piano) window.tp.piano = _pianoDefault;
-            if (!window.tp.pianoId) window.tp.pianoId = { show: function(){}, logout: function(){}, getUser: function(){ return null; }, isUserValid: function(){ return false; } };
+        if (window.tp && typeof window.tp === 'object') {
+            if (!window.tp.piano) window.tp.piano = _pianoStub;
+            if (window.tp.piano && !window.tp.piano.initialize) window.tp.piano.initialize = function(){};
+            if (!window.tp.pianoId) window.tp.pianoId = _pianoIdStub;
+            if (!window.tp.initialize) window.tp.initialize = function(){};
+            if (!window.tp.push) window.tp.push = function(){};
         }
-        if (++_checkCount > 20) clearInterval(_timer);
+        if (++_checkCount > 50) clearInterval(_timer);
     }, 100);
 })();
 
@@ -3090,27 +3238,53 @@ if (typeof window.pbjs === 'undefined') window.pbjs = { que: [], cmd: [], reques
 if (typeof window.apstag === 'undefined') window.apstag = { init: function(){}, fetchBids: function(cfg, cb){ if(cb) cb([]); }, setDisplayBids: function(){}, targetingKeys: function(){ return []; } };
 
 // PMC Piano integration stub (used by theme common.js and wordpress.js)
-if (typeof window.pmcPiano === 'undefined') window.pmcPiano = {};
-if (!window.pmcPiano.callbacks) window.pmcPiano.callbacks = {
-    onInit: function(opts) { if (opts && typeof opts.knownUser === 'function') { try { opts.knownUser(false); } catch(e){} } },
-    onLogin: function() {},
-    onLogout: function() {},
-    onRegistration: function() {}
-};
-if (!window.pmcPiano.piano) window.pmcPiano.piano = {
-    setCallbacks: function() {},
-    reRenderExperiences: function() {},
-    setGA4Config: function() {}
-};
-if (!window.pmcPiano.api) window.pmcPiano.api = {
-    getConversionList: function(cb) { if (cb) cb([]); },
-    getLicenseeData: function(cb) { if (cb) cb({}); }
-};
-if (!window.pmcPiano.wordPressThemes) window.pmcPiano.wordPressThemes = {
-    clickShield: function() {}
-};
-if (!window.pmcPiano.ipAuth) window.pmcPiano.ipAuth = {};
-if (!window.pmcPiano.newsletterForm) window.pmcPiano.newsletterForm = {};
+// Use a function to create a fresh pmcPiano with all required properties
+(function() {
+    var _defaultCallbacks = {
+        onInit: function(opts) { if (opts && typeof opts.knownUser === 'function') { try { opts.knownUser(false); } catch(e){} } },
+        onLogin: function() {},
+        onLogout: function() {},
+        onRegistration: function() {},
+        onExperienceExecute: function() {},
+        onMeterActive: function() {},
+        onMeterExpired: function() {},
+        onShowOffer: function() {},
+        onCheckout: function() {}
+    };
+    var _defaultPiano = {
+        setCallbacks: function() {},
+        reRenderExperiences: function() {},
+        setGA4Config: function() {},
+        initialize: function() {},
+        init: function() {}
+    };
+    var _defaultApi = {
+        getConversionList: function(cb) { if (cb) cb([]); },
+        getLicenseeData: function(cb) { if (cb) cb({}); }
+    };
+    function _ensurePmcPiano() {
+        if (typeof window.pmcPiano === 'undefined' || !window.pmcPiano) window.pmcPiano = {};
+        if (!window.pmcPiano.callbacks) window.pmcPiano.callbacks = _defaultCallbacks;
+        else {
+            // Ensure all callback methods exist even if partially defined
+            for (var k in _defaultCallbacks) {
+                if (!window.pmcPiano.callbacks[k]) window.pmcPiano.callbacks[k] = _defaultCallbacks[k];
+            }
+        }
+        if (!window.pmcPiano.piano) window.pmcPiano.piano = _defaultPiano;
+        if (!window.pmcPiano.api) window.pmcPiano.api = _defaultApi;
+        if (!window.pmcPiano.wordPressThemes) window.pmcPiano.wordPressThemes = { clickShield: function() {} };
+        if (!window.pmcPiano.ipAuth) window.pmcPiano.ipAuth = {};
+        if (!window.pmcPiano.newsletterForm) window.pmcPiano.newsletterForm = {};
+    }
+    _ensurePmcPiano();
+    // Periodically re-ensure (handles wordpress.js overwriting pmcPiano)
+    var _checkCount = 0;
+    var _timer = setInterval(function() {
+        _ensurePmcPiano();
+        if (++_checkCount > 30) clearInterval(_timer);
+    }, 200);
+})();
 
 // BlogherAds stub (PMC ad manager dependency)
 if (typeof window.blogherads === 'undefined') window.blogherads = { adq: [], defineSlot: function(){ return this; }, setSubAdUnitPath: function(){ return this; }, setPageTargeting: function(){ return this; }, display_ads: function(){}, requestAds: function(){}, collapseSlot: function(){}, refreshSlot: function(){} };
@@ -3119,9 +3293,45 @@ if (typeof window.blogherads === 'undefined') window.blogherads = { adq: [], def
 if (typeof window.pmc_adm_gpt === 'undefined') window.pmc_adm_gpt = { display_ads: function(){}, define_ad_slot: function(){}, refresh: function(){}, set_targeting: function(){} };
 
 // CMP / Consent Management stubs
-if (typeof window.__tcfapi === 'undefined') window.__tcfapi = function(cmd, ver, cb) { if (cb) cb({ cmpId: 0, cmpVersion: 0, gdprApplies: false, tcfPolicyVersion: 2, tcString: '', purposeOneTreatment: false, eventStatus: 'tcloaded' }, true); };
+// Full TCF v2 API with addEventListener support (prevents consent timeout errors)
+if (typeof window.__tcfapi === 'undefined') {
+    var _tcfListeners = {};
+    var _tcfListenerId = 0;
+    var _tcfData = {
+        cmpId: 10, cmpVersion: 2, gdprApplies: false, tcfPolicyVersion: 2,
+        tcString: '', purposeOneTreatment: false, eventStatus: 'tcloaded',
+        cmpStatus: 'loaded', isServiceSpecific: true, useNonStandardTexts: false,
+        publisherCC: 'US', purposeConsents: {}, purposeLegitimateInterests: {},
+        vendorConsents: {}, vendorLegitimateInterests: {},
+        specialFeatureOptins: {}, listenerId: null
+    };
+    window.__tcfapi = function(cmd, ver, cb, param) {
+        if (cmd === 'addEventListener') {
+            var id = ++_tcfListenerId;
+            _tcfListeners[id] = cb;
+            var data = Object.assign({}, _tcfData, { listenerId: id, eventStatus: 'tcloaded' });
+            if (cb) cb(data, true);
+        } else if (cmd === 'removeEventListener') {
+            if (param && _tcfListeners[param]) delete _tcfListeners[param];
+            if (cb) cb(true);
+        } else if (cmd === 'getTCData') {
+            if (cb) cb(Object.assign({}, _tcfData), true);
+        } else if (cmd === 'ping') {
+            if (cb) cb({ gdprApplies: false, cmpLoaded: true, cmpStatus: 'loaded', apiVersion: '2.0', cmpId: 10 });
+        } else {
+            if (cb) cb(Object.assign({}, _tcfData), true);
+        }
+    };
+    // Also set up the __tcfapiLocator iframe marker (some CMPs check for it)
+    window.__tcfapi.a = [];
+}
 if (typeof window.__uspapi === 'undefined') window.__uspapi = function(cmd, ver, cb) { if (cb) cb({ version: 1, uspString: '1---' }, true); };
 if (typeof window.__cmp === 'undefined') window.__cmp = function(cmd, arg, cb) { if (cb) cb({ consentData: '', gdprApplies: false }, true); };
+// Google consent mode stub
+if (typeof window.gtag === 'undefined') {
+    window.dataLayer = window.dataLayer || [];
+    window.gtag = function() { window.dataLayer.push(arguments); };
+}
 
 // picturefill stub (responsive images library)
 if (typeof window.picturefill === 'undefined') window.picturefill = function() {};
