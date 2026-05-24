@@ -372,6 +372,10 @@ static int resolve_text_align(LayoutBox* box) {
     return 0;
 }
 
+// ---- Intrinsic width measurement ----
+
+static float measure_intrinsic_width(LayoutBox* box, PangoContext* pango_ctx);
+
 // ---- Block Formatting Context layout ----
 
 static void layout_block(LayoutBox* box, float containing_width, float containing_height,
@@ -379,6 +383,91 @@ static void layout_block(LayoutBox* box, float containing_width, float containin
 static void layout_inline(LayoutBox* box, float containing_width, PangoContext* pango_ctx);
 static void layout_flex(LayoutBox* box, float containing_width, float containing_height,
                          PangoContext* pango_ctx);
+
+// Measure the max-content (intrinsic) width of a box
+// This is the minimum width at which the box can render without overflow
+static float measure_intrinsic_width(LayoutBox* box, PangoContext* pango_ctx) {
+    if (!box) return 0;
+
+    // Explicit CSS width wins
+    if (box->dom_node) {
+        float w = resolve_width(box->dom_node, 0);
+        if (w >= 0) {
+            if (box->dom_node->box_sizing == 1) {
+                // border-box: w already includes padding+border
+                return w;
+            }
+            return w + box->padding.horizontal() + box->border.horizontal();
+        }
+    }
+
+    float max_child_w = 0;
+
+    // Check if all children are inline
+    bool all_inline = true;
+    for (auto& child : box->children) {
+        if (is_block_level(child->type) || child->type == LayoutBoxType::Replaced) {
+            all_inline = false;
+            break;
+        }
+    }
+
+    if (all_inline && !box->children.empty()) {
+        // Gather text and measure with no wrapping
+        std::string full_text;
+        std::function<void(LayoutBox*)> gather = [&](LayoutBox* child) {
+            if (child->type == LayoutBoxType::Text) {
+                std::string text = child->text;
+                // Collapse whitespace
+                std::string collapsed;
+                bool in_ws = false;
+                for (char c : text) {
+                    if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
+                        if (!in_ws) { collapsed += ' '; in_ws = true; }
+                    } else {
+                        collapsed += c;
+                        in_ws = false;
+                    }
+                }
+                full_text += collapsed;
+            } else if (child->type == LayoutBoxType::Inline) {
+                for (auto& gc : child->children) gather(gc.get());
+            }
+        };
+        for (auto& child : box->children) gather(child.get());
+
+        // Trim
+        while (!full_text.empty() && full_text.front() == ' ') full_text.erase(full_text.begin());
+        while (!full_text.empty() && full_text.back() == ' ') full_text.pop_back();
+
+        if (!full_text.empty()) {
+            PangoLayout* pl = pango_layout_new(pango_ctx);
+            PangoFontDescription* fd = pango_font_description_new();
+            std::string family = box->font_family.empty() ? "sans-serif" : box->font_family;
+            pango_font_description_set_family(fd, family.c_str());
+            int fs = box->font_size > 0 ? box->font_size : 16;
+            pango_font_description_set_size(fd, fs * PANGO_SCALE);
+            int fw = box->font_weight > 0 ? box->font_weight : 400;
+            pango_font_description_set_weight(fd, (PangoWeight)fw);
+            pango_layout_set_font_description(pl, fd);
+            pango_font_description_free(fd);
+            pango_layout_set_text(pl, full_text.c_str(), -1);
+            // No width constraint - measure natural width
+            int pw, ph;
+            pango_layout_get_pixel_size(pl, &pw, &ph);
+            max_child_w = (float)pw;
+            g_object_unref(pl);
+        }
+    } else {
+        // Block children: max of their intrinsic widths
+        for (auto& child : box->children) {
+            float cw = measure_intrinsic_width(child.get(), pango_ctx);
+            if (cw > max_child_w) max_child_w = cw;
+        }
+    }
+
+    return max_child_w + box->padding.horizontal() + box->border.horizontal();
+}
 
 static void layout_box(LayoutBox* box, float containing_width, float containing_height,
                         PangoContext* pango_ctx) {
@@ -571,6 +660,12 @@ static void layout_inline(LayoutBox* box, float containing_width, PangoContext* 
                 text = collapsed;
             }
 
+            // Ensure whitespace between adjacent text runs
+            if (!full_text.empty() && !text.empty() &&
+                full_text.back() != ' ' && text.front() != ' ') {
+                full_text += ' ';
+            }
+
             int start = (int)full_text.size();
             full_text += text;
             runs.push_back({child->dom_node, start, (int)text.size()});
@@ -725,12 +820,30 @@ static void layout_flex(LayoutBox* box, float containing_width, float containing
     bool is_reverse = (dir == 2 || dir == 3);
     int gap = node ? node->gap : 0;
 
-    // Layout each flex item
+    // Layout each flex item with content-based sizing for row direction
     float total_main = 0;
     for (auto& child : box->children) {
         if (is_row) {
-            // Each child gets a share of the width initially
-            layout_box(child.get(), content_width, containing_height, pango_ctx);
+            // For row flex: determine item width from explicit width or content
+            float item_w = -1;
+            if (child->dom_node) {
+                item_w = resolve_width(child->dom_node, content_width);
+                if (item_w >= 0 && child->dom_node->box_sizing == 1) {
+                    item_w -= child->padding.horizontal() + child->border.horizontal();
+                    if (item_w < 0) item_w = 0;
+                }
+            }
+            if (item_w < 0) {
+                // No explicit width: measure intrinsic content width
+                float intrinsic = measure_intrinsic_width(child.get(), pango_ctx);
+                // intrinsic includes padding+border, we need content width only
+                item_w = intrinsic - child->padding.horizontal() - child->border.horizontal();
+                if (item_w < 0) item_w = 0;
+            }
+            // Re-layout with correct width
+            child->content_rect.w = item_w;
+            layout_box(child.get(), item_w + child->padding.horizontal() + child->border.horizontal(),
+                       containing_height, pango_ctx);
         } else {
             layout_box(child.get(), content_width, containing_height, pango_ctx);
         }
@@ -855,12 +968,13 @@ void perform_layout(LayoutBox* root, float viewport_width, float viewport_height
                     PangoContext* pango_ctx) {
     if (!root) return;
 
-    // Root box gets viewport width
-    root->margin = {0, 0, 0, 0};
-    root->content_rect.x = root->padding.left + root->border.left;
-    root->content_rect.y = root->padding.top + root->border.top;
+    // Root box keeps its margins and gets positioned accordingly
+    root->content_rect.x = root->margin.left + root->padding.left + root->border.left;
+    root->content_rect.y = root->margin.top + root->padding.top + root->border.top;
 
-    layout_box(root, viewport_width, viewport_height, pango_ctx);
+    // Layout with viewport width minus root margins
+    float avail_w = viewport_width - root->margin.horizontal();
+    layout_box(root, avail_w, viewport_height, pango_ctx);
 
     // Compute absolute positions
     root->compute_abs_positions(0, 0);

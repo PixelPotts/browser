@@ -1194,6 +1194,10 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
             continue;
         }
 
+        // Skip <html> and <head> tags in source - we already have them in the tree
+        if (!closing && (tname == "html" || tname == "head")) continue;
+        if (closing && (tname == "html" || tname == "head")) continue;
+
         if (!closing && !is_void(tname)) {
             int parent_fs = cur_parent ? cur_parent->fs_computed : 16;
             auto elem = doc->createElement(tname);
@@ -1213,13 +1217,20 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
             if (tname == "i" || tname == "em" || tname == "cite" || tname == "dfn" || tname == "var")
                 elem->fi_computed = PANGO_STYLE_ITALIC;
 
-            // UA font-size defaults for headings
-            if (tname == "h1") elem->fs_computed = 32;
-            else if (tname == "h2") elem->fs_computed = 24;
-            else if (tname == "h3") elem->fs_computed = 19;
-            else if (tname == "h4") elem->fs_computed = 16;
-            else if (tname == "h5") elem->fs_computed = 13;
-            else if (tname == "h6") elem->fs_computed = 11;
+            // UA font-size and margin defaults for headings
+            if (tname == "h1") { elem->fs_computed = 32; elem->margin[0] = 21; elem->margin[2] = 21; }
+            else if (tname == "h2") { elem->fs_computed = 24; elem->margin[0] = 19; elem->margin[2] = 19; }
+            else if (tname == "h3") { elem->fs_computed = 19; elem->margin[0] = 18; elem->margin[2] = 18; }
+            else if (tname == "h4") { elem->fs_computed = 16; elem->margin[0] = 21; elem->margin[2] = 21; }
+            else if (tname == "h5") { elem->fs_computed = 13; elem->margin[0] = 22; elem->margin[2] = 22; }
+            else if (tname == "h6") { elem->fs_computed = 11; elem->margin[0] = 24; elem->margin[2] = 24; }
+            // UA margin defaults for p, blockquote, ul, ol, dl, figure, hr
+            if (tname == "p") { elem->margin[0] = 16; elem->margin[2] = 16; }
+            else if (tname == "blockquote") { elem->margin[0] = 16; elem->margin[2] = 16;
+                elem->margin[1] = 40; elem->margin[3] = 40; }
+            else if (tname == "ul" || tname == "ol") { elem->margin[0] = 16; elem->margin[2] = 16;
+                elem->padding[3] = 40; }
+            else if (tname == "hr") { elem->margin[0] = 8; elem->margin[2] = 8; }
 
             // UA defaults for strikethrough tags
             if (tname == "s" || tname == "del" || tname == "strike")
@@ -3143,16 +3154,33 @@ static void layout_and_paint(TabState* tab) {
     }
     if (!tab->pango_ctx) return;
 
-    // Get viewport width from the drawing area allocation
-    if (tab->drawing_area && gtk_widget_get_realized(tab->drawing_area)) {
+    // Get viewport width from the scroll window (more reliable than drawing area)
+    if (tab->scroll && gtk_widget_get_realized(tab->scroll)) {
+        GtkAllocation alloc;
+        gtk_widget_get_allocation(tab->scroll, &alloc);
+        if (alloc.width > 10) tab->viewport_width = (float)alloc.width;
+    }
+    // Fallback: try the drawing area
+    if (tab->viewport_width <= 10 && tab->drawing_area && gtk_widget_get_realized(tab->drawing_area)) {
         GtkAllocation alloc;
         gtk_widget_get_allocation(tab->drawing_area, &alloc);
-        if (alloc.width > 0) tab->viewport_width = (float)alloc.width;
+        if (alloc.width > 10) tab->viewport_width = (float)alloc.width;
     }
+    // Fallback: default
+    if (tab->viewport_width <= 10) tab->viewport_width = 1100;
+
+    fprintf(stderr, "[LAYOUT] Starting layout_and_paint, body=%p children=%zu viewport_w=%.0f\n",
+            start, start->children.size(), tab->viewport_width);
 
     // Build layout tree from DOM
     tab->layout_root = build_layout_tree(start, tab->pango_ctx);
-    if (!tab->layout_root) return;
+    if (!tab->layout_root) {
+        fprintf(stderr, "[LAYOUT] ERROR: build_layout_tree returned null\n");
+        return;
+    }
+
+    fprintf(stderr, "[LAYOUT] Layout tree built, type=%d children=%zu\n",
+            (int)tab->layout_root->type, tab->layout_root->children.size());
 
     // Copy body background to layout root
     if (start->bg_color.empty() || start->bg_color == "transparent") {
@@ -3163,14 +3191,57 @@ static void layout_and_paint(TabState* tab) {
     // Perform layout
     perform_layout(tab->layout_root.get(), tab->viewport_width, 0, tab->pango_ctx);
 
+    fprintf(stderr, "[LAYOUT] Layout done: content_rect=(%.0f, %.0f, %.0f, %.0f)\n",
+            tab->layout_root->content_rect.x, tab->layout_root->content_rect.y,
+            tab->layout_root->content_rect.w, tab->layout_root->content_rect.h);
+
     // Connect canvas/img surfaces
     connect_replaced_surfaces(tab->layout_root.get());
 
     // Generate display list
     tab->display_list = generate_display_list(tab->layout_root.get());
 
+    fprintf(stderr, "[LAYOUT] Display list: %zu commands\n", tab->display_list.size());
+    // Debug: dump first few display list commands
+    for (size_t i = 0; i < tab->display_list.size(); i++) {
+        auto& cmd = tab->display_list[i];
+        const char* types[] = {"FillRect","DrawText","DrawBorder","DrawImage",
+                               "PushClip","PopClip","PushOpacity","PopOpacity","Translate","PopTranslate"};
+        fprintf(stderr, "[LAYOUT]   cmd[%zu]: %s", i, types[(int)cmd.type]);
+        if (cmd.type == PaintCmdType::FillRect)
+            fprintf(stderr, " rect=(%.0f,%.0f,%.0f,%.0f) rgba=(%.2f,%.2f,%.2f,%.2f)",
+                    cmd.rect.x, cmd.rect.y, cmd.rect.w, cmd.rect.h,
+                    cmd.color.r, cmd.color.g, cmd.color.b, cmd.color.a);
+        else if (cmd.type == PaintCmdType::DrawText)
+            fprintf(stderr, " pos=(%.0f,%.0f) color=(%.2f,%.2f,%.2f)",
+                    cmd.text_x, cmd.text_y, cmd.text_color.r, cmd.text_color.g, cmd.text_color.b);
+        else if (cmd.type == PaintCmdType::DrawBorder)
+            fprintf(stderr, " rect=(%.0f,%.0f,%.0f,%.0f) widths=(%.0f,%.0f,%.0f,%.0f)",
+                    cmd.border_rect.x, cmd.border_rect.y, cmd.border_rect.w, cmd.border_rect.h,
+                    cmd.border_widths.top, cmd.border_widths.right,
+                    cmd.border_widths.bottom, cmd.border_widths.left);
+        fprintf(stderr, "\n");
+    }
+    // Debug: dump layout tree
+    std::function<void(LayoutBox*, int)> dump_layout = [&](LayoutBox* b, int depth) {
+        if (!b) return;
+        std::string indent(depth*2, ' ');
+        const char* tnames[] = {"Block","Inline","InlineBlock","Text","Replaced","Flex","Grid","Anon","None"};
+        fprintf(stderr, "[LAYOUT-TREE] %s%s", indent.c_str(), tnames[(int)b->type]);
+        if (b->dom_node) fprintf(stderr, " <%s id='%s'>", b->dom_node->tag_name.c_str(), b->dom_node->id.c_str());
+        fprintf(stderr, " rect=(%.0f,%.0f,%.0f,%.0f) bg='%s'",
+                b->content_rect.x, b->content_rect.y, b->content_rect.w, b->content_rect.h,
+                b->bg_color.c_str());
+        if (b->pango_layout) fprintf(stderr, " [has text]");
+        fprintf(stderr, "\n");
+        if (depth < 4) for (auto& c : b->children) dump_layout(c.get(), depth+1);
+    };
+    dump_layout(tab->layout_root.get(), 0);
+
     // Update content height for scrollbar
     tab->content_height = get_content_height(tab->layout_root.get());
+
+    fprintf(stderr, "[LAYOUT] Content height: %.0f\n", tab->content_height);
 
     // Set drawing area size to content height so scrollbar works
     if (tab->drawing_area) {
@@ -3184,11 +3255,15 @@ static void layout_and_paint(TabState* tab) {
 static gboolean on_draw_content(GtkWidget* widget, cairo_t* cr, gpointer data) {
     TabState* tab = static_cast<TabState*>(data);
     if (!tab || tab->display_list.empty()) {
+        fprintf(stderr, "[DRAW] on_draw_content called but display_list empty (tab=%p, dl=%zu)\n",
+                tab, tab ? tab->display_list.size() : 0);
         // White background when empty
         cairo_set_source_rgb(cr, 1, 1, 1);
         cairo_paint(cr);
         return FALSE;
     }
+
+    fprintf(stderr, "[DRAW] on_draw_content rendering %zu commands\n", tab->display_list.size());
 
     // White background
     cairo_set_source_rgb(cr, 1, 1, 1);
@@ -3345,6 +3420,18 @@ static void create_tab_widgets(AppState* st, std::shared_ptr<TabState> tab) {
                      G_CALLBACK(on_draw_area_click), st);
     g_signal_connect(tab->drawing_area, "motion-notify-event",
                      G_CALLBACK(on_draw_area_motion), st);
+
+    // Re-layout on resize
+    g_signal_connect(tab->scroll, "size-allocate",
+        G_CALLBACK(+[](GtkWidget* w, GtkAllocation* alloc, gpointer data) {
+            TabState* tab = static_cast<TabState*>(data);
+            if (!tab || !tab->document || !tab->layout_root) return;
+            float new_w = (float)alloc->width;
+            if (std::abs(new_w - tab->viewport_width) > 2) {
+                tab->viewport_width = new_w;
+                layout_and_paint(tab);
+            }
+        }), tab.get());
 
     // Add to content stack
     gtk_stack_add_named(GTK_STACK(st->content_stack), tab->paned,
