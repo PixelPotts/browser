@@ -3247,6 +3247,28 @@ static void layout_and_paint(TabState* tab) {
 
     fprintf(stderr, "[LAYOUT] Content height: %.0f\n", tab->content_height);
 
+    // Debug: test hit testing at a few positions
+    {
+        float test_pts[][2] = {{100, 40}, {100, 700}, {120, 700}};
+        for (auto& pt : test_pts) {
+            HitTestResult h = hit_test(tab->layout_root.get(), pt[0], pt[1]);
+            if (h.node) {
+                DOMNode* ln = h.node;
+                std::string li;
+                while (ln) {
+                    if (ln->tag_name == "a") {
+                        auto it = ln->attributes.find("href");
+                        if (it != ln->attributes.end()) li = " LINK=" + it->second;
+                        break;
+                    }
+                    ln = ln->parent;
+                }
+                fprintf(stderr, "[HIT-TEST] (%.0f,%.0f) => <%s>%s\n",
+                        pt[0], pt[1], h.node->tag_name.c_str(), li.c_str());
+            }
+        }
+    }
+
     // Set drawing area size to content height so scrollbar works
     if (tab->drawing_area) {
         int h = std::max(1, (int)tab->content_height);
@@ -3301,6 +3323,8 @@ static gboolean on_draw_content(GtkWidget* widget, cairo_t* cr, gpointer data) {
 
 // Mouse click handler for the drawing area
 static gboolean on_draw_area_click(GtkWidget* widget, GdkEventButton* ev, gpointer data) {
+    fprintf(stderr, "[CLICK-EVENT] button=%d x=%.0f y=%.0f type=%d\n",
+            ev->button, ev->x, ev->y, ev->type);
     AppState* st = static_cast<AppState*>(data);
     TabState* tab = st->ct;
     if (!tab) return FALSE;
