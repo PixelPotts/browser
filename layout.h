@@ -116,6 +116,7 @@ struct LayoutBox {
     std::string border_color;
     std::string border_style;
     int z_index = 0;
+    int text_decoration = 0;  // bitmask: 1=underline, 2=overline, 4=line-through
 
     // Cleanup
     ~LayoutBox();

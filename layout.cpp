@@ -1,5 +1,6 @@
 // layout.cpp - Layout tree construction and block formatting context
 #include "layout.h"
+#include "paint.h"
 #include <cstring>
 #include <algorithm>
 #include <cassert>
@@ -84,6 +85,11 @@ static void copy_style(LayoutBox* box, DOMNode* node) {
     box->font_style = node->fi_computed >= 0 ? node->fi_computed : 0;
     box->font_family = node->font_family;
     box->color = node->color_computed;
+    // UA default: links are blue
+    if (box->color.empty() && node->tag_name == "a" &&
+        node->attributes.count("href") && !node->attributes.at("href").empty()) {
+        box->color = "#0000ee";
+    }
     box->bg_color = node->bg_color;
     box->opacity = node->opacity;
     box->text_align = node->text_align_computed >= 0 ? node->text_align_computed : 0;
@@ -94,6 +100,7 @@ static void copy_style(LayoutBox* box, DOMNode* node) {
     box->z_index = node->z_index;
     box->border_color = node->border_color;
     box->border_style = node->border_style;
+    box->text_decoration = node->text_decoration > 0 ? node->text_decoration : 0;
 
     // Margins
     box->margin.top = std::max(0, node->margin[0]);
@@ -345,6 +352,18 @@ static PangoLayout* create_pango_layout_for_text(PangoContext* pango_ctx, Layout
     }
 
     pango_layout_set_text(layout, text.c_str(), -1);
+
+    // Text decoration (underline, strikethrough)
+    {
+        int td = box->text_decoration;
+        if (td <= 0 && box->parent) td = box->parent->text_decoration;
+        if (td > 0) {
+            PangoAttrList* al = pango_layout_get_attributes(layout);
+            if (!al) { al = pango_attr_list_new(); pango_layout_set_attributes(layout, al); pango_attr_list_unref(al); al = pango_layout_get_attributes(layout); }
+            if (td & 1) pango_attr_list_insert(al, pango_attr_underline_new(PANGO_UNDERLINE_SINGLE));
+            if (td & 4) pango_attr_list_insert(al, pango_attr_strikethrough_new(TRUE));
+        }
+    }
 
     // Set width for wrapping
     if (ws != 1 && ws != 2) { // not nowrap, not pre
@@ -731,6 +750,57 @@ static void layout_inline(LayoutBox* box, float containing_width, PangoContext* 
     pango_font_description_free(fd);
 
     pango_layout_set_text(layout, full_text.c_str(), -1);
+
+    // Apply per-run text decoration (underline for links, strikethrough, etc.)
+    {
+        PangoAttrList* al = pango_attr_list_new();
+        bool has_attrs = false;
+        for (auto& run : runs) {
+            if (!run.node || !run.node->parent) continue;
+            DOMNode* elem = run.node->parent;
+            int td = elem->text_decoration;
+            // Check for link underline
+            if (td <= 0 && elem->tag_name == "a" &&
+                elem->attributes.count("href") && !elem->attributes.at("href").empty())
+                td = 1; // underline by default
+            if (td > 0) {
+                has_attrs = true;
+                if (td & 1) {
+                    PangoAttribute* attr = pango_attr_underline_new(PANGO_UNDERLINE_SINGLE);
+                    attr->start_index = run.start;
+                    attr->end_index = run.start + run.length;
+                    pango_attr_list_insert(al, attr);
+                }
+                if (td & 4) {
+                    PangoAttribute* attr = pango_attr_strikethrough_new(TRUE);
+                    attr->start_index = run.start;
+                    attr->end_index = run.start + run.length;
+                    pango_attr_list_insert(al, attr);
+                }
+            }
+            // Apply per-run color for inline elements with explicit color (e.g. links)
+            if (!elem->color_computed.empty()) {
+                has_attrs = true;
+                CairoColor cc = parse_css_color(elem->color_computed);
+                PangoAttribute* attr = pango_attr_foreground_new(
+                    (guint16)(cc.r * 65535), (guint16)(cc.g * 65535), (guint16)(cc.b * 65535));
+                attr->start_index = run.start;
+                attr->end_index = run.start + run.length;
+                pango_attr_list_insert(al, attr);
+            } else if (elem->tag_name == "a" &&
+                       elem->attributes.count("href") && !elem->attributes.at("href").empty()) {
+                // Default link color
+                has_attrs = true;
+                PangoAttribute* attr = pango_attr_foreground_new(0, 0, 0xeeee);
+                attr->start_index = run.start;
+                attr->end_index = run.start + run.length;
+                pango_attr_list_insert(al, attr);
+            }
+        }
+        if (has_attrs)
+            pango_layout_set_attributes(layout, al);
+        pango_attr_list_unref(al);
+    }
 
     if (containing_width > 0) {
         pango_layout_set_width(layout, (int)(containing_width * PANGO_SCALE));
