@@ -4327,50 +4327,102 @@ static void fetch_page(AppState* st, TabState* tab, std::string url, int gen) {
             engine->current_script_node = nullptr;
         }
 
-        // Debug: check module exports
+        // Debug: check module exports and patch scoring to log per-category results
         engine->eval(R"JS(
             console.warn('[DEBUG-CSS3] typeof runTests = ' + typeof runTests);
-            console.warn('[DEBUG-CSS3] typeof window.runTests = ' + typeof window.runTests);
             console.warn('[DEBUG-CSS3] typeof window.onload = ' + typeof window.onload);
             console.warn('[DEBUG-CSS3] typeof Supports = ' + typeof Supports);
-            console.warn('[DEBUG-CSS3] typeof window.Supports = ' + typeof window.Supports);
-            console.warn('[DEBUG-CSS3] typeof $ = ' + typeof $);
-        )JS", "<debug-css3>");
 
-        // Debug: patch Runner to dump results and trace stuck background tasks
-        engine->eval(R"JS(
-            // The test engine may use different names. Patch both Runner and Test.
+            // Patch Score.update to log individual test failures
+            if (typeof Score !== 'undefined' && Score.prototype) {
+                var _origUpdate = Score.prototype.update;
+                Score.prototype.update = function(data) {
+                    if (data.passed < data.total) {
+                        console.warn('[SCORE-FAIL] ' + (data.name || '?') + ': ' + data.passed + '/' + data.total + ' in=' + (this.name || '?'));
+                    }
+                    return _origUpdate.call(this, data);
+                };
+                var _origPercent = Score.prototype.percent;
+                Score.prototype.percent = function() {
+                    var p = _origPercent.call(this);
+                    if (this.name) {
+                        console.warn('[SCORE-CAT] ' + this.name + ': ' + p + '% (' + Math.round(this.passed*100)/100 + '/' + this.total + ')');
+                    }
+                    return p;
+                };
+            }
+
+            // Patch Supports methods to log specific failures
+            if (typeof Supports !== 'undefined') {
+                // Log value failures
+                var _origValue = Supports.value;
+                Supports.value = function(prop, val) {
+                    var r = _origValue.call(this, prop, val);
+                    if (!r.success) {
+                        console.warn('[FAIL-VALUE] ' + prop + ': ' + val);
+                    }
+                    return r;
+                };
+                // Log selector failures
+                var _origSelector = Supports.selector;
+                if (_origSelector) {
+                    Supports.selector = function(sel) {
+                        var r = _origSelector.call(this, sel);
+                        if (!r.success) console.warn('[FAIL-SEL] ' + sel);
+                        return r;
+                    };
+                }
+                // Log atrule failures
+                var _origAtrule = Supports.atrule;
+                if (_origAtrule) {
+                    Supports.atrule = function(atrule) {
+                        var r = _origAtrule.call(this, atrule);
+                        if (!r.success) console.warn('[FAIL-ATRULE] ' + atrule);
+                        return r;
+                    };
+                }
+                // Log media query failures
+                var _origMQ = Supports.mq;
+                if (_origMQ) {
+                    Supports.mq = function(mq) {
+                        var r = _origMQ.call(this, mq);
+                        if (!r.success) console.warn('[FAIL-MQ] ' + mq);
+                        return r;
+                    };
+                }
+                // Log descriptor failures
+                var _origDescVal = Supports.descriptorvalue;
+                if (_origDescVal) {
+                    Supports.descriptorvalue = function(desc, val, req) {
+                        var r = _origDescVal.call(this, desc, val, req);
+                        if (!r || !r.success) console.warn('[FAIL-DESC] ' + desc + ': ' + val);
+                        return r;
+                    };
+                }
+                // Log interface failures
+                var _origAttrOrMethod = Supports.attributeOrMethod;
+                if (_origAttrOrMethod) {
+                    Supports.attributeOrMethod = function(name, value, required, iface) {
+                        var r = _origAttrOrMethod.call(this, name, value, required, iface);
+                        if (!r || !r.success) console.warn('[FAIL-IFACE] ' + name + '.' + value + ' iface=' + iface);
+                        return r;
+                    };
+                }
+                // Log declaration failures
+                var _origDecl = Supports.declaration;
+                if (_origDecl) {
+                    Supports.declaration = function(inst) {
+                        var r = _origDecl.call(this, inst);
+                        if (!r || !r.success) console.warn('[FAIL-DECL] ' + inst);
+                        return r;
+                    };
+                }
+            }
+
+            // Patch Runner/Test to auto-stop stuck background tasks
             var _patchTarget = (typeof Runner !== 'undefined') ? Runner :
                                (typeof Test !== 'undefined') ? Test : null;
             if (_patchTarget && _patchTarget.prototype) {
-                console.warn('[DEBUG] Patching: ' + (_patchTarget.name || 'unknown'));
-                console.warn('[DEBUG] Proto keys: ' + Object.getOwnPropertyNames(_patchTarget.prototype).slice(0,20).join(', '));
-
-                // Wrap initialize to trace errors
-                var _origInit = _patchTarget.prototype.initialize;
-                if (_origInit) {
-                    _patchTarget.prototype.initialize = function(cb, err) {
-                        console.warn('[DEBUG] initialize called');
-                        try {
-                            return _origInit.call(this, cb, err);
-                        } catch(e) {
-                            console.warn('[DEBUG] initialize ERROR: ' + e + ' stack=' + (e.stack || 'none'));
-                            throw e;
-                        }
-                    };
-                }
-
-                var _origFinished = _patchTarget.prototype.finished;
-                if (_origFinished) {
-                    _patchTarget.prototype.finished = function() {
-                        var results = this.list ? this.list.toString() : 'NO LIST';
-                        console.warn('[RESULTS] ' + results);
-                        return _origFinished.call(this);
-                    };
-                }
-
-                // No per-test wrapping - will fix root cause instead
-                // Also patch checkForBackground to dump stuck tasks
                 var _origCheck = _patchTarget.prototype.checkForBackground;
                 var _checkCount = 0;
                 _patchTarget.prototype.checkForBackground = function() {
@@ -4378,20 +4430,13 @@ static void fetch_page(AppState* st, TabState* tab, std::string url, int gen) {
                     var bt = this.backgroundTasks || [];
                     var running = 0;
                     for (var t = 0; t < bt.length; t++) running += bt[t];
-                    if (_checkCount <= 3 || _checkCount % 50 === 0) {
-                        console.warn('[BG-CHECK] count=' + _checkCount + ' tasks=' + bt.length + ' running=' + running);
-                    }
-                    // Auto-stop stuck background tasks after ~5 seconds (17 checks * 300ms)
                     if (_checkCount > 17 && running > 0) {
-                        console.warn('[BG-TIMEOUT] Force-stopping ' + running + ' stuck background tasks');
                         for (var t = 0; t < bt.length; t++) bt[t] = 0;
                     }
                     return _origCheck.call(this);
                 };
-            } else {
-                console.warn('[DEBUG] No Runner or Test found!');
             }
-        )JS", "<debug>");
+        )JS", "<debug-css3>");
 
         // Execute inline scripts
         for (size_t i = 0; i < doc->scripts.size(); i++) {

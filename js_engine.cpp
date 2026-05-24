@@ -2037,13 +2037,27 @@ document.getElementsByName = function(name) {
                             // Parse CSS into sheet rules
                             this._sheet.cssRules = [];
                             if (!v) return;
-                            // Simple CSS parser: split by closing brace
-                            var rules = v.split('}');
-                            for (var ri = 0; ri < rules.length; ri++) {
-                                var r = rules[ri].trim();
-                                if (!r) continue;
-                                r += '}';
-                                try { this._sheet.insertRule(r, this._sheet.cssRules.length); }
+                            // Better CSS parser: handle nested braces
+                            var depth = 0, start = 0;
+                            for (var ci = 0; ci < v.length; ci++) {
+                                if (v[ci] === '{') depth++;
+                                else if (v[ci] === '}') {
+                                    depth--;
+                                    if (depth <= 0) {
+                                        var r = v.substring(start, ci + 1).trim();
+                                        if (r) {
+                                            try { this._sheet.insertRule(r, this._sheet.cssRules.length); }
+                                            catch(e) {}
+                                        }
+                                        start = ci + 1;
+                                        depth = 0;
+                                    }
+                                }
+                            }
+                            // Handle remaining text (e.g., @layer statement without braces)
+                            var rem = v.substring(start).trim();
+                            if (rem) {
+                                try { this._sheet.insertRule(rem, this._sheet.cssRules.length); }
                                 catch(e) {}
                             }
                         },
