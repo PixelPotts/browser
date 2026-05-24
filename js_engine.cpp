@@ -471,6 +471,43 @@ void JSEngine::shutdown() {
     }
     timers.clear();
 
+    // Free window listener handler refs from global object
+    if (ctx) {
+        JSValue global = JS_GetGlobalObject(ctx);
+        for (auto& wl : window_listeners) {
+            std::string key = "__whandler_" + std::to_string(wl.handler_id);
+            JSAtom atom = JS_NewAtom(ctx, key.c_str());
+            JS_DeleteProperty(ctx, global, atom, 0);
+            JS_FreeAtom(ctx, atom);
+        }
+        // Also delete element handler refs stored by addEventListener
+        // They use __handler_N pattern on global
+        if (document) {
+            std::function<void(DOMNode*)> walk = [&](DOMNode* n) {
+                for (auto& l : n->listeners) {
+                    std::string key = "__handler_" + std::to_string(l.handler_id);
+                    JSAtom atom = JS_NewAtom(ctx, key.c_str());
+                    JS_DeleteProperty(ctx, global, atom, 0);
+                    JS_FreeAtom(ctx, atom);
+                }
+                for (auto& c : n->children) walk(c.get());
+            };
+            walk(document->root.get());
+        }
+        JS_FreeValue(ctx, global);
+    }
+    window_listeners.clear();
+
+    // Clear node wrapper cache (frees DupValue'd JSValues)
+    extern void clear_node_cache();
+    clear_node_cache();
+
+    // Drain any pending microtasks/promises
+    if (rt && ctx) {
+        JSContext* pctx;
+        while (JS_ExecutePendingJob(rt, &pctx) > 0) {}
+    }
+
     // Run GC to collect any lingering objects before freeing
     if (rt) JS_RunGC(rt);
 

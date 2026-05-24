@@ -5166,11 +5166,7 @@ static void load_url(AppState* st, const std::string& url) {
     int gen;
     { std::lock_guard<std::mutex> lk(tab->mu); gen = ++tab->generation; }
 
-    // Clear node wrapper cache BEFORE destroying JS engine (frees JSValues)
-    extern void clear_node_cache();
-    clear_node_cache();
-
-    // destroy JS engine from previous page
+    // destroy JS engine from previous page (shutdown() clears node cache + handlers)
     if (tab->js_engine) {
         delete tab->js_engine;
         tab->js_engine = nullptr;

@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html><body>
+<div id="d1">Click me</div>
+<script>
+var d = document.getElementById("d1");
+d.addEventListener("click", function() { console.log("clicked"); });
+window.addEventListener("resize", function() { console.log("resized"); });
+window.addEventListener("message", function(e) { console.log("msg: " + e.data); });
+var img = new Image();
+img.onload = function() { console.log("loaded"); };
+img.src = "test_img_100x100.png";
+setTimeout(function() { console.log("timer fired"); }, 500);
+var p = new Promise(function(resolve) { resolve(42); });
+p.then(function(v) { console.log("promise resolved: " + v); });
+console.log("GC test page loaded OK");
+</script>
+</body></html>
