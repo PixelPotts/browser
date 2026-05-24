@@ -980,13 +980,18 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
                 script_content += html.substr(i, p - i);
                 i = p + 9;
             }
-            if (!script_src.empty()) {
-                doc->script_srcs.push_back(script_src);
-                doc->script_types.push_back(script_type);
-                doc->script_order.push_back({true, doc->script_srcs.size() - 1});
-            } else if (!script_content.empty()) {
-                doc->scripts.push_back(script_content);
-                doc->script_order.push_back({false, doc->scripts.size() - 1});
+            // Skip non-JS script types (JSON-LD, application/json, etc.)
+            bool is_js = script_type.empty() || script_type == "text/javascript"
+                         || script_type == "module" || script_type == "application/javascript";
+            if (is_js) {
+                if (!script_src.empty()) {
+                    doc->script_srcs.push_back(script_src);
+                    doc->script_types.push_back(script_type);
+                    doc->script_order.push_back({true, doc->script_srcs.size() - 1});
+                } else if (!script_content.empty()) {
+                    doc->scripts.push_back(script_content);
+                    doc->script_order.push_back({false, doc->scripts.size() - 1});
+                }
             }
             script_content.clear();
             script_src.clear();
@@ -1026,19 +1031,20 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
         while (k < tag.size() && !std::isspace((unsigned char)tag[k]) && tag[k] != '>') ++k;
         std::string tname = tolower_s(tag.substr(ks, k - ks));
 
+        // Scripts must always be captured even inside display:none regions
+        if (!closing && tname == "script") {
+            script_src = extract_attr(tag, "src");
+            script_type = extract_attr(tag, "type");
+            if (!script_src.empty()) script_src = resolve(base, script_src);
+            state = SCRIPT_CAP; continue;
+        }
+
         // handle display:none skip region
         if (skip_depth > 0) {
             bool self_closing = (!tag.empty() && tag.back() == '/');
             if (!closing && !self_closing && !is_void(tname)) skip_depth++;
             else if (closing) { if (--skip_depth == 0) acc.clear(); }
             continue;
-        }
-
-        if (!closing && tname == "script") {
-            script_src = extract_attr(tag, "src");
-            script_type = extract_attr(tag, "type");
-            if (!script_src.empty()) script_src = resolve(base, script_src);
-            state = SCRIPT_CAP; continue;
         }
         if (!closing && tname == "style") { state = STYLE_SKIP; continue; }
         if (!closing && tname == "noscript") { state = NOSCRIPT_SKIP; continue; }
