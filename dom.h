@@ -80,6 +80,14 @@ struct DOMNode {
     int width      = -1;
     int max_width  = -1;
     int height     = -1;
+    int min_width  = -1;
+    int min_height = -1;
+    int max_height = -1;
+    int box_sizing = 0;    // 0=content-box, 1=border-box
+    int overflow_x = -1;   // -1=inherit, 0=visible, 1=hidden, 2=scroll, 3=auto
+    int overflow_y = -1;
+    int width_pct  = -1;   // percentage width (0-100), -1=not percentage
+    int height_pct = -1;   // percentage height (0-100), -1=not percentage
     int border_width[4] = {0,0,0,0};
     int border_radius   = 0;
     std::string border_color;

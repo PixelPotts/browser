@@ -714,6 +714,14 @@ struct BoxModel {
     int width      = -1;
     int max_width  = -1;
     int height     = -1;
+    int min_width  = -1;
+    int min_height = -1;
+    int max_height = -1;
+    int box_sizing = 0;    // 0=content-box, 1=border-box
+    int overflow_x = -1;   // -1=inherit, 0=visible, 1=hidden, 2=scroll, 3=auto
+    int overflow_y = -1;
+    int width_pct  = -1;   // percentage width (0-100), -1=not percentage
+    int height_pct = -1;   // percentage height (0-100), -1=not percentage
     int border_width[4] = {0,0,0,0}; // top right bottom left
     int border_radius   = 0;
     std::string border_color;
@@ -758,10 +766,27 @@ static void apply_box(const std::string& decls, BoxModel& bm) {
     { auto s=prop_val(decls,"padding-bottom"); if(!s.empty()) bm.padding[2]=parse_px_val(s); }
     { auto s=prop_val(decls,"padding-left");   if(!s.empty()) bm.padding[3]=parse_px_val(s); }
     { auto s=prop_val(decls,"width");     auto sl=tolower_s(s);
-      if(!s.empty()&&sl!="auto"&&sl!="100%") bm.width=parse_px_val(s); }
+      if(!s.empty()&&sl!="auto") {
+          size_t pct_pos = s.find('%');
+          if (pct_pos != std::string::npos) {
+              try { bm.width_pct = std::stoi(s.substr(0, pct_pos)); } catch(...){}
+          } else {
+              bm.width=parse_px_val(s);
+          }
+      } }
     { auto s=prop_val(decls,"max-width"); if(!s.empty()) bm.max_width=parse_px_val(s); }
+    { auto s=prop_val(decls,"min-width"); if(!s.empty()) bm.min_width=parse_px_val(s); }
     { auto s=prop_val(decls,"height");    auto sl=tolower_s(s);
-      if(!s.empty()&&sl!="auto") bm.height=parse_px_val(s); }
+      if(!s.empty()&&sl!="auto") {
+          size_t pct_pos = s.find('%');
+          if (pct_pos != std::string::npos) {
+              try { bm.height_pct = std::stoi(s.substr(0, pct_pos)); } catch(...){}
+          } else {
+              bm.height=parse_px_val(s);
+          }
+      } }
+    { auto s=prop_val(decls,"min-height"); if(!s.empty()) bm.min_height=parse_px_val(s); }
+    { auto s=prop_val(decls,"max-height"); if(!s.empty()) bm.max_height=parse_px_val(s); }
     { auto s=tolower_s(prop_val(decls,"display"));
       if      (s=="none")                       bm.display=BoxModel::Display::None;
       else if (s=="flex"||s=="inline-flex")     bm.display=BoxModel::Display::Flex;
@@ -826,6 +851,19 @@ static void apply_box(const std::string& decls, BoxModel& bm) {
       else if (s=="hidden")  bm.overflow=1;
       else if (s=="scroll")  bm.overflow=2;
       else if (s=="auto")    bm.overflow=3; }
+    { auto s=tolower_s(prop_val(decls,"overflow-x"));
+      if      (s=="visible") bm.overflow_x=0;
+      else if (s=="hidden")  bm.overflow_x=1;
+      else if (s=="scroll")  bm.overflow_x=2;
+      else if (s=="auto")    bm.overflow_x=3; }
+    { auto s=tolower_s(prop_val(decls,"overflow-y"));
+      if      (s=="visible") bm.overflow_y=0;
+      else if (s=="hidden")  bm.overflow_y=1;
+      else if (s=="scroll")  bm.overflow_y=2;
+      else if (s=="auto")    bm.overflow_y=3; }
+    { auto s=tolower_s(prop_val(decls,"box-sizing"));
+      if      (s=="border-box")  bm.box_sizing=1;
+      else if (s=="content-box") bm.box_sizing=0; }
     { auto s=tolower_s(prop_val(decls,"background-repeat"));
       if (!s.empty()) bm.bg_repeat=s; }
     { auto s=tolower_s(prop_val(decls,"background-size"));
@@ -1498,6 +1536,14 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
             elem->width = bm.width;
             elem->max_width = bm.max_width;
             elem->height = bm.height;
+            if (bm.min_width >= 0) elem->min_width = bm.min_width;
+            if (bm.min_height >= 0) elem->min_height = bm.min_height;
+            if (bm.max_height >= 0) elem->max_height = bm.max_height;
+            if (bm.box_sizing > 0) elem->box_sizing = bm.box_sizing;
+            if (bm.overflow_x >= 0) elem->overflow_x = bm.overflow_x;
+            if (bm.overflow_y >= 0) elem->overflow_y = bm.overflow_y;
+            if (bm.width_pct >= 0) elem->width_pct = bm.width_pct;
+            if (bm.height_pct >= 0) elem->height_pct = bm.height_pct;
             for (int j = 0; j < 4; ++j) elem->border_width[j] = bm.border_width[j];
             elem->border_radius = bm.border_radius;
             elem->border_color = bm.border_color;
@@ -1536,6 +1582,14 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
                 doc->body->width = elem->width;
                 doc->body->max_width = elem->max_width;
                 doc->body->height = elem->height;
+                doc->body->min_width = elem->min_width;
+                doc->body->min_height = elem->min_height;
+                doc->body->max_height = elem->max_height;
+                doc->body->box_sizing = elem->box_sizing;
+                doc->body->overflow_x = elem->overflow_x;
+                doc->body->overflow_y = elem->overflow_y;
+                doc->body->width_pct = elem->width_pct;
+                doc->body->height_pct = elem->height_pct;
                 for (int j = 0; j < 4; ++j) doc->body->border_width[j] = elem->border_width[j];
                 doc->body->border_radius = elem->border_radius;
                 doc->body->border_color = elem->border_color;
@@ -1792,16 +1846,48 @@ static GtkWidget* make_block(const BoxModel& box, GtkWidget* parent,
     gtk_widget_set_margin_bottom(outer, std::max(0, box.margin[2]));
     gtk_widget_set_margin_start(outer,  std::max(0, box.margin[3]));
 
-    int eff_w = box.width > 0 ? box.width : box.max_width;
-    int eff_h = box.height > 0 ? box.height : -1;
-    if (eff_w > 0) {
-        // size_request sets the minimum; GTK can still grow the widget if children
-        // have a larger natural width.  CSS max-width caps the natural width so the
-        // parent container never allocates more than eff_w pixels to this block.
-        gtk_widget_set_size_request(outer, eff_w, eff_h);
+    // --- Compute effective width ---
+    int content_w = box.width;
+    int content_h = box.height > 0 ? box.height : -1;
+
+    // box-sizing: border-box — subtract padding+border from specified width/height
+    if (box.box_sizing == 1) {
+        if (content_w > 0) {
+            content_w -= (box.padding[1] + box.padding[3] + box.border_width[1] + box.border_width[3]);
+            if (content_w < 0) content_w = 0;
+        }
+        if (content_h > 0) {
+            content_h -= (box.padding[0] + box.padding[2] + box.border_width[0] + box.border_width[2]);
+            if (content_h < 0) content_h = 0;
+        }
+    }
+
+    // max-width as constraint ON TOP of width, not a replacement
+    if (content_w > 0 && box.max_width > 0 && content_w > box.max_width)
+        content_w = box.max_width;
+
+    // min-width as floor
+    if (box.min_width >= 0 && (content_w < 0 || content_w < box.min_width))
+        content_w = box.min_width;
+
+    // max-height as constraint
+    if (content_h > 0 && box.max_height > 0 && content_h > box.max_height)
+        content_h = box.max_height;
+
+    // min-height as floor
+    if (box.min_height >= 0 && (content_h < 0 || content_h < box.min_height))
+        content_h = box.min_height;
+
+    bool has_pct_w = (box.width_pct >= 0);
+
+    if (content_w > 0) {
+        gtk_widget_set_size_request(outer, content_w, content_h);
         {
             GtkCssProvider* cp = gtk_css_provider_new();
-            std::string w_css = "* { min-width: " + std::to_string(eff_w) + "px; }";
+            std::string w_css = "* { min-width: " + std::to_string(content_w) + "px; }";
+            // Apply max-width separately if set
+            if (box.max_width > 0)
+                w_css = "* { min-width: " + std::to_string(content_w) + "px; max-width: " + std::to_string(box.max_width) + "px; }";
             gtk_css_provider_load_from_data(cp, w_css.c_str(), -1, nullptr);
             gtk_style_context_add_provider(gtk_widget_get_style_context(outer),
                 GTK_STYLE_PROVIDER(cp), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
@@ -1809,8 +1895,22 @@ static GtkWidget* make_block(const BoxModel& box, GtkWidget* parent,
         }
         gtk_widget_set_hexpand(outer, FALSE);
         gtk_widget_set_halign(outer, box.halign_center ? GTK_ALIGN_CENTER : GTK_ALIGN_START);
+    } else if (has_pct_w) {
+        // Percentage width: expand to fill parent, apply via CSS
+        if (content_h > 0) gtk_widget_set_size_request(outer, -1, content_h);
+        gtk_widget_set_hexpand(outer, TRUE);
+        if (box.halign_center) gtk_widget_set_halign(outer, GTK_ALIGN_CENTER);
     } else {
-        if (eff_h > 0) gtk_widget_set_size_request(outer, -1, eff_h);
+        // No explicit width — apply max-width as CSS constraint if set
+        if (content_h > 0) gtk_widget_set_size_request(outer, -1, content_h);
+        if (box.max_width > 0) {
+            GtkCssProvider* cp = gtk_css_provider_new();
+            std::string w_css = "* { max-width: " + std::to_string(box.max_width) + "px; }";
+            gtk_css_provider_load_from_data(cp, w_css.c_str(), -1, nullptr);
+            gtk_style_context_add_provider(gtk_widget_get_style_context(outer),
+                GTK_STYLE_PROVIDER(cp), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+            g_object_unref(cp);
+        }
         gtk_widget_set_hexpand(outer, orient == GTK_ORIENTATION_VERTICAL);
         if (box.halign_center) gtk_widget_set_halign(outer, GTK_ALIGN_CENTER);
     }
@@ -1820,14 +1920,22 @@ static GtkWidget* make_block(const BoxModel& box, GtkWidget* parent,
     gtk_widget_show(outer);
 
     // overflow handling: wrap content in scroll window
-    if (box.overflow == 1 || box.overflow == 2 || box.overflow == 3) {
+    // Resolve per-axis overflow (overflow-x/overflow-y override shorthand overflow)
+    int ox = box.overflow_x >= 0 ? box.overflow_x : box.overflow;
+    int oy = box.overflow_y >= 0 ? box.overflow_y : box.overflow;
+    if (ox > 0 || oy > 0) {
         GtkWidget* scroll = gtk_scrolled_window_new(nullptr, nullptr);
-        if (box.overflow == 1) // hidden: clip, no scrollbars
-            gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll),
-                GTK_POLICY_NEVER, GTK_POLICY_NEVER);
-        else // scroll/auto: show scrollbars as needed
-            gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll),
-                GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
+        GtkPolicyType hpol = GTK_POLICY_AUTOMATIC;
+        GtkPolicyType vpol = GTK_POLICY_AUTOMATIC;
+        if (ox == 0 || ox < 0) hpol = GTK_POLICY_AUTOMATIC; // visible: no clip but no scrollbar forced
+        if (ox == 1) hpol = GTK_POLICY_NEVER;   // hidden
+        if (ox == 2) hpol = GTK_POLICY_ALWAYS;  // scroll
+        if (ox == 3) hpol = GTK_POLICY_AUTOMATIC; // auto
+        if (oy == 0 || oy < 0) vpol = GTK_POLICY_AUTOMATIC;
+        if (oy == 1) vpol = GTK_POLICY_NEVER;
+        if (oy == 2) vpol = GTK_POLICY_ALWAYS;
+        if (oy == 3) vpol = GTK_POLICY_AUTOMATIC;
+        gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll), hpol, vpol);
         GtkWidget* content = gtk_box_new(orient, 0);
         gtk_widget_set_hexpand(content, TRUE);
         gtk_container_add(GTK_CONTAINER(scroll), content);
@@ -3124,6 +3232,14 @@ static BoxModel dom_node_to_boxmodel(DOMNode* node) {
     bm.width = node->width;
     bm.max_width = node->max_width;
     bm.height = node->height;
+    bm.min_width = node->min_width;
+    bm.min_height = node->min_height;
+    bm.max_height = node->max_height;
+    bm.box_sizing = node->box_sizing;
+    bm.overflow_x = node->overflow_x;
+    bm.overflow_y = node->overflow_y;
+    bm.width_pct = node->width_pct;
+    bm.height_pct = node->height_pct;
     for (int i = 0; i < 4; ++i) bm.border_width[i] = node->border_width[i];
     bm.border_radius = node->border_radius;
     bm.border_color = node->border_color;
