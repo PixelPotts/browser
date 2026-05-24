@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>CSS Selector Test Suite</title>
+<style>
+  body { font-family: sans-serif; font-size: 14px; }
+  .pass { color: green; }
+  .fail { color: red; font-weight: bold; }
+  #results { margin: 20px; }
+</style>
+</head>
+<body>
+
+<!-- Test DOM structure -->
+<div id="test-root">
+  <div id="parent" class="container main">
+    <p id="first-p" class="intro">First paragraph</p>
+    <p class="body-text">Second paragraph</p>
+    <p class="body-text last">Third paragraph</p>
+    <span class="inline-el">Inline span</span>
+  </div>
+  <ul id="list">
+    <li class="item">Item 1</li>
+    <li class="item active">Item 2</li>
+    <li class="item">Item 3</li>
+    <li class="item">Item 4</li>
+    <li class="item">Item 5</li>
+  </ul>
+  <div id="empty-div"></div>
+  <a href="https://example.com" id="test-link">Link</a>
+  <input type="text" id="test-input" required value="hello">
+  <input type="number" id="range-input" min="0" max="100" value="50">
+  <div id="nested">
+    <div class="inner">
+      <span class="deep">Deep content</span>
+    </div>
+  </div>
+  <div data-lang="en-US" data-role="button" id="data-el">Data element</div>
+</div>
+
+<div id="results"></div>
+
+<script>
+var results = [];
+var pass = 0, fail = 0;
+
+function test(name, result) {
+  if (result) { pass++; results.push('<div class="pass">PASS: ' + name + '</div>'); }
+  else { fail++; results.push('<div class="fail">FAIL: ' + name + '</div>'); }
+}
+
+// Phase 1: Basic selector matching (unified)
+test("Tag selector: querySelector('p')", !!document.querySelector('p'));
+test("Class selector: querySelector('.intro')", !!document.querySelector('.intro'));
+test("ID selector: querySelector('#first-p')", !!document.querySelector('#first-p'));
+test("Descendant: querySelector('#parent p')", !!document.querySelector('#parent p'));
+test("Child: querySelector('#parent > p')", !!document.querySelector('#parent > p'));
+test("Sibling +: querySelector('.intro + .body-text')", !!document.querySelector('.intro + .body-text'));
+test("Sibling ~: querySelector('.intro ~ .body-text')", !!document.querySelector('.intro ~ .body-text'));
+
+// Phase 1: Comma-separated selectors
+test("Comma selectors: querySelector('span, p')", !!document.querySelector('span, p'));
+
+// Phase 3: Structural pseudo-classes
+test(":first-child", document.querySelector('#parent > :first-child').id === 'first-p');
+test(":last-child", document.querySelector('#parent > :last-child').className === 'inline-el');
+test(":nth-child(2)", document.querySelector('#parent > :nth-child(2)').className === 'body-text');
+test(":nth-child(odd)", !!document.querySelector('#list > :nth-child(odd)'));
+test(":nth-child(even)", !!document.querySelector('#list > :nth-child(even)'));
+test(":nth-child(2n+1)", !!document.querySelector('#list > :nth-child(2n+1)'));
+test(":first-of-type", document.querySelector('#parent > p:first-of-type').id === 'first-p');
+test(":last-of-type", document.querySelector('#parent > p:last-of-type').className === 'body-text last');
+test(":only-of-type (span)", document.querySelector('#parent > span:only-of-type').className === 'inline-el');
+test(":empty", document.querySelector('#empty-div:empty') !== null);
+test(":root", document.querySelector(':root').tagName.toLowerCase() === 'html');
+
+// Phase 4: Logical pseudo-classes
+test(":not(.intro)", document.querySelector('#parent > p:not(.intro)').className === 'body-text');
+test(":is(.intro, .body-text)", !!document.querySelector(':is(.intro, .body-text)'));
+
+// Phase 4: :has()
+test(":has(> span)", document.querySelector('#parent:has(> span)') !== null);
+test(":has(.deep)", document.querySelector('#nested:has(.deep)') !== null);
+
+// Phase 7: Attribute selectors
+test("[data-lang]", !!document.querySelector('[data-lang]'));
+test("[data-lang=en-US]", !!document.querySelector('[data-lang=\"en-US\"]'));
+test("[data-lang^=en]", !!document.querySelector('[data-lang^=\"en\"]'));
+test("[data-lang$=US]", !!document.querySelector('[data-lang$=\"US\"]'));
+test("[data-lang*=n-U]", !!document.querySelector('[data-lang*=\"n-U\"]'));
+test("[data-lang|=en]", !!document.querySelector('[data-lang|=\"en\"]'));
+
+// Phase 6: State pseudo-classes
+test(":link (a with href)", !!document.querySelector('a:link'));
+test(":enabled (input without disabled)", !!document.querySelector('#test-input:enabled'));
+test(":required", !!document.querySelector('#test-input:required'));
+test(":in-range", !!document.querySelector('#range-input:in-range'));
+
+// Phase 9: Native matches()/closest()
+var firstP = document.getElementById('first-p');
+test("Element.matches('.intro')", firstP.matches('.intro'));
+test("Element.matches('#first-p')", firstP.matches('#first-p'));
+test("Element.matches('div > p')", firstP.matches('div > p'));
+test("Element.matches('.nonexistent')", !firstP.matches('.nonexistent'));
+test("Element.closest('#parent')", firstP.closest('#parent') !== null);
+test("Element.closest('#parent').id", firstP.closest('#parent').id === 'parent');
+test("Element.closest('.container')", firstP.closest('.container') !== null);
+test("Element.closest('#nonexistent')", firstP.closest('#nonexistent') === null);
+
+// Summary
+var el = document.getElementById('results');
+el.innerHTML = '<h2>Results: ' + pass + ' passed, ' + fail + ' failed</h2>' + results.join('');
+</script>
+</body>
+</html>
