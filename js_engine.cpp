@@ -1972,6 +1972,32 @@ document.getElementsByName = function(name) {
             this.removeChild(oldNode);
             return oldNode;
         };
+        if (!el.append) el.append = function() {
+            for (var i = 0; i < arguments.length; i++) {
+                var arg = arguments[i];
+                if (typeof arg === 'string') arg = document.createTextNode(arg);
+                if (arg) this.appendChild(arg);
+            }
+        };
+        if (!el.prepend) el.prepend = function() {
+            var first = this.firstChild;
+            for (var i = 0; i < arguments.length; i++) {
+                var arg = arguments[i];
+                if (typeof arg === 'string') arg = document.createTextNode(arg);
+                if (arg) {
+                    if (first) this.insertBefore(arg, first);
+                    else this.appendChild(arg);
+                }
+            }
+        };
+        if (!el.replaceChildren) el.replaceChildren = function() {
+            this.innerHTML = '';
+            for (var i = 0; i < arguments.length; i++) {
+                var arg = arguments[i];
+                if (typeof arg === 'string') arg = document.createTextNode(arg);
+                if (arg) this.appendChild(arg);
+            }
+        };
         if (!el.dispatchEvent) el.dispatchEvent = function() { return true; };
         if (!el.focus) el.focus = function() {};
         if (!el.blur) el.blur = function() {};

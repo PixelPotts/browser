@@ -4327,6 +4327,16 @@ static void fetch_page(AppState* st, TabState* tab, std::string url, int gen) {
             engine->current_script_node = nullptr;
         }
 
+        // Debug: check module exports
+        engine->eval(R"JS(
+            console.warn('[DEBUG-CSS3] typeof runTests = ' + typeof runTests);
+            console.warn('[DEBUG-CSS3] typeof window.runTests = ' + typeof window.runTests);
+            console.warn('[DEBUG-CSS3] typeof window.onload = ' + typeof window.onload);
+            console.warn('[DEBUG-CSS3] typeof Supports = ' + typeof Supports);
+            console.warn('[DEBUG-CSS3] typeof window.Supports = ' + typeof window.Supports);
+            console.warn('[DEBUG-CSS3] typeof $ = ' + typeof $);
+        )JS", "<debug-css3>");
+
         // Debug: patch Runner to dump results and trace stuck background tasks
         engine->eval(R"JS(
             // The test engine may use different names. Patch both Runner and Test.
