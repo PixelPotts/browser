@@ -3426,7 +3426,8 @@ static void create_tab_widgets(AppState* st, std::shared_ptr<TabState> tab) {
     tab->drawing_area = gtk_drawing_area_new();
     tab->content_box = tab->drawing_area; // alias for compatibility
     gtk_widget_set_hexpand(tab->drawing_area, TRUE);
-    gtk_widget_set_vexpand(tab->drawing_area, TRUE);
+    // Don't set vexpand - the drawing area height is set by size_request
+    // to match content height, and the scroll window provides scrolling
     gtk_container_add(GTK_CONTAINER(tab->viewport), tab->drawing_area);
 
     // Connect draw signal
@@ -5571,7 +5572,6 @@ static void load_url(AppState* st, const std::string& url) {
         tab->drawing_area = gtk_drawing_area_new();
         tab->content_box = tab->drawing_area;
         gtk_widget_set_hexpand(tab->drawing_area, TRUE);
-        gtk_widget_set_vexpand(tab->drawing_area, TRUE);
         gtk_container_add(GTK_CONTAINER(tab->viewport), tab->drawing_area);
         g_signal_connect(tab->drawing_area, "draw", G_CALLBACK(on_draw_content), tab);
         gtk_widget_add_events(tab->drawing_area,

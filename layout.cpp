@@ -31,6 +31,15 @@ static LayoutBoxType display_type_for(DOMNode* node) {
     if (node->node_type == DOMNode::TEXT) return LayoutBoxType::Text;
     if (node->node_type == DOMNode::COMMENT) return LayoutBoxType::None;
 
+    // Non-rendered elements
+    {
+        const auto& t = node->tag_name;
+        if (t == "head" || t == "title" || t == "style" || t == "script" ||
+            t == "meta" || t == "link" || t == "noscript" || t == "template" ||
+            t == "base" || t == "html")
+            return LayoutBoxType::None;
+    }
+
     auto d = node->display;
     if (d == DOMNode::Display::None) return LayoutBoxType::None;
     if (d == DOMNode::Display::Flex) return LayoutBoxType::Flex;
