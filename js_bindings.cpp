@@ -402,10 +402,6 @@ static JSValue js_element_get_ownerDocument(JSContext* ctx, JSValueConst this_va
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue doc = JS_GetPropertyStr(ctx, global, "document");
     JS_FreeValue(ctx, global);
-    if (JS_IsNull(doc) || JS_IsUndefined(doc)) {
-        fprintf(stderr, "[DBG-OD] ownerDocument getter: doc is %s\n",
-                JS_IsNull(doc) ? "null" : "undefined");
-    }
     return doc;
 }
 

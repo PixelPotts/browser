@@ -2758,6 +2758,23 @@ document.readyState = 'complete';
 document.fonts = new FontFaceSet();
 document.styleSheets = new StyleSheetList();
 document.adoptedStyleSheets = [];
+// document.scripts - live collection of script elements
+Object.defineProperty(document, 'scripts', {
+    get: function() { return document.getElementsByTagName('script'); },
+    configurable: true
+});
+Object.defineProperty(document, 'forms', {
+    get: function() { return document.getElementsByTagName('form'); },
+    configurable: true
+});
+Object.defineProperty(document, 'images', {
+    get: function() { return document.getElementsByTagName('img'); },
+    configurable: true
+});
+Object.defineProperty(document, 'links', {
+    get: function() { return document.querySelectorAll('a[href], area[href]'); },
+    configurable: true
+});
 document.title = '';
 document.domain = location.hostname || '';
 document.referrer = '';
@@ -3010,17 +3027,30 @@ if (typeof window._gaq === 'undefined') window._gaq = { push: function() {} };
 
 // Piano/Tinypass SDK stubs (used by media sites)
 if (typeof window.tp === 'undefined') window.tp = [];
-window.tp.push = function(cb) { if (typeof cb === 'function') { try { cb(window.tp); } catch(e){} } };
-window.tp.piano = { id: {} };
+window.tp.push = function(cb) { if (typeof cb === 'function') { try { cb(window.tp); } catch(e){} } else if (typeof cb === 'object' && cb) { for (var k in cb) { if (cb.hasOwnProperty(k)) window.tp[k] = cb[k]; } } };
+window.tp.piano = { id: { show: function(){}, logout: function(){}, getUser: function(){ return null; } } };
 window.tp.aid = '';
-window.tp.pianoId = { show: function(){}, logout: function(){}, getUser: function(){ return null; }, isUserValid: function(){ return false; } };
+window.tp.sandbox = false;
+window.tp.enableGACrossDomainLinking = false;
+window.tp.pianoId = { show: function(){}, logout: function(){}, getUser: function(){ return null; }, isUserValid: function(){ return false; }, loadExtendedUser: function(cb){ if(cb) cb({}); } };
 window.tp.offer = { show: function(){}, close: function(){} };
-window.tp.experience = { execute: function(){} };
+window.tp.experience = { execute: function(){}, init: function(){} };
+window.tp.template = { show: function(){}, close: function(){} };
+window.tp.user = { isUserValid: function(){ return false; }, getProvider: function(){ return ''; } };
+window.tp.customVariables = {};
+window.tp.setCustomVariable = function(k, v) { this.customVariables[k] = v; };
 window.tp.init = function() {};
+window.tp.loaded = true;
 
 // Prebid.js / Amazon APS stubs
 if (typeof window.pbjs === 'undefined') window.pbjs = { que: [], cmd: [], requestBids: function(){}, setConfig: function(){}, addAdUnits: function(){}, removeAdUnit: function(){}, getBidResponses: function(){ return {}; }, getAllWinningBids: function(){ return []; } };
 if (typeof window.apstag === 'undefined') window.apstag = { init: function(){}, fetchBids: function(cfg, cb){ if(cb) cb([]); }, setDisplayBids: function(){}, targetingKeys: function(){ return []; } };
+
+// BlogherAds stub (PMC ad manager dependency)
+if (typeof window.blogherads === 'undefined') window.blogherads = { adq: [], defineSlot: function(){ return this; }, setSubAdUnitPath: function(){ return this; }, setPageTargeting: function(){ return this; }, display_ads: function(){}, requestAds: function(){}, collapseSlot: function(){}, refreshSlot: function(){} };
+
+// PMC Ad Manager stubs
+if (typeof window.pmc_adm_gpt === 'undefined') window.pmc_adm_gpt = { display_ads: function(){}, define_ad_slot: function(){}, refresh: function(){}, set_targeting: function(){} };
 
 // CMP / Consent Management stubs
 if (typeof window.__tcfapi === 'undefined') window.__tcfapi = function(cmd, ver, cb) { if (cb) cb({ cmpId: 0, cmpVersion: 0, gdprApplies: false, tcfPolicyVersion: 2, tcString: '', purposeOneTreatment: false, eventStatus: 'tcloaded' }, true); };
