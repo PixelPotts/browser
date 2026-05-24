@@ -4410,6 +4410,32 @@ static void fetch_page(AppState* st, TabState* tab, std::string url, int gen) {
             JSValue load_event = js_create_event(engine->ctx, "load", nullptr, 0, 0);
             js_dispatch_to_window_listeners(engine, "load", load_event);
             JS_FreeValue(engine->ctx, load_event);
+
+            // Also call window.onload if set (e.g., by ES6 modules)
+            JSValue global_obj = JS_GetGlobalObject(engine->ctx);
+            JSValue onload_fn = JS_GetPropertyStr(engine->ctx, global_obj, "onload");
+            if (JS_IsFunction(engine->ctx, onload_fn)) {
+                fprintf(stderr, "[JS-TRACE] Calling window.onload\n");
+                JSValue onload_event = js_create_event(engine->ctx, "load", nullptr, 0, 0);
+                JSValue ret = JS_Call(engine->ctx, onload_fn, global_obj, 1, &onload_event);
+                if (JS_IsException(ret)) {
+                    JSValue exc = JS_GetException(engine->ctx);
+                    const char* estr = JS_ToCString(engine->ctx, exc);
+                    if (estr) { fprintf(stderr, "[JS Error in onload] %s\n", estr); JS_FreeCString(engine->ctx, estr); }
+                    JSValue stack = JS_GetPropertyStr(engine->ctx, exc, "stack");
+                    if (!JS_IsUndefined(stack)) {
+                        const char* sstr = JS_ToCString(engine->ctx, stack);
+                        if (sstr) { fprintf(stderr, "%s\n", sstr); JS_FreeCString(engine->ctx, sstr); }
+                    }
+                    JS_FreeValue(engine->ctx, stack);
+                    JS_FreeValue(engine->ctx, exc);
+                }
+                JS_FreeValue(engine->ctx, ret);
+                JS_FreeValue(engine->ctx, onload_event);
+            }
+            JS_FreeValue(engine->ctx, onload_fn);
+            JS_FreeValue(engine->ctx, global_obj);
+
             engine->executePendingJobs();
         }
 
