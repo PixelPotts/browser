@@ -348,6 +348,12 @@ static JSValue js_element_set_innerHTML(JSContext* ctx, JSValueConst this_val, i
     if (!node || !g_js_engine || !g_js_engine->document || argc < 1) return JS_UNDEFINED;
     const char* s = JS_ToCString(ctx, argv[0]);
     if (s) {
+        // Protect <head> and <body> from being wiped by anti-adblock scripts
+        if (s[0] == '\0' && (node->tag_name == "head" || node->tag_name == "body")) {
+            fprintf(stderr, "[setInnerHTML] BLOCKED destructive clear of <%s>\n", node->tag_name.c_str());
+            JS_FreeCString(ctx, s);
+            return JS_UNDEFINED;
+        }
         Document* doc = g_js_engine->document;
         node->setInnerHTML(s, doc->next_id, doc->node_map, doc->id_map);
         JS_FreeCString(ctx, s);

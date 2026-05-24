@@ -649,7 +649,13 @@ void js_dispatch_to_window_listeners(JSEngine* engine, const std::string& type, 
                 JSValue exc = JS_GetException(engine->ctx);
                 const char* s = JS_ToCString(engine->ctx, exc);
                 if (s) {
-                    fprintf(stderr, "[JS Window Event Error] %s\n", s);
+                    fprintf(stderr, "[JS Window Event Error] %s  (window:%s)\n", s, type.c_str());
+                    // Print stack trace
+                    JSValue stack = JS_GetPropertyStr(engine->ctx, exc, "stack");
+                    const char* st = JS_ToCString(engine->ctx, stack);
+                    if (st && st[0]) fprintf(stderr, "[JS Window Event Stack] %s\n", st);
+                    if (st) JS_FreeCString(engine->ctx, st);
+                    JS_FreeValue(engine->ctx, stack);
                     engine->addConsoleEntry(ConsoleLevel::ERROR, std::string(s), "window:" + type);
                     JS_FreeCString(engine->ctx, s);
                 }
@@ -882,6 +888,34 @@ void JSEngine::setupGlobals() {
         JS_NewCFunction(ctx, js_console_error, "error", 1));
     JS_SetPropertyStr(ctx, console_obj, "info",
         JS_NewCFunction(ctx, js_console_info, "info", 1));
+    JS_SetPropertyStr(ctx, console_obj, "debug",
+        JS_NewCFunction(ctx, js_console_log, "debug", 1));
+    JS_SetPropertyStr(ctx, console_obj, "trace",
+        JS_NewCFunction(ctx, js_console_log, "trace", 1));
+    JS_SetPropertyStr(ctx, console_obj, "dir",
+        JS_NewCFunction(ctx, js_console_log, "dir", 1));
+    JS_SetPropertyStr(ctx, console_obj, "table",
+        JS_NewCFunction(ctx, js_console_log, "table", 1));
+    JS_SetPropertyStr(ctx, console_obj, "group",
+        JS_NewCFunction(ctx, js_console_log, "group", 1));
+    JS_SetPropertyStr(ctx, console_obj, "groupEnd",
+        JS_NewCFunction(ctx, js_noop_func, "groupEnd", 0));
+    JS_SetPropertyStr(ctx, console_obj, "groupCollapsed",
+        JS_NewCFunction(ctx, js_console_log, "groupCollapsed", 1));
+    JS_SetPropertyStr(ctx, console_obj, "time",
+        JS_NewCFunction(ctx, js_noop_func, "time", 0));
+    JS_SetPropertyStr(ctx, console_obj, "timeEnd",
+        JS_NewCFunction(ctx, js_noop_func, "timeEnd", 0));
+    JS_SetPropertyStr(ctx, console_obj, "timeLog",
+        JS_NewCFunction(ctx, js_noop_func, "timeLog", 0));
+    JS_SetPropertyStr(ctx, console_obj, "assert",
+        JS_NewCFunction(ctx, js_noop_func, "assert", 0));
+    JS_SetPropertyStr(ctx, console_obj, "count",
+        JS_NewCFunction(ctx, js_noop_func, "count", 0));
+    JS_SetPropertyStr(ctx, console_obj, "countReset",
+        JS_NewCFunction(ctx, js_noop_func, "countReset", 0));
+    JS_SetPropertyStr(ctx, console_obj, "clear",
+        JS_NewCFunction(ctx, js_noop_func, "clear", 0));
     JS_SetPropertyStr(ctx, global, "console", console_obj);
 
     // alert
@@ -3026,25 +3060,57 @@ if (typeof window.__google_ad_request_done === 'undefined') window.__google_ad_r
 if (typeof window._gaq === 'undefined') window._gaq = { push: function() {} };
 
 // Piano/Tinypass SDK stubs (used by media sites)
+// tp starts as array; tinypass SDK replaces it. Use defineProperty to catch access after replacement.
 if (typeof window.tp === 'undefined') window.tp = [];
-window.tp.push = function(cb) { if (typeof cb === 'function') { try { cb(window.tp); } catch(e){} } else if (typeof cb === 'object' && cb) { for (var k in cb) { if (cb.hasOwnProperty(k)) window.tp[k] = cb[k]; } } };
+// Set properties on the initial tp array
 window.tp.piano = { id: { show: function(){}, logout: function(){}, getUser: function(){ return null; } } };
-window.tp.aid = '';
-window.tp.sandbox = false;
-window.tp.enableGACrossDomainLinking = false;
-window.tp.pianoId = { show: function(){}, logout: function(){}, getUser: function(){ return null; }, isUserValid: function(){ return false; }, loadExtendedUser: function(cb){ if(cb) cb({}); } };
+window.tp.pianoId = { show: function(){}, logout: function(){}, getUser: function(){ return null; }, isUserValid: function(){ return false; } };
 window.tp.offer = { show: function(){}, close: function(){} };
 window.tp.experience = { execute: function(){}, init: function(){} };
-window.tp.template = { show: function(){}, close: function(){} };
 window.tp.user = { isUserValid: function(){ return false; }, getProvider: function(){ return ''; } };
-window.tp.customVariables = {};
-window.tp.setCustomVariable = function(k, v) { this.customVariables[k] = v; };
+window.tp.aid = '';
 window.tp.init = function() {};
-window.tp.loaded = true;
+// Intercept tp replacement: when SDK sets window.tp = newObj, ensure piano property exists
+(function() {
+    var _origTp = window.tp;
+    var _pianoDefault = { id: { show: function(){}, logout: function(){}, getUser: function(){ return null; } } };
+    // Periodically ensure tp.piano exists (handles SDK replacing tp)
+    var _checkCount = 0;
+    var _timer = setInterval(function() {
+        if (window.tp && typeof window.tp === 'object' && !Array.isArray(window.tp)) {
+            if (!window.tp.piano) window.tp.piano = _pianoDefault;
+            if (!window.tp.pianoId) window.tp.pianoId = { show: function(){}, logout: function(){}, getUser: function(){ return null; }, isUserValid: function(){ return false; } };
+        }
+        if (++_checkCount > 20) clearInterval(_timer);
+    }, 100);
+})();
 
 // Prebid.js / Amazon APS stubs
 if (typeof window.pbjs === 'undefined') window.pbjs = { que: [], cmd: [], requestBids: function(){}, setConfig: function(){}, addAdUnits: function(){}, removeAdUnit: function(){}, getBidResponses: function(){ return {}; }, getAllWinningBids: function(){ return []; } };
 if (typeof window.apstag === 'undefined') window.apstag = { init: function(){}, fetchBids: function(cfg, cb){ if(cb) cb([]); }, setDisplayBids: function(){}, targetingKeys: function(){ return []; } };
+
+// PMC Piano integration stub (used by theme common.js and wordpress.js)
+if (typeof window.pmcPiano === 'undefined') window.pmcPiano = {};
+if (!window.pmcPiano.callbacks) window.pmcPiano.callbacks = {
+    onInit: function(opts) { if (opts && typeof opts.knownUser === 'function') { try { opts.knownUser(false); } catch(e){} } },
+    onLogin: function() {},
+    onLogout: function() {},
+    onRegistration: function() {}
+};
+if (!window.pmcPiano.piano) window.pmcPiano.piano = {
+    setCallbacks: function() {},
+    reRenderExperiences: function() {},
+    setGA4Config: function() {}
+};
+if (!window.pmcPiano.api) window.pmcPiano.api = {
+    getConversionList: function(cb) { if (cb) cb([]); },
+    getLicenseeData: function(cb) { if (cb) cb({}); }
+};
+if (!window.pmcPiano.wordPressThemes) window.pmcPiano.wordPressThemes = {
+    clickShield: function() {}
+};
+if (!window.pmcPiano.ipAuth) window.pmcPiano.ipAuth = {};
+if (!window.pmcPiano.newsletterForm) window.pmcPiano.newsletterForm = {};
 
 // BlogherAds stub (PMC ad manager dependency)
 if (typeof window.blogherads === 'undefined') window.blogherads = { adq: [], defineSlot: function(){ return this; }, setSubAdUnitPath: function(){ return this; }, setPageTargeting: function(){ return this; }, display_ads: function(){}, requestAds: function(){}, collapseSlot: function(){}, refreshSlot: function(){} };
@@ -3059,6 +3125,49 @@ if (typeof window.__cmp === 'undefined') window.__cmp = function(cmd, arg, cb) {
 
 // picturefill stub (responsive images library)
 if (typeof window.picturefill === 'undefined') window.picturefill = function() {};
+
+// WordPress hooks API stub (used by PMC plugins)
+if (typeof window.wp === 'undefined') window.wp = {};
+if (!window.wp.hooks) {
+    // Use Proxy-like auto-vivifying store so store[hookName].callbacks never throws
+    function _createHookStore() {
+        var _raw = { __current: [] };
+        var _default = { callbacks: [], runs: 0 };
+        var store = new Proxy(_raw, {
+            get: function(t, p) {
+                if (p in t) return t[p];
+                // Auto-create hook entry on first access
+                t[p] = { callbacks: [], runs: 0 };
+                return t[p];
+            }
+        });
+        return {
+            addAction: function(n, ns, cb, p) { store[n].callbacks.push({callback:cb, priority:p||10, namespace:ns}); },
+            addFilter: function(n, ns, cb, p) { store[n].callbacks.push({callback:cb, priority:p||10, namespace:ns}); },
+            removeAction: function(n, ns) { var h = store[n]; h.callbacks = h.callbacks.filter(function(c){return c.namespace !== ns;}); },
+            removeFilter: function(n, ns) { var h = store[n]; h.callbacks = h.callbacks.filter(function(c){return c.namespace !== ns;}); },
+            doAction: function(n) { var h = store[n]; h.runs++; for (var i=0;i<h.callbacks.length;i++) try{h.callbacks[i].callback.apply(null,Array.prototype.slice.call(arguments,1));}catch(e){} },
+            applyFilters: function(n,v) { var h = store[n]; h.runs++; for (var i=0;i<h.callbacks.length;i++) try{v=h.callbacks[i].callback.apply(null,[v].concat(Array.prototype.slice.call(arguments,2)));}catch(e){} return v; },
+            hasAction: function(n) { return !!(store[n] && store[n].callbacks.length); },
+            hasFilter: function(n) { return !!(store[n] && store[n].callbacks.length); },
+            didAction: function(n) { return store[n] ? store[n].runs : 0; },
+            didFilter: function(n) { return store[n] ? store[n].runs : 0; },
+            actions: store,
+            filters: store,
+            __current: _raw.__current
+        };
+    }
+    window.wp.hooks = _createHookStore();
+}
+if (!window.wp.i18n) {
+    window.wp.i18n = {
+        __: function(t) { return t; },
+        _x: function(t) { return t; },
+        _n: function(s,p,n) { return n===1?s:p; },
+        sprintf: function(f) { var a=Array.prototype.slice.call(arguments,1); return f.replace(/%[sd]/g, function(){return a.shift()||''}); },
+        setLocaleData: function() {}
+    };
+}
 
 // Web Components readiness stub
 window.WebComponents = window.WebComponents || {};
