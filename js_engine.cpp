@@ -829,6 +829,14 @@ void JSEngine::setupGlobals() {
     JS_SetPropertyStr(ctx, global, "removeEventListener",
         JS_NewCFunction(ctx, js_window_removeEventListener, "removeEventListener", 2));
 
+    // Pre-define event handler properties so modules can assign to them
+    JS_SetPropertyStr(ctx, global, "onload", JS_NULL);
+    JS_SetPropertyStr(ctx, global, "onerror", JS_NULL);
+    JS_SetPropertyStr(ctx, global, "onresize", JS_NULL);
+    JS_SetPropertyStr(ctx, global, "onscroll", JS_NULL);
+    JS_SetPropertyStr(ctx, global, "onunload", JS_NULL);
+    JS_SetPropertyStr(ctx, global, "onbeforeunload", JS_NULL);
+
     // getComputedStyle
     JS_SetPropertyStr(ctx, global, "getComputedStyle",
         JS_NewCFunction(ctx, js_getComputedStyle, "getComputedStyle", 1));
