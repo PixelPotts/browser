@@ -1545,6 +1545,81 @@ bool dom_sel_matches(const std::string& sel, DOMNode* node) {
     return false;
 }
 
+// Calculate specificity of a single (non-comma) selector
+static Specificity calc_specificity_single(const std::string& sel) {
+    Specificity spec;
+    size_t i = 0, n = sel.size();
+    while (i < n) {
+        // Skip whitespace and combinators
+        if (sel[i] == ' ' || sel[i] == '>' || sel[i] == '+' || sel[i] == '~') { ++i; continue; }
+        if (sel[i] == '#') {
+            spec.a++; ++i;
+            while (i < n && sel[i] != '.' && sel[i] != '#' && sel[i] != '[' && sel[i] != ':' &&
+                   sel[i] != ' ' && sel[i] != '>' && sel[i] != '+' && sel[i] != '~') ++i;
+        } else if (sel[i] == '.') {
+            spec.b++; ++i;
+            while (i < n && sel[i] != '.' && sel[i] != '#' && sel[i] != '[' && sel[i] != ':' &&
+                   sel[i] != ' ' && sel[i] != '>' && sel[i] != '+' && sel[i] != '~') ++i;
+        } else if (sel[i] == '[') {
+            spec.b++; ++i;
+            int depth = 1;
+            while (i < n && depth > 0) { if (sel[i]=='[') ++depth; else if (sel[i]==']') --depth; ++i; }
+        } else if (sel[i] == ':') {
+            ++i;
+            bool is_double = (i < n && sel[i] == ':');
+            if (is_double) ++i;
+            // Read pseudo name
+            size_t ps = i;
+            while (i < n && sel[i] != '(' && sel[i] != '.' && sel[i] != '#' && sel[i] != '[' &&
+                   sel[i] != ':' && sel[i] != ' ' && sel[i] != '>' && sel[i] != '+' && sel[i] != '~') ++i;
+            std::string pname = sel.substr(ps, i - ps);
+            std::string parg;
+            if (i < n && sel[i] == '(') {
+                ++i; int d = 1; size_t as = i;
+                while (i < n && d > 0) { if (sel[i]=='(') ++d; else if (sel[i]==')') --d; ++i; }
+                parg = sel.substr(as, i - 1 - as);
+            }
+            if (is_double) {
+                spec.c++; // pseudo-element
+            } else if (pname == "where") {
+                // :where() has zero specificity
+            } else if (pname == "not" || pname == "is" || pname == "has") {
+                // Specificity = most specific argument
+                if (!parg.empty()) {
+                    auto parts = split_selector_list(parg);
+                    Specificity best;
+                    for (auto& p : parts) {
+                        Specificity s = calc_specificity_single(p);
+                        if (best < s) best = s;
+                    }
+                    spec.a += best.a; spec.b += best.b; spec.c += best.c;
+                }
+            } else {
+                spec.b++; // regular pseudo-class
+            }
+        } else if (sel[i] == '*') {
+            ++i; // universal selector: zero specificity
+        } else {
+            // tag name
+            spec.c++;
+            while (i < n && sel[i] != '.' && sel[i] != '#' && sel[i] != '[' && sel[i] != ':' &&
+                   sel[i] != ' ' && sel[i] != '>' && sel[i] != '+' && sel[i] != '~') ++i;
+        }
+    }
+    return spec;
+}
+
+Specificity calc_specificity(const std::string& selector) {
+    // For comma-separated lists, return the highest specificity
+    auto parts = split_selector_list(selector);
+    Specificity best;
+    for (auto& p : parts) {
+        Specificity s = calc_specificity_single(p);
+        if (best < s) best = s;
+    }
+    return best;
+}
+
 DOMNode* Document::querySelector(const std::string& selector) const {
     std::vector<DOMNode*> results;
     querySelectorHelper(root.get(), selector, results);

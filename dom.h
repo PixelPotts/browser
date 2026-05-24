@@ -196,3 +196,15 @@ private:
 // Simple selector matching (reusable from browser.cpp's sel_matches logic)
 bool dom_simple_match(const std::string& tok, DOMNode* node);
 bool dom_sel_matches(const std::string& sel, DOMNode* node);
+
+// CSS Specificity
+struct Specificity {
+    int a = 0, b = 0, c = 0; // (id, class/attr/pseudo-class, type/pseudo-element)
+    bool operator<(const Specificity& o) const {
+        if (a != o.a) return a < o.a;
+        if (b != o.b) return b < o.b;
+        return c < o.c;
+    }
+    bool operator==(const Specificity& o) const { return a == o.a && b == o.b && c == o.c; }
+};
+Specificity calc_specificity(const std::string& selector);

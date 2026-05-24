@@ -232,7 +232,33 @@ static std::string prop_val(const std::string& decls, const char* prop) {
         size_t end = decls.find(';', p);
         std::string val = end==std::string::npos ? decls.substr(p) : decls.substr(p, end-p);
         while (!val.empty() && std::isspace((unsigned char)val.back())) val.pop_back();
+        // Strip !important
+        if (val.size() >= 10) {
+            size_t imp = val.rfind("!important");
+            if (imp != std::string::npos) {
+                val = val.substr(0, imp);
+                while (!val.empty() && std::isspace((unsigned char)val.back())) val.pop_back();
+            }
+        }
         return val;
+    }
+}
+
+// Check if a property value contains !important
+static bool prop_is_important(const std::string& decls, const char* prop) {
+    size_t plen = std::strlen(prop), p = 0;
+    while (true) {
+        p = find_ci(decls, prop, p);
+        if (p==std::string::npos) return false;
+        if (p>0 && decls[p-1]!=';' && !std::isspace((unsigned char)decls[p-1]))
+            { p+=plen; continue; }
+        p += plen;
+        while (p<decls.size() && decls[p]==' ') ++p;
+        if (p>=decls.size() || decls[p]!=':') continue;
+        ++p;
+        size_t end = decls.find(';', p);
+        std::string val = end==std::string::npos ? decls.substr(p) : decls.substr(p, end-p);
+        return val.find("!important") != std::string::npos;
     }
 }
 
@@ -450,7 +476,10 @@ static void parse_font_shorthand(const std::string& val, DOMNode* elem, int pare
     }
 }
 
-struct CSSRule { std::string sel; int fw=-1; std::string fs_raw, lh_raw, decls, src_url; };
+struct CSSRule {
+    std::string sel; int fw=-1; std::string fs_raw, lh_raw, decls, src_url;
+    Specificity spec; int order=0;
+};
 
 struct ParsedBorder { int width=0; std::string style, color; };
 static ParsedBorder parse_border_shorthand(const std::string& raw) {
@@ -556,11 +585,21 @@ static std::vector<CSSRule> parse_css(const std::string& css) {
             size_t comma = sels_str.find(',', j);
             std::string sel = collapse_ws(tolower_s(
                 comma==std::string::npos ? sels_str.substr(j) : sels_str.substr(j, comma-j)));
-            if (!sel.empty()) rules.push_back({sel, fw, fs_raw, lh_raw, decls});
+            if (!sel.empty()) {
+                CSSRule rule; rule.sel=sel; rule.fw=fw; rule.fs_raw=fs_raw;
+                rule.lh_raw=lh_raw; rule.decls=decls;
+                rule.spec = calc_specificity(sel);
+                rule.order = (int)rules.size();
+                rules.push_back(std::move(rule));
+            }
             if (comma==std::string::npos) break;
             j = comma+1;
         }
     }
+    // Stable sort by specificity (source order preserved for equal specificity)
+    std::stable_sort(rules.begin(), rules.end(), [](const CSSRule& a, const CSSRule& b) {
+        return a.spec < b.spec;
+    });
     return rules;
 }
 
@@ -1285,6 +1324,47 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
             // Clean font-family for Pango
             if (!elem->font_family.empty())
                 elem->font_family = css_font_to_pango(elem->font_family);
+
+            // !important pass: re-apply CSS properties marked !important
+            // (overrides both normal CSS and inline styles)
+            for (const auto& r : css) {
+                if (!dom_sel_matches(r.sel, match_node)) continue;
+                if (!r.decls.empty() && r.decls.find("!important") == std::string::npos) continue;
+                // Re-apply only important properties
+                if (prop_is_important(r.decls, "display")) apply_box(r.decls, bm);
+                if (prop_is_important(r.decls, "color")) {
+                    auto s = prop_val(r.decls, "color"); if (!s.empty()) elem->color_computed = collapse_ws(s); }
+                if (prop_is_important(r.decls, "background-color") || prop_is_important(r.decls, "background"))
+                    apply_box(r.decls, bm);
+                if (prop_is_important(r.decls, "font-size")) {
+                    auto s = prop_val(r.decls, "font-size"); int px = parse_fs(s, parent_fs); if (px > 0) elem->fs_computed = px; }
+                if (prop_is_important(r.decls, "font-weight")) {
+                    int v = fw_from_decls(r.decls); if (v != -1) elem->fw_computed = v; }
+                if (prop_is_important(r.decls, "font-style")) {
+                    auto fs = tolower_s(prop_val(r.decls, "font-style"));
+                    if (fs == "italic") elem->fi_computed = PANGO_STYLE_ITALIC;
+                    else if (fs == "normal") elem->fi_computed = PANGO_STYLE_NORMAL; }
+                if (prop_is_important(r.decls, "margin")) apply_box(r.decls, bm);
+                if (prop_is_important(r.decls, "padding")) apply_box(r.decls, bm);
+                if (prop_is_important(r.decls, "width")) apply_box(r.decls, bm);
+                if (prop_is_important(r.decls, "height")) apply_box(r.decls, bm);
+                if (prop_is_important(r.decls, "position")) {
+                    auto s = tolower_s(prop_val(r.decls, "position"));
+                    if (s == "static") elem->position = 0; else if (s == "relative") elem->position = 1;
+                    else if (s == "absolute") elem->position = 2; else if (s == "fixed") elem->position = 3; }
+                if (prop_is_important(r.decls, "text-align")) {
+                    auto s = tolower_s(prop_val(r.decls, "text-align"));
+                    if (s == "center") elem->text_align_computed = 1; else if (s == "right") elem->text_align_computed = 2;
+                    else if (s == "left") elem->text_align_computed = 0; }
+                if (prop_is_important(r.decls, "overflow")) {
+                    auto s = tolower_s(prop_val(r.decls, "overflow"));
+                    if (s == "visible") elem->overflow = 0; else if (s == "hidden") elem->overflow = 1;
+                    else if (s == "scroll") elem->overflow = 2; else if (s == "auto") elem->overflow = 3; }
+                if (prop_is_important(r.decls, "opacity")) {
+                    auto s = prop_val(r.decls, "opacity"); if (!s.empty()) try { elem->opacity = std::stod(s); } catch(...){} }
+                if (prop_is_important(r.decls, "font-family")) {
+                    auto s = prop_val(r.decls, "font-family"); if (!s.empty()) elem->font_family = css_font_to_pango(s); }
+            }
 
             // Resolve bg_image
             if (!bm.bg_image.empty()) {
