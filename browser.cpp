@@ -512,6 +512,68 @@ static ParsedBorder parse_border_shorthand(const std::string& raw) {
     return b;
 }
 
+// Evaluate a simple media query condition
+// Supports: all, screen, print, (min-width: Npx), (max-width: Npx),
+//           (prefers-color-scheme: ...), not, and
+static bool eval_media_query(const std::string& query, int viewport_width = 1024) {
+    std::string q = collapse_ws(tolower_s(query));
+    if (q.empty() || q == "all" || q == "screen") return true;
+    if (q == "print") return false;
+
+    // Handle "not" prefix
+    bool negate = false;
+    if (q.substr(0, 4) == "not ") { negate = true; q = q.substr(4); }
+
+    // Split on " and "
+    std::vector<std::string> conditions;
+    size_t pos = 0;
+    while (pos < q.size()) {
+        size_t and_pos = q.find(" and ", pos);
+        if (and_pos == std::string::npos) {
+            conditions.push_back(q.substr(pos));
+            break;
+        }
+        conditions.push_back(q.substr(pos, and_pos - pos));
+        pos = and_pos + 5;
+    }
+
+    bool result = true;
+    for (const auto& cond : conditions) {
+        std::string c = cond;
+        while (!c.empty() && c.front() == ' ') c.erase(c.begin());
+        while (!c.empty() && c.back() == ' ') c.pop_back();
+
+        if (c == "all" || c == "screen") continue;
+        if (c == "print") { result = false; break; }
+
+        // (feature: value)
+        if (c.front() == '(' && c.back() == ')') {
+            std::string inner = c.substr(1, c.size() - 2);
+            size_t colon = inner.find(':');
+            if (colon != std::string::npos) {
+                std::string feat = inner.substr(0, colon);
+                std::string val = inner.substr(colon + 1);
+                while (!feat.empty() && feat.back() == ' ') feat.pop_back();
+                while (!val.empty() && val.front() == ' ') val.erase(val.begin());
+                while (!val.empty() && val.back() == ' ') val.pop_back();
+
+                if (feat == "min-width") {
+                    int w = parse_px_val(val);
+                    if (viewport_width < w) { result = false; break; }
+                } else if (feat == "max-width") {
+                    int w = parse_px_val(val);
+                    if (viewport_width > w) { result = false; break; }
+                } else if (feat == "prefers-color-scheme") {
+                    if (val != "light") { result = false; break; }
+                }
+                // Unknown features: pass through (lenient)
+            }
+            // Bare features like (hover) — pass through
+        }
+    }
+    return negate ? !result : result;
+}
+
 static std::vector<CSSRule> parse_css(const std::string& css) {
     std::vector<CSSRule> rules;
     size_t i=0, n=css.size();
@@ -522,12 +584,32 @@ static std::vector<CSSRule> parse_css(const std::string& css) {
             size_t e = css.find("*/", i+2);
             i = e==std::string::npos ? n : e+2; continue;
         }
-        // skip @rules (find matching braces)
+        // @rules: evaluate @media, skip others
         if (i<n && css[i]=='@') {
             size_t ob = css.find('{', i);
             if (ob==std::string::npos) { i=n; break; }
-            int depth=1; i=ob+1;
-            while (i<n && depth>0) { if(css[i]=='{')++depth; else if(css[i]=='}')--depth; ++i; }
+            std::string at_rule = collapse_ws(tolower_s(css.substr(i, ob - i)));
+            if (at_rule.substr(0, 6) == "@media") {
+                // Extract media query
+                std::string mq = at_rule.substr(6);
+                while (!mq.empty() && mq.front() == ' ') mq.erase(mq.begin());
+                // Extract inner CSS block
+                int depth=1; size_t bs=ob+1; i=ob+1;
+                while (i<n && depth>0) { if(css[i]=='{')++depth; else if(css[i]=='}')--depth; ++i; }
+                if (eval_media_query(mq)) {
+                    // Recursively parse inner CSS
+                    std::string inner = css.substr(bs, i-1-bs);
+                    auto inner_rules = parse_css(inner);
+                    for (auto& r : inner_rules) {
+                        r.order = (int)rules.size();
+                        rules.push_back(std::move(r));
+                    }
+                }
+            } else {
+                // Skip other @rules (keyframes, font-face, etc.)
+                int depth=1; i=ob+1;
+                while (i<n && depth>0) { if(css[i]=='{')++depth; else if(css[i]=='}')--depth; ++i; }
+            }
             continue;
         }
         size_t ss=i;
