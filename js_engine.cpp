@@ -843,7 +843,34 @@ static JSValue js_getComputedStyle(JSContext* ctx, JSValueConst this_val,
     JS_SetPropertyStr(ctx, result, "backgroundColor", JS_NewString(ctx, bgColor.c_str()));
     JS_SetPropertyStr(ctx, result, "background-color", JS_NewString(ctx, bgColor.c_str()));
 
-    // Copy all inline style properties to computed style
+    // Default box model properties (must return strings, not undefined)
+    static const char* zero_px_props[] = {
+        "width", "height", "top", "left", "right", "bottom",
+        "marginTop", "marginRight", "marginBottom", "marginLeft",
+        "margin-top", "margin-right", "margin-bottom", "margin-left",
+        "paddingTop", "paddingRight", "paddingBottom", "paddingLeft",
+        "padding-top", "padding-right", "padding-bottom", "padding-left",
+        "borderTopWidth", "borderRightWidth", "borderBottomWidth", "borderLeftWidth",
+        "border-top-width", "border-right-width", "border-bottom-width", "border-left-width",
+        "minWidth", "minHeight", "min-width", "min-height",
+        "maxWidth", "maxHeight", "max-width", "max-height",
+        nullptr
+    };
+    for (int i = 0; zero_px_props[i]; i++)
+        JS_SetPropertyStr(ctx, result, zero_px_props[i], JS_NewString(ctx, "0px"));
+    // Other common defaults
+    JS_SetPropertyStr(ctx, result, "position", JS_NewString(ctx, "static"));
+    JS_SetPropertyStr(ctx, result, "visibility", JS_NewString(ctx, "visible"));
+    JS_SetPropertyStr(ctx, result, "overflow", JS_NewString(ctx, "visible"));
+    JS_SetPropertyStr(ctx, result, "opacity", JS_NewString(ctx, "1"));
+    JS_SetPropertyStr(ctx, result, "zIndex", JS_NewString(ctx, "auto"));
+    JS_SetPropertyStr(ctx, result, "z-index", JS_NewString(ctx, "auto"));
+    JS_SetPropertyStr(ctx, result, "float", JS_NewString(ctx, "none"));
+    JS_SetPropertyStr(ctx, result, "cssFloat", JS_NewString(ctx, "none"));
+    JS_SetPropertyStr(ctx, result, "boxSizing", JS_NewString(ctx, "content-box"));
+    JS_SetPropertyStr(ctx, result, "box-sizing", JS_NewString(ctx, "content-box"));
+
+    // Copy all inline style properties to computed style (overrides defaults above)
     if (!JS_IsUndefined(inlineStyle) && !JS_IsNull(inlineStyle)) {
         // Get the DOM node to access style_props
         DOMNode* node = js_get_node(ctx, argv[0]);
@@ -1643,6 +1670,22 @@ globalThis.URLSearchParams = function URLSearchParams(init) {
     this.forEach = function(cb) {
         for (var k in this._params) if (this._params.hasOwnProperty(k)) cb(this._params[k], k, this);
     };
+    this.entries = function() {
+        var result = [];
+        for (var k in this._params) if (this._params.hasOwnProperty(k)) result.push([k, this._params[k]]);
+        return result[Symbol.iterator] ? result : result;
+    };
+    this.keys = function() {
+        var result = Object.keys(this._params);
+        return result;
+    };
+    this.values = function() {
+        var self = this;
+        return Object.keys(this._params).map(function(k) { return self._params[k]; });
+    };
+    this.getAll = function(k) { return this._params.hasOwnProperty(k) ? [this._params[k]] : []; };
+    this.append = function(k, v) { this._params[k] = String(v); };
+    this.sort = function() {};
 };
 
 // URL constructor basic stub
@@ -3327,6 +3370,48 @@ if (typeof window.__tcfapi === 'undefined') {
 }
 if (typeof window.__uspapi === 'undefined') window.__uspapi = function(cmd, ver, cb) { if (cb) cb({ version: 1, uspString: '1---' }, true); };
 if (typeof window.__cmp === 'undefined') window.__cmp = function(cmd, arg, cb) { if (cb) cb({ consentData: '', gdprApplies: false }, true); };
+// GPP (Global Privacy Platform) consent stub — Atlas MG / blogherads uses this
+if (typeof window.__gpp === 'undefined') {
+    var _gppListeners = {};
+    var _gppListenerId = 0;
+    var _gppData = {
+        sectionId: 0, gppVersion: '1.1', cmpStatus: 'loaded', cmpDisplayStatus: 'disabled',
+        signalStatus: 'ready', applicableSections: [-1], gppString: 'DBAA',
+        parsedSections: {}, cmpId: 10
+    };
+    window.__gpp = function(cmd, cb, param) {
+        if (cmd === 'addEventListener') {
+            var id = ++_gppListenerId;
+            _gppListeners[id] = cb;
+            var pingData = Object.assign({}, _gppData, { supportedAPIs: [] });
+            var data = { listenerId: id, eventName: 'signalStatus', data: pingData, pingData: pingData };
+            if (cb) cb(data, true);
+            return id;
+        } else if (cmd === 'removeEventListener') {
+            if (param && _gppListeners[param]) delete _gppListeners[param];
+            if (cb) cb(true);
+        } else if (cmd === 'ping') {
+            var pingData = Object.assign({}, _gppData);
+            if (cb) cb(pingData, true);
+            return pingData;
+        } else if (cmd === 'getSection' || cmd === 'getField') {
+            if (cb) cb(null, true);
+        } else if (cmd === 'hasSection') {
+            if (cb) cb(false, true);
+        } else {
+            if (cb) cb(Object.assign({}, _gppData), true);
+        }
+    };
+    window.__gpp.a = [];
+    // Create __gppLocator marker (checked by window.frames.__gppLocator)
+    try {
+        var _gppFrame = document.createElement('iframe');
+        _gppFrame.name = '__gppLocator';
+        _gppFrame.style = 'display:none';
+        if (document.body) document.body.appendChild(_gppFrame);
+        else setTimeout(function() { if (document.body) document.body.appendChild(_gppFrame); }, 0);
+    } catch(e) {}
+}
 // Google consent mode stub
 if (typeof window.gtag === 'undefined') {
     window.dataLayer = window.dataLayer || [];
@@ -5335,6 +5420,12 @@ uint32_t JSEngine::setInterval(JSValue func, int interval_ms) {
                 td->engine->addConsoleEntry(ConsoleLevel::ERROR, std::string(s), "setInterval");
                 JS_FreeCString(td->engine->ctx, s);
             }
+            JSValue stack = JS_GetPropertyStr(td->engine->ctx, exc, "stack");
+            if (!JS_IsUndefined(stack)) {
+                const char* st = JS_ToCString(td->engine->ctx, stack);
+                if (st) { fprintf(stderr, "[JS Interval Stack] %s\n", st); JS_FreeCString(td->engine->ctx, st); }
+            }
+            JS_FreeValue(td->engine->ctx, stack);
             JS_FreeValue(td->engine->ctx, exc);
         }
         JS_FreeValue(td->engine->ctx, ret);

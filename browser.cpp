@@ -4936,11 +4936,26 @@ static void fetch_page(AppState* st, TabState* tab, std::string url, int gen) {
         // Execute scripts in document order (interleaved external + inline)
         DOMNode* script_parent = doc->head ? doc->head : doc->body;
 
+        // Blocked script domains — these are stubbed in our polyfills
+        static const char* blocked_script_domains[] = {
+            "cdn.tinypass.com/", "html-load.com/",
+            nullptr
+        };
         for (const auto& [is_external, idx] : doc->script_order) {
             if (is_external) {
                 auto it = external_scripts.find(idx);
                 if (it == external_scripts.end()) continue; // fetch failed
                 std::string fname = idx < doc->script_srcs.size() ? doc->script_srcs[idx] : "<external>";
+                // Skip blocked scripts
+                bool skip = false;
+                for (int bi = 0; blocked_script_domains[bi]; bi++) {
+                    if (fname.find(blocked_script_domains[bi]) != std::string::npos) {
+                        fprintf(stderr, "[JS-TRACE] BLOCKED external script (stubbed): %s\n", fname.c_str());
+                        skip = true;
+                        break;
+                    }
+                }
+                if (skip) continue;
                 std::string stype = idx < doc->script_types.size() ? doc->script_types[idx] : "";
                 bool is_module = (stype == "module");
                 auto script_el = doc->createElement("script");
@@ -4977,7 +4992,8 @@ static void fetch_page(AppState* st, TabState* tab, std::string url, int gen) {
             }
         }
 
-        // Debug: check module exports and patch scoring to log per-category results
+        // Debug: css3test-specific scoring patches (only runs on css3test.co)
+        if (url.find("css3test") != std::string::npos || url.find("html5test") != std::string::npos)
         engine->eval(R"JS(
             console.warn('[DEBUG-CSS3] typeof runTests = ' + typeof runTests);
             console.warn('[DEBUG-CSS3] typeof window.onload = ' + typeof window.onload);

@@ -963,6 +963,21 @@ static JSValue js_element_appendChild(JSContext* ctx, JSValueConst this_val,
             fprintf(stderr, "[appendChild] script src found: %s\n", it != appended->attributes.end() ? it->second.c_str() : "NO");
             if (it != appended->attributes.end() && !it->second.empty()) {
                 std::string src_url = it->second;
+                // Block known problematic ad-tech/paywall SDK scripts that error in our engine
+                // We already have stubs for these — loading the real ones causes cascading errors
+                static const char* blocked_domains[] = {
+                    "cdn.tinypass.com/", "html-load.com/",
+                    nullptr
+                };
+                bool blocked = false;
+                for (int bi = 0; blocked_domains[bi]; bi++) {
+                    if (src_url.find(blocked_domains[bi]) != std::string::npos) {
+                        fprintf(stderr, "[appendChild] BLOCKED script (stubbed): %s\n", src_url.c_str());
+                        blocked = true;
+                        break;
+                    }
+                }
+                if (!blocked) {
                 // Resolve relative URLs
                 if (!src_url.empty() && src_url[0] != 'h' && src_url[0] != 'f' && src_url[0] != 'd') {
                     if (g_js_engine && !g_js_engine->page_url.empty()) {
@@ -1013,6 +1028,7 @@ static JSValue js_element_appendChild(JSContext* ctx, JSValueConst this_val,
                 } else {
                     fprintf(stderr, "[script] Failed to fetch dynamic script: %s\n", src_url.c_str());
                 }
+                } // end if (!blocked)
             }
         }
 
