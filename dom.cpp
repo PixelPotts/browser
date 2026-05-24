@@ -1689,8 +1689,11 @@ void Document::querySelectorHelper(DOMNode* node, const std::string& selector,
 }
 
 void Document::appendChild(DOMNode* parent, std::shared_ptr<DOMNode> child) {
+    fprintf(stderr, "[Doc::appendChild] parent=<%s> child=<%s> child.use_count=%ld orphans.size=%zu\n",
+            parent->tag_name.c_str(), child->tag_name.c_str(), child.use_count(), orphans.size());
     // Remove from old parent if any
     if (child->parent) {
+        fprintf(stderr, "[Doc::appendChild] removing from old parent <%s>\n", child->parent->tag_name.c_str());
         auto& siblings = child->parent->children;
         siblings.erase(
             std::remove_if(siblings.begin(), siblings.end(),
@@ -1698,16 +1701,21 @@ void Document::appendChild(DOMNode* parent, std::shared_ptr<DOMNode> child) {
             siblings.end());
     }
     // Remove from orphans list (now owned by parent's children vector)
+    fprintf(stderr, "[Doc::appendChild] removing from orphans\n");
     orphans.erase(
         std::remove_if(orphans.begin(), orphans.end(),
             [&](const std::shared_ptr<DOMNode>& n) { return n.get() == child.get(); }),
         orphans.end());
+    fprintf(stderr, "[Doc::appendChild] setting parent, pushing to children\n");
     child->parent = parent;
     parent->children.push_back(child);
+    fprintf(stderr, "[Doc::appendChild] registerNode\n");
     registerNode(child.get());
+    fprintf(stderr, "[Doc::appendChild] markDirty + callbacks\n");
     parent->markDirty();
     if (on_mutated) on_mutated();
     if (on_mutation) on_mutation(parent->node_id, "childList");
+    fprintf(stderr, "[Doc::appendChild] done\n");
 }
 
 void Document::removeChild(DOMNode* parent, DOMNode* child) {

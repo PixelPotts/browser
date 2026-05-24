@@ -11,6 +11,8 @@
 #include <cstring>
 #include <cmath>
 #include <memory>
+#include <signal.h>
+#include <execinfo.h>
 #include "dom.h"
 #include "js_engine.h"
 #include "js_event.h"
@@ -6335,7 +6337,17 @@ static void run_test_probes(AppState* st) {
 
 // ---- main ----
 
+static void crash_handler(int sig) {
+    fprintf(stderr, "\n[CRASH] Signal %d (%s)\n", sig, strsignal(sig));
+    void* frames[32];
+    int n = backtrace(frames, 32);
+    backtrace_symbols_fd(frames, n, 2);
+    _exit(128 + sig);
+}
+
 int main(int argc, char** argv) {
+    signal(SIGSEGV, crash_handler);
+    signal(SIGABRT, crash_handler);
     curl_global_init(CURL_GLOBAL_DEFAULT);
     gtk_init(&argc, &argv);
 
