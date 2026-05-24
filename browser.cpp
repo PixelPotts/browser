@@ -3621,8 +3621,19 @@ static void render_node(AppState* st, TabState* tab, DOMNode* node, int gen,
 
     // ELEMENT node
 
+    // Skip non-visual elements (their text content should never be rendered)
+    const std::string& tag = node->tag_name;
+    if (tag == "style" || tag == "script" || tag == "head" || tag == "meta" ||
+        tag == "link" || tag == "title" || tag == "noscript" || tag == "template" ||
+        tag == "datalist") {
+        return;
+    }
+
+    // display:none — skip entire subtree
+    if (node->display == DOMNode::Display::None) return;
+
     // <svg> — render with Cairo drawing area
-    if (node->tag_name == "svg") {
+    if (tag == "svg") {
         float_rows.back() = nullptr;
         GtkWidget* cur = cstack.back();
         int svg_w = 300, svg_h = 150; // SVG spec defaults
