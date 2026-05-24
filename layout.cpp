@@ -108,6 +108,13 @@ static void copy_style(LayoutBox* box, DOMNode* node) {
     box->margin.bottom = std::max(0, node->margin[2]);
     box->margin.left = std::max(0, node->margin[3]);
 
+    // UA defaults for lists
+    const auto& tag = node->tag_name;
+    if ((tag == "ul" || tag == "ol") && node->padding[3] <= 0)
+        box->padding.left = 40;
+    if (tag == "li" && box->margin.bottom == 0)
+        box->margin.bottom = 4;
+
     // Padding
     box->padding.top = std::max(0, node->padding[0]);
     box->padding.right = std::max(0, node->padding[1]);

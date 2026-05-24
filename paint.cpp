@@ -243,8 +243,61 @@ static void paint_box(LayoutBox* box, DisplayList& dl, float offset_x, float off
         cmd.type = PaintCmdType::FillRect;
         cmd.rect = bb;
         cmd.color = bgc;
+        cmd.border_radius = node ? node->border_radius : 0;
         cmd.dom_node = node;
         dl.push_back(cmd);
+    }
+
+    // List markers for <li> elements
+    if (node && node->tag_name == "li") {
+        // Determine marker type from parent
+        bool ordered = false;
+        int index = 1;
+        if (node->parent) {
+            ordered = (node->parent->tag_name == "ol");
+            // Count preceding <li> siblings for numbering
+            if (ordered) {
+                index = 0;
+                for (auto& sibling : node->parent->children) {
+                    if (sibling->tag_name == "li") index++;
+                    if (sibling.get() == node) break;
+                }
+            }
+        }
+
+        // Resolve text color for the marker
+        std::string mc;
+        LayoutBox* b = box;
+        while (b) {
+            if (!b->color.empty()) { mc = b->color; break; }
+            b = b->parent;
+        }
+        if (mc.empty()) mc = "black";
+        CairoColor marker_c = parse_css_color(mc);
+
+        PaintCommand cmd;
+        cmd.type = PaintCmdType::DrawText;
+        cmd.text_color = marker_c;
+        cmd.text_x = cx - 20; // position marker to the left
+        cmd.text_y = cy;
+        cmd.dom_node = node;
+
+        // Create a temporary pango layout for the marker
+        PangoLayout* marker_layout = pango_layout_copy(
+            box->pango_layout ? box->pango_layout :
+            (!box->children.empty() && box->children[0]->pango_layout ? box->children[0]->pango_layout : nullptr));
+        if (marker_layout) {
+            if (ordered) {
+                std::string num = std::to_string(index) + ".";
+                pango_layout_set_text(marker_layout, num.c_str(), -1);
+            } else {
+                pango_layout_set_text(marker_layout, "\xe2\x80\xa2", -1); // bullet •
+            }
+            pango_layout_set_width(marker_layout, -1); // no wrapping
+            cmd.pango_layout = marker_layout;
+            dl.push_back(cmd);
+            // Note: marker_layout leaked - TODO: track and free
+        }
     }
 
     // Border
@@ -367,8 +420,22 @@ void render_display_list(cairo_t* cr, const DisplayList& dl, float scroll_x, flo
         switch (cmd.type) {
             case PaintCmdType::FillRect: {
                 cairo_set_source_rgba(cr, cmd.color.r, cmd.color.g, cmd.color.b, cmd.color.a);
-                cairo_rectangle(cr, cmd.rect.x, cmd.rect.y, cmd.rect.w, cmd.rect.h);
-                cairo_fill(cr);
+                if (cmd.border_radius > 0) {
+                    float rx = cmd.rect.x, ry = cmd.rect.y;
+                    float rw = cmd.rect.w, rh = cmd.rect.h;
+                    float hr = std::min((float)cmd.border_radius, rw / 2);
+                    float vr = std::min((float)cmd.border_radius, rh / 2);
+                    cairo_new_path(cr);
+                    cairo_arc(cr, rx + hr, ry + vr, hr, M_PI, 1.5 * M_PI);
+                    cairo_arc(cr, rx + rw - hr, ry + vr, hr, 1.5 * M_PI, 2 * M_PI);
+                    cairo_arc(cr, rx + rw - hr, ry + rh - vr, vr, 0, 0.5 * M_PI);
+                    cairo_arc(cr, rx + hr, ry + rh - vr, vr, 0.5 * M_PI, M_PI);
+                    cairo_close_path(cr);
+                    cairo_fill(cr);
+                } else {
+                    cairo_rectangle(cr, cmd.rect.x, cmd.rect.y, cmd.rect.w, cmd.rect.h);
+                    cairo_fill(cr);
+                }
                 break;
             }
 
