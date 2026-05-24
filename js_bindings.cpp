@@ -1204,6 +1204,37 @@ static JSValue js_element_querySelectorAll(JSContext* ctx, JSValueConst this_val
     return js_wrap_nodelist(ctx, results);
 }
 
+// Native Element.matches(selector) — uses dom_sel_matches
+static JSValue js_element_matches(JSContext* ctx, JSValueConst this_val,
+                                   int argc, JSValueConst* argv) {
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node || argc < 1) return JS_FALSE;
+    const char* sel = JS_ToCString(ctx, argv[0]);
+    if (!sel) return JS_FALSE;
+    bool result = dom_sel_matches(sel, node);
+    JS_FreeCString(ctx, sel);
+    return result ? JS_TRUE : JS_FALSE;
+}
+
+// Native Element.closest(selector) — walk up tree
+static JSValue js_element_closest(JSContext* ctx, JSValueConst this_val,
+                                   int argc, JSValueConst* argv) {
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node || argc < 1) return JS_NULL;
+    const char* sel = JS_ToCString(ctx, argv[0]);
+    if (!sel) return JS_NULL;
+    DOMNode* cur = node;
+    while (cur) {
+        if (cur->node_type == DOMNode::ELEMENT && dom_sel_matches(sel, cur)) {
+            JS_FreeCString(ctx, sel);
+            return js_wrap_node(ctx, cur);
+        }
+        cur = cur->parent;
+    }
+    JS_FreeCString(ctx, sel);
+    return JS_NULL;
+}
+
 static JSValue js_element_addEventListener(JSContext* ctx, JSValueConst this_val,
                                             int argc, JSValueConst* argv);
 static JSValue js_element_removeEventListener(JSContext* ctx, JSValueConst this_val,
@@ -2586,6 +2617,10 @@ void js_bindings_init(JSEngine* engine) {
         JS_NewCFunction(ctx, js_element_querySelector, "querySelector", 1));
     JS_SetPropertyStr(ctx, elem_proto, "querySelectorAll",
         JS_NewCFunction(ctx, js_element_querySelectorAll, "querySelectorAll", 1));
+    JS_SetPropertyStr(ctx, elem_proto, "matches",
+        JS_NewCFunction(ctx, js_element_matches, "matches", 1));
+    JS_SetPropertyStr(ctx, elem_proto, "closest",
+        JS_NewCFunction(ctx, js_element_closest, "closest", 1));
     JS_SetPropertyStr(ctx, elem_proto, "addEventListener",
         JS_NewCFunction(ctx, js_element_addEventListener, "addEventListener", 2));
     JS_SetPropertyStr(ctx, elem_proto, "removeEventListener",

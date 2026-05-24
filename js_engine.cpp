@@ -1118,8 +1118,7 @@ EventTarget.prototype = {
 globalThis.Element = function Element() {};
 Element.prototype = Object.create(Node.prototype);
 Element.prototype.constructor = Element;
-Element.prototype.matches = function(sel) { return false; };
-Element.prototype.closest = function(sel) { return null; };
+// matches() and closest() are now native C++ in js_bindings.cpp
 Element.prototype.getAttribute = function() { return null; };
 Element.prototype.setAttribute = function() {};
 Element.prototype.removeAttribute = function() {};
@@ -2731,19 +2730,7 @@ document.getElementsByName = function(name) {
         if (!el.hasAttribute) el.hasAttribute = function(n) {
             return this.getAttribute(n) !== null;
         };
-        if (!el.matches) el.matches = function(sel) {
-            var all = document.querySelectorAll(sel);
-            for (var i = 0; i < all.length; i++) if (all[i] === this) return true;
-            return false;
-        };
-        if (!el.closest) el.closest = function(sel) {
-            var cur = this;
-            while (cur) {
-                if (cur.matches && cur.matches(sel)) return cur;
-                cur = cur.parentNode;
-            }
-            return null;
-        };
+        // matches() and closest() are now native C++
         if (!el.contains) el.contains = function(other) {
             var cur = other;
             while (cur) {
