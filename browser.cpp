@@ -1155,6 +1155,7 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
     enum { NORM, SCRIPT_CAP, STYLE_SKIP, NOSCRIPT_SKIP, COMMENT } state = NORM;
     std::string script_content;
     std::string script_src;
+    std::string script_type;
     int skip_depth = 0;
     size_t i = 0, n = html.size();
 
@@ -1175,11 +1176,13 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
             }
             if (!script_src.empty()) {
                 doc->script_srcs.push_back(script_src);
+                doc->script_types.push_back(script_type);
             } else if (!script_content.empty()) {
                 doc->scripts.push_back(script_content);
             }
             script_content.clear();
             script_src.clear();
+            script_type.clear();
             state = NORM; continue;
         }
         if (state == STYLE_SKIP) {
@@ -1225,6 +1228,7 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
 
         if (!closing && tname == "script") {
             script_src = extract_attr(tag, "src");
+            script_type = extract_attr(tag, "type");
             if (!script_src.empty()) script_src = resolve(base, script_src);
             state = SCRIPT_CAP; continue;
         }
@@ -4300,14 +4304,23 @@ static void fetch_page(AppState* st, TabState* tab, std::string url, int gen) {
         DOMNode* script_parent = doc->head ? doc->head : doc->body;
         for (size_t i = 0; i < external_scripts.size(); i++) {
             std::string fname = i < doc->script_srcs.size() ? doc->script_srcs[i] : "<external>";
+            std::string stype = i < doc->script_types.size() ? doc->script_types[i] : "";
+            bool is_module = (stype == "module");
             auto script_el = doc->createElement("script");
             script_el->attributes["src"] = fname;
+            if (!stype.empty()) script_el->attributes["type"] = stype;
             if (script_parent) doc->appendChild(script_parent, script_el);
             engine->has_current_script = true;
             engine->current_script_src = fname;
             engine->current_script_node = script_el.get();
-            fprintf(stderr, "[JS-TRACE] Eval external: %s (%zu bytes)\n", fname.c_str(), external_scripts[i].size());
-            bool ok = engine->eval(external_scripts[i], fname);
+            fprintf(stderr, "[JS-TRACE] Eval external%s: %s (%zu bytes)\n",
+                    is_module ? " (module)" : "", fname.c_str(), external_scripts[i].size());
+            bool ok;
+            if (is_module) {
+                ok = engine->evalModule(external_scripts[i], fname);
+            } else {
+                ok = engine->eval(external_scripts[i], fname);
+            }
             fprintf(stderr, "[JS-TRACE]   => %s\n", ok ? "OK" : "FAILED");
             engine->has_current_script = false;
             engine->current_script_src.clear();

@@ -184,6 +184,7 @@ public:
     // Script collection
     std::vector<std::string> scripts; // inline script contents
     std::vector<std::string> script_srcs; // external script URLs
+    std::vector<std::string> script_types; // type attribute for each script_src
 
 private:
     // CSS selector matching helpers
