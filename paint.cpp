@@ -338,6 +338,7 @@ static void paint_box(LayoutBox* box, DisplayList& dl, float offset_x, float off
     if (has_opacity) {
         PaintCommand cmd;
         cmd.type = PaintCmdType::PopOpacity;
+        cmd.opacity = (float)box->opacity;
         dl.push_back(cmd);
     }
 }

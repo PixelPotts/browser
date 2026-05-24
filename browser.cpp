@@ -312,6 +312,10 @@ static int parse_px_val(const std::string& raw) {
         if (u=="pt")        return (int)(n*4.0/3.0);
         if (u=="em")        return (int)(n*16); // approximate
         if (u=="rem")       return (int)(n*16);
+        if (u=="vw")        return (int)(n*11); // approximate: 1100px viewport
+        if (u=="vh")        return (int)(n*8);  // approximate: 800px viewport
+        if (u=="vmin")      return (int)(n*8);
+        if (u=="vmax")      return (int)(n*11);
     } catch (...) {}
     return 0;
 }

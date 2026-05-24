@@ -968,13 +968,16 @@ void perform_layout(LayoutBox* root, float viewport_width, float viewport_height
                     PangoContext* pango_ctx) {
     if (!root) return;
 
-    // Root box keeps its margins and gets positioned accordingly
+    // Initial root position (margins may change during layout for margin:auto)
     root->content_rect.x = root->margin.left + root->padding.left + root->border.left;
     root->content_rect.y = root->margin.top + root->padding.top + root->border.top;
 
-    // Layout with viewport width minus root margins
-    float avail_w = viewport_width - root->margin.horizontal();
-    layout_box(root, avail_w, viewport_height, pango_ctx);
+    // Layout with viewport width (layout_block will handle margin:auto centering)
+    layout_box(root, viewport_width, viewport_height, pango_ctx);
+
+    // Re-set root position after margin:auto may have updated margins
+    root->content_rect.x = root->margin.left + root->padding.left + root->border.left;
+    root->content_rect.y = root->margin.top + root->padding.top + root->border.top;
 
     // Compute absolute positions
     root->compute_abs_positions(0, 0);
