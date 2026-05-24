@@ -1594,6 +1594,21 @@ globalThis.DOMTokenList = function DOMTokenList() {};
 DOMTokenList.prototype = { add: function(){}, remove: function(){}, toggle: function(){ return false; }, contains: function(){ return false; }, length: 0 };
 globalThis.NamedNodeMap = function NamedNodeMap() {};
 NamedNodeMap.prototype = { length: 0, getNamedItem: function(){ return null; }, setNamedItem: function(){}, removeNamedItem: function(){} };
+globalThis.Attr = function Attr(name, value, ownerElement) {
+    this.name = name || '';
+    this.localName = name || '';
+    this.nodeName = name || '';
+    this.value = value !== undefined ? value : '';
+    this.nodeValue = value !== undefined ? value : '';
+    this.textContent = value !== undefined ? value : '';
+    this.ownerElement = ownerElement || null;
+    this.specified = true;
+    this.nodeType = 2;
+    this.namespaceURI = null;
+    this.prefix = null;
+};
+Attr.prototype = Object.create(Node.prototype);
+Attr.prototype.constructor = Attr;
 
 // Forward declarations needed by CSS rule types
 globalThis.MediaList = function MediaList() { this.length = 0; };

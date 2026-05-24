@@ -463,16 +463,35 @@ static JSValue js_element_get_attributes(JSContext* ctx, JSValueConst this_val) 
     if (!node) return JS_UNDEFINED;
     JSValue arr = JS_NewArray(ctx);
     int idx = 0;
+    // Get the Attr constructor so instances pass instanceof checks
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue attr_ctor = JS_GetPropertyStr(ctx, global, "Attr");
+    JSValue attr_proto = JS_UNDEFINED;
+    if (!JS_IsUndefined(attr_ctor) && !JS_IsNull(attr_ctor)) {
+        attr_proto = JS_GetPropertyStr(ctx, attr_ctor, "prototype");
+    }
     for (const auto& [k, v] : node->attributes) {
         JSValue attr = JS_NewObject(ctx);
+        if (!JS_IsUndefined(attr_proto) && !JS_IsNull(attr_proto)) {
+            JS_SetPrototype(ctx, attr, attr_proto);
+        }
         JS_SetPropertyStr(ctx, attr, "name", JS_NewString(ctx, k.c_str()));
+        JS_SetPropertyStr(ctx, attr, "localName", JS_NewString(ctx, k.c_str()));
         JS_SetPropertyStr(ctx, attr, "nodeName", JS_NewString(ctx, k.c_str()));
         JS_SetPropertyStr(ctx, attr, "value", JS_NewString(ctx, v.c_str()));
         JS_SetPropertyStr(ctx, attr, "nodeValue", JS_NewString(ctx, v.c_str()));
+        JS_SetPropertyStr(ctx, attr, "textContent", JS_NewString(ctx, v.c_str()));
         JS_SetPropertyStr(ctx, attr, "specified", JS_TRUE);
+        JS_SetPropertyStr(ctx, attr, "nodeType", JS_NewInt32(ctx, 2));
+        JS_SetPropertyStr(ctx, attr, "ownerElement", JS_DupValue(ctx, this_val));
+        JS_SetPropertyStr(ctx, attr, "namespaceURI", JS_NULL);
+        JS_SetPropertyStr(ctx, attr, "prefix", JS_NULL);
         JS_SetPropertyUint32(ctx, arr, idx++, JS_DupValue(ctx, attr));
         JS_SetPropertyStr(ctx, arr, k.c_str(), attr);
     }
+    JS_FreeValue(ctx, attr_proto);
+    JS_FreeValue(ctx, attr_ctor);
+    JS_FreeValue(ctx, global);
     JS_SetPropertyStr(ctx, arr, "length", JS_NewInt32(ctx, idx));
     JS_SetPropertyStr(ctx, arr, "getNamedItem",
         JS_NewCFunction(ctx, js_attr_getNamedItem, "getNamedItem", 1));
