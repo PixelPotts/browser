@@ -1053,6 +1053,83 @@ static bool check_attr_selector(const std::string& expr, DOMNode* node) {
     return false;
 }
 
+// Parse An+B notation: "odd", "even", "3", "2n+1", "-n+3", "n", "3n", "-2n-1", etc.
+// Returns {a, b} where the formula is An+B
+static std::pair<int,int> parse_anb(const std::string& raw) {
+    std::string s;
+    for (char c : raw) if (!isspace((unsigned char)c)) s += c;
+    if (s == "odd") return {2, 1};
+    if (s == "even") return {2, 0};
+    size_t npos = s.find('n');
+    if (npos == std::string::npos) {
+        // Just a number B
+        try { return {0, std::stoi(s)}; } catch (...) { return {0, 0}; }
+    }
+    // Parse A
+    int a = 1;
+    if (npos == 0) a = 1;
+    else if (npos == 1 && s[0] == '-') a = -1;
+    else if (npos == 1 && s[0] == '+') a = 1;
+    else { try { a = std::stoi(s.substr(0, npos)); } catch (...) { a = 0; } }
+    // Parse B
+    int b = 0;
+    if (npos + 1 < s.size()) {
+        try { b = std::stoi(s.substr(npos + 1)); } catch (...) { b = 0; }
+    }
+    return {a, b};
+}
+
+// Check if 1-based index matches An+B formula
+static bool matches_anb(int a, int b, int index) {
+    if (a == 0) return index == b;
+    // index = a*n + b, for some integer n >= 0
+    // n = (index - b) / a, must be integer >= 0
+    int diff = index - b;
+    if (diff == 0) return true;
+    if ((diff < 0 && a > 0) || (diff > 0 && a < 0)) return false;
+    return diff % a == 0 && diff / a >= 0;
+}
+
+// Count element's 1-based index among siblings (element children only)
+static int element_index(DOMNode* node) {
+    if (!node->parent) return 1;
+    int idx = 0;
+    for (auto& c : node->parent->children) {
+        if (c->node_type == DOMNode::ELEMENT) ++idx;
+        if (c.get() == node) return idx;
+    }
+    return 1;
+}
+
+// Count element's 1-based index from end among siblings
+static int element_index_last(DOMNode* node) {
+    if (!node->parent) return 1;
+    int total = 0;
+    for (auto& c : node->parent->children)
+        if (c->node_type == DOMNode::ELEMENT) ++total;
+    return total - element_index(node) + 1;
+}
+
+// Count element's 1-based index among same-tag siblings
+static int element_type_index(DOMNode* node) {
+    if (!node->parent) return 1;
+    int idx = 0;
+    for (auto& c : node->parent->children) {
+        if (c->node_type == DOMNode::ELEMENT && c->tag_name == node->tag_name) ++idx;
+        if (c.get() == node) return idx;
+    }
+    return 1;
+}
+
+// Count element's 1-based index from end among same-tag siblings
+static int element_type_index_last(DOMNode* node) {
+    if (!node->parent) return 1;
+    int total = 0;
+    for (auto& c : node->parent->children)
+        if (c->node_type == DOMNode::ELEMENT && c->tag_name == node->tag_name) ++total;
+    return total - element_type_index(node) + 1;
+}
+
 bool dom_simple_match(const std::string& raw, DOMNode* node) {
     if (raw.empty() || raw == "*") return true;
     if (node->node_type != DOMNode::ELEMENT) return false;
@@ -1230,6 +1307,63 @@ bool dom_simple_match(const std::string& raw, DOMNode* node) {
             if (node->attributes.find("disabled") == node->attributes.end()) return false;
         } else if (ps == "enabled") {
             if (node->attributes.find("disabled") != node->attributes.end()) return false;
+        } else if (ps == "root") {
+            if (node->tag_name != "html") return false;
+            if (node->parent && node->parent->parent) return false;
+        } else if (ps == "empty") {
+            bool has_content = false;
+            for (auto& c : node->children) {
+                if (c->node_type == DOMNode::ELEMENT) { has_content = true; break; }
+                if (c->node_type == DOMNode::TEXT && !c->text_content.empty()) { has_content = true; break; }
+            }
+            if (has_content) return false;
+        } else if (ps == "only-child") {
+            if (!node->parent) return false;
+            int count = 0;
+            for (auto& c : node->parent->children)
+                if (c->node_type == DOMNode::ELEMENT) ++count;
+            if (count != 1) return false;
+        } else if (ps == "first-of-type") {
+            if (!node->parent) return false;
+            for (auto& c : node->parent->children) {
+                if (c->node_type == DOMNode::ELEMENT && c->tag_name == node->tag_name) {
+                    if (c.get() != node) return false;
+                    break;
+                }
+            }
+        } else if (ps == "last-of-type") {
+            if (!node->parent) return false;
+            bool found = false;
+            for (int j = (int)node->parent->children.size() - 1; j >= 0; --j) {
+                auto& c = node->parent->children[j];
+                if (c->node_type == DOMNode::ELEMENT && c->tag_name == node->tag_name) {
+                    if (c.get() != node) return false;
+                    found = true; break;
+                }
+            }
+            if (!found) return false;
+        } else if (ps == "only-of-type") {
+            if (!node->parent) return false;
+            int count = 0;
+            for (auto& c : node->parent->children)
+                if (c->node_type == DOMNode::ELEMENT && c->tag_name == node->tag_name) ++count;
+            if (count != 1) return false;
+        } else if (ps.substr(0, 10) == "nth-child(") {
+            std::string arg = ps.substr(10, ps.size() - 11);
+            auto [a, b] = parse_anb(arg);
+            if (!matches_anb(a, b, element_index(node))) return false;
+        } else if (ps.substr(0, 15) == "nth-last-child(") {
+            std::string arg = ps.substr(15, ps.size() - 16);
+            auto [a, b] = parse_anb(arg);
+            if (!matches_anb(a, b, element_index_last(node))) return false;
+        } else if (ps.substr(0, 13) == "nth-of-type(") {
+            std::string arg = ps.substr(13, ps.size() - 14);
+            auto [a, b] = parse_anb(arg);
+            if (!matches_anb(a, b, element_type_index(node))) return false;
+        } else if (ps.substr(0, 18) == "nth-last-of-type(") {
+            std::string arg = ps.substr(18, ps.size() - 19);
+            auto [a, b] = parse_anb(arg);
+            if (!matches_anb(a, b, element_type_index_last(node))) return false;
         }
         // other pseudo-classes: silently ignore (hover, focus, etc.)
     }
