@@ -1144,14 +1144,23 @@ Element.prototype.getBoxQuads = function() { return []; };
 Element.prototype.convertQuadFromNode = function() { return {}; };
 Element.prototype.convertRectFromNode = function() { return {}; };
 Element.prototype.convertPointFromNode = function() { return {}; };
-Element.prototype.pseudo = function() { return null; };
+Element.prototype.pseudo = function(t) { return new (globalThis.CSSPseudoElement || function(){this.type='';this.element=null;this.parent=null;this.pseudo=function(){return null;}})(); };
 Element.prototype.regionOverset = '';
 Element.prototype.getRegionFlowRanges = function() { return []; };
 Element.prototype.part = { length: 0, add: function(){}, remove: function(){}, toggle: function(){}, contains: function(){return false;} };
 Element.prototype.getSpatialNavigationContainer = function() { return null; };
 Element.prototype.focusableAreas = function() { return []; };
 Element.prototype.spatialNavigationSearch = function() { return null; };
-Element.prototype.computedStyleMap = function() { return new StylePropertyMapReadOnly(); };
+Element.prototype.computedStyleMap = function() {
+    return (typeof StylePropertyMapReadOnly !== 'undefined') ? new StylePropertyMapReadOnly() : {};
+};
+Object.defineProperty(Element.prototype, 'attributeStyleMap', {
+    get: function() {
+        if (!this._attrStyleMap) this._attrStyleMap = (typeof StylePropertyMap !== 'undefined') ? new StylePropertyMap() : {};
+        return this._attrStyleMap;
+    },
+    configurable: true
+});
 Element.prototype.animate = function() { return new Animation(); };
 Element.prototype.getAnimations = function() { return []; };
 Element.prototype.setPointerCapture = function() {};
@@ -1171,10 +1180,17 @@ if (typeof HTMLElement === 'undefined') {
     HTMLElement.prototype.scrollHeight = 0;
     HTMLElement.prototype.clientWidth = 0;
     HTMLElement.prototype.clientHeight = 0;
+    HTMLElement.prototype.clientTop = 0;
+    HTMLElement.prototype.clientLeft = 0;
 } else {
     // C++ set HTMLElement.prototype = elem_proto with all DOM getters/setters.
     // Chain it into the Element hierarchy without replacing the prototype object.
     Object.setPrototypeOf(HTMLElement.prototype, Element.prototype);
+    // Ensure DOM layout properties exist
+    if (!('clientTop' in HTMLElement.prototype)) HTMLElement.prototype.clientTop = 0;
+    if (!('clientLeft' in HTMLElement.prototype)) HTMLElement.prototype.clientLeft = 0;
+    if (!('clientWidth' in HTMLElement.prototype)) HTMLElement.prototype.clientWidth = 0;
+    if (!('clientHeight' in HTMLElement.prototype)) HTMLElement.prototype.clientHeight = 0;
 }
 
 // Web Components API stubs (prevents webcomponents-loader from crashing)
@@ -1543,7 +1559,7 @@ HTMLCollection.prototype = { length: 0, item: function(i) { return this[i] || nu
 
 // Window constructor
 globalThis.Window = function Window() {};
-Window.prototype = {};
+Window.prototype = { navigate: function() {} };
 
 // HTML*Element constructor stubs
 ['HTMLDivElement','HTMLSpanElement','HTMLIFrameElement','HTMLFormElement',
@@ -1563,7 +1579,14 @@ Window.prototype = {};
 
 // Misc constructors that libraries check for
 globalThis.CSSStyleDeclaration = function CSSStyleDeclaration() {};
-CSSStyleDeclaration.prototype = { getPropertyValue: function() { return ''; }, setProperty: function() {}, removeProperty: function() {} };
+CSSStyleDeclaration.prototype = {
+    cssText: '', length: 0, parentRule: null, cssFloat: '',
+    getPropertyValue: function(p) { return this[p] || ''; },
+    getPropertyPriority: function() { return ''; },
+    setProperty: function(p,v) { this[p] = v; },
+    removeProperty: function(p) { var old = this[p]; delete this[p]; return old || ''; },
+    item: function(i) { return ''; }
+};
 globalThis.DOMTokenList = function DOMTokenList() {};
 DOMTokenList.prototype = { add: function(){}, remove: function(){}, toggle: function(){ return false; }, contains: function(){ return false; }, length: 0 };
 globalThis.NamedNodeMap = function NamedNodeMap() {};
@@ -1593,6 +1616,22 @@ StylePropertyMapReadOnly.prototype = {
 StylePropertyMapReadOnly.prototype.size = 0;
 
 // ---- CSS OM interfaces (for css3test interface checks) ----
+// Forward declare CSSFontFeatureValuesMap (used by CSSFontFeatureValuesRule)
+if (typeof CSSFontFeatureValuesMap === 'undefined') {
+    globalThis.CSSFontFeatureValuesMap = function CSSFontFeatureValuesMap() {
+        this.size = 0;
+        this.get = function() { return null; };
+        this.has = function() { return false; };
+        this.set = function() {};
+        this.delete = function() {};
+        this.clear = function() {};
+        this.forEach = function() {};
+        this.entries = function() { return {next:function(){return {done:true};}}; };
+        this.keys = function() { return {next:function(){return {done:true};}}; };
+        this.values = function() { return {next:function(){return {done:true};}}; };
+    };
+}
+
 // CSSRule base
 globalThis.CSSRule = function CSSRule() {};
 CSSRule.STYLE_RULE = 1; CSSRule.CHARSET_RULE = 2; CSSRule.IMPORT_RULE = 3;
@@ -1600,7 +1639,13 @@ CSSRule.MEDIA_RULE = 4; CSSRule.FONT_FACE_RULE = 5; CSSRule.PAGE_RULE = 6;
 CSSRule.KEYFRAMES_RULE = 7; CSSRule.KEYFRAME_RULE = 8; CSSRule.NAMESPACE_RULE = 10;
 CSSRule.COUNTER_STYLE_RULE = 11; CSSRule.SUPPORTS_RULE = 12;
 CSSRule.FONT_FEATURE_VALUES_RULE = 14; CSSRule.VIEWPORT_RULE = 15;
-CSSRule.prototype = { type: 0, cssText: '', parentRule: null, parentStyleSheet: null };
+CSSRule.prototype = {
+    type: 0, cssText: '', parentRule: null, parentStyleSheet: null,
+    STYLE_RULE: 1, CHARSET_RULE: 2, IMPORT_RULE: 3, MEDIA_RULE: 4,
+    FONT_FACE_RULE: 5, PAGE_RULE: 6, KEYFRAMES_RULE: 7, KEYFRAME_RULE: 8,
+    MARGIN_RULE: 9, NAMESPACE_RULE: 10, COUNTER_STYLE_RULE: 11,
+    SUPPORTS_RULE: 12, FONT_FEATURE_VALUES_RULE: 14, VIEWPORT_RULE: 15
+};
 
 // Build CSS rule subclasses
 var _cssRuleTypes = [
@@ -1631,6 +1676,9 @@ _cssRuleTypes.forEach(function(name) {
         F.prototype.selectorText = '';
         F.prototype.styleMap = new StylePropertyMap();
         F.prototype.type = 1;
+        F.prototype.cssRules = [];
+        F.prototype.insertRule = function() { return 0; };
+        F.prototype.deleteRule = function() {};
     }
     if (name === 'CSSMediaRule' || name === 'CSSSupportsRule' || name === 'CSSGroupingRule' ||
         name === 'CSSConditionRule' || name === 'CSSContainerRule' ||
@@ -1644,10 +1692,12 @@ _cssRuleTypes.forEach(function(name) {
         F.prototype.media = new MediaList();
         F.prototype.conditionText = '';
         F.prototype.type = 4;
+        F.prototype.matches = false;
     }
     if (name === 'CSSSupportsRule') {
         F.prototype.conditionText = '';
         F.prototype.type = 12;
+        F.prototype.matches = false;
     }
     if (name === 'CSSKeyframesRule') {
         F.prototype.name = '';
@@ -1676,6 +1726,9 @@ _cssRuleTypes.forEach(function(name) {
     if (name === 'CSSPageRule') {
         F.prototype.selectorText = '';
         F.prototype.type = 6;
+        F.prototype.cssRules = [];
+        F.prototype.insertRule = function() { return 0; };
+        F.prototype.deleteRule = function() {};
     }
     if (name === 'CSSNamespaceRule') {
         F.prototype.namespaceURI = '';
@@ -1719,6 +1772,12 @@ _cssRuleTypes.forEach(function(name) {
     if (name === 'CSSFontFeatureValuesRule') {
         F.prototype.fontFamily = '';
         F.prototype.type = 14;
+        F.prototype.annotation = new CSSFontFeatureValuesMap();
+        F.prototype.characterVariant = new CSSFontFeatureValuesMap();
+        F.prototype.ornaments = new CSSFontFeatureValuesMap();
+        F.prototype.styleset = new CSSFontFeatureValuesMap();
+        F.prototype.stylistic = new CSSFontFeatureValuesMap();
+        F.prototype.swash = new CSSFontFeatureValuesMap();
     }
     if (name === 'CSSScopeRule') {
         F.prototype.start = '';
@@ -1737,6 +1796,7 @@ _cssRuleTypes.forEach(function(name) {
     }
     if (name === 'CSSStartingStyleRule') {
         F.prototype.conditionText = '';
+        F.prototype.addRule = function() { return 0; };
     }
     if (name === 'CSSFunctionRule') {
         F.prototype.name = '';
@@ -1751,6 +1811,7 @@ _cssRuleTypes.forEach(function(name) {
 // CSSStyleSheet (inherits from StyleSheet for interface tests)
 globalThis.CSSStyleSheet = function CSSStyleSheet() {
     this.cssRules = [];
+    this.cssRules.item = function(i) { return this[i] || null; };
     this.rules = this.cssRules;
     this.ownerRule = null;
     this.disabled = false;
@@ -1775,7 +1836,7 @@ CSSStyleSheet.prototype = {
         else if (trimmed.match(/^@counter-style/i)) { ruleObj = new CSSCounterStyleRule(); }
         else if (trimmed.match(/^@namespace/i)) { ruleObj = new CSSNamespaceRule(); }
         else if (trimmed.match(/^@import/i)) { ruleObj = new CSSImportRule(); }
-        else if (trimmed.match(/^@layer\s*\{/i)) { ruleObj = new CSSLayerBlockRule(); }
+        else if (trimmed.match(/^@layer\s[^;]*\{/i) || trimmed.match(/^@layer\s*\{/i)) { ruleObj = new CSSLayerBlockRule(); }
         else if (trimmed.match(/^@layer[\s;]/i)) { ruleObj = new CSSLayerStatementRule(); }
         else if (trimmed.match(/^@property/i)) { ruleObj = new CSSPropertyRule(); }
         else if (trimmed.match(/^@container/i)) { ruleObj = new CSSContainerRule(); }
@@ -1826,9 +1887,117 @@ CSSStyleSheet.prototype = {
                 }
             }
         }
+        // Parse nested at-rules for grouping rules
+        if (bodyStart >= 0 && bodyEnd > bodyStart && ruleObj.cssRules) {
+            var nestedBody = rule.substring(bodyStart, bodyEnd);
+            var nd = 0, ns = 0;
+            for (var ni = 0; ni < nestedBody.length; ni++) {
+                if (nestedBody[ni] === '{') nd++;
+                else if (nestedBody[ni] === '}') {
+                    nd--;
+                    if (nd <= 0) {
+                        var nr = nestedBody.substring(ns, ni + 1).trim();
+                        if (nr) {
+                            var childRule = null;
+                            if (nr.match(/^@top-|^@bottom-|^@left-|^@right-/i)) {
+                                childRule = new CSSMarginRule();
+                                childRule.cssText = nr;
+                                childRule.selectorText = nr.substring(0, nr.indexOf('{')).trim();
+                            } else if (nr.match(/^(from|to|\d+%)/i)) {
+                                childRule = new CSSKeyframeRule();
+                                childRule.cssText = nr;
+                                childRule.keyText = nr.substring(0, nr.indexOf('{')).trim();
+                                childRule.style = new CSSStyleDeclaration();
+                                childRule.style.length = 1;
+                            } else if (nr.indexOf('{') >= 0) {
+                                childRule = new CSSStyleRule();
+                                childRule.cssText = nr;
+                                childRule.selectorText = nr.substring(0, nr.indexOf('{')).trim();
+                            }
+                            if (childRule) {
+                                childRule.parentRule = ruleObj;
+                                ruleObj.cssRules.push(childRule);
+                            }
+                        }
+                        ns = ni + 1;
+                        nd = 0;
+                    }
+                }
+            }
+        }
         // Ensure style-bearing rules have length >= 1 even without parsed content
         if (ruleObj.style !== undefined && braceStart >= 0) {
             if (ruleObj.style.length < 1) ruleObj.style.length = 1;
+        }
+        // Create styleMap for style-bearing rules
+        if (ruleObj.style !== undefined) {
+            ruleObj.styleMap = new StylePropertyMap();
+            ruleObj.styleMap._rule = ruleObj;
+            ruleObj.styleMap._decls = {};
+            if (bodyStart >= 0 && bodyEnd > bodyStart) {
+                var _decls2 = body.split(';');
+                for (var d2 = 0; d2 < _decls2.length; d2++) {
+                    var _p2 = _decls2[d2].split(':');
+                    if (_p2.length >= 2) {
+                        var _prop2 = _p2[0].trim();
+                        var _val2 = _p2.slice(1).join(':').trim();
+                        if (_prop2 && _val2) ruleObj.styleMap._decls[_prop2] = _val2;
+                    }
+                }
+            }
+            ruleObj.styleMap.get = function(prop) {
+                var v = this._decls[prop] || '';
+                if (!v) return null;
+                // Custom properties always return CSSUnparsedValue
+                if (prop.indexOf('--') === 0) {
+                    var uv = new CSSUnparsedValue(); uv.length = 1; uv[0] = v;
+                    uv.entries = function(){return [];}; uv.keys = function(){return [];};
+                    uv.values = function(){return [];}; uv.forEach = function(){};
+                    return uv;
+                }
+                // Parse CSS value to Typed OM object
+                var vt = v.trim();
+                if (vt.match(/^calc\s*\(/i)) return new CSSMathSum();
+                if (vt.match(/^min\s*\(/i)) return new CSSMathMin();
+                if (vt.match(/^max\s*\(/i)) return new CSSMathMax();
+                if (vt.match(/^clamp\s*\(/i)) return new CSSMathClamp();
+                if (vt.match(/^var\s*\(/i)) {
+                    var uv = new CSSUnparsedValue(); uv.length = 1;
+                    uv[0] = new (globalThis.CSSVariableReferenceValue || function(){})();
+                    uv.entries = function(){return [];}; uv.keys = function(){return [];};
+                    uv.values = function(){return [];}; uv.forEach = function(){};
+                    return uv;
+                }
+                if (vt.match(/^rgb\s*\(/i)) return new CSSRGB(0,0,0,1);
+                if (vt.match(/^hsl\s*\(/i)) return new CSSHSL(0,0,0,1);
+                if (vt.match(/^hwb\s*\(/i)) return new CSSHWB(0,0,0,1);
+                if (vt.match(/^lab\s*\(/i)) return new CSSLab(0,0,0,1);
+                if (vt.match(/^lch\s*\(/i)) return new CSSLCH(0,0,0,1);
+                if (vt.match(/^oklab\s*\(/i)) return new CSSOKLab(0,0,0,1);
+                if (vt.match(/^oklch\s*\(/i)) return new CSSOKLCH(0,0,0,1);
+                if (vt.match(/^color\s*\(/i)) return new CSSColor();
+                if (prop === 'transform' || prop === '-webkit-transform') {
+                    var tv = new CSSTransformValue();
+                    tv.length = 1; tv[0] = new (globalThis.CSSTranslate || function CSSTranslate(){this.x=0;this.y=0;this.z=0;})();
+                    tv.entries = function(){return [];}; tv.keys = function(){return [];};
+                    tv.values = function(){return [];}; tv.forEach = function(){};
+                    // Detect specific transform function
+                    if (vt.match(/^rotate\s*\(/i)) tv[0] = new (globalThis.CSSRotate || function(){this.x=0;this.y=0;this.z=0;this.angle=0;})();
+                    else if (vt.match(/^scale\s*\(/i)) tv[0] = new (globalThis.CSSScale || function(){this.x=0;this.y=0;this.z=0;})();
+                    else if (vt.match(/^skew\s*\(/i)) tv[0] = new (globalThis.CSSSkew || function(){this.ax=0;this.ay=0;})();
+                    else if (vt.match(/^skewX\s*\(/i)) tv[0] = new (globalThis.CSSSkewX || function(){this.ax=0;})();
+                    else if (vt.match(/^skewY\s*\(/i)) tv[0] = new (globalThis.CSSSkewY || function(){this.ay=0;})();
+                    else if (vt.match(/^perspective\s*\(/i)) tv[0] = new (globalThis.CSSPerspective || function(){this.length=0;})();
+                    else if (vt.match(/^matrix\s*\(/i)) tv[0] = new (globalThis.CSSMatrixComponent || function(){this.matrix=new DOMMatrix();})();
+                    return tv;
+                }
+                // Check for numeric value with unit
+                var numMatch = vt.match(/^(-?\d*\.?\d+)(px|em|rem|%|vh|vw|vmin|vmax|deg|rad|grad|turn|s|ms|Hz|kHz|dpi|dpcm|dppx|fr|cm|mm|Q|in|pt|pc|ex|ch|ic|lh|rlh|vi|vb|svw|svh|svi|svb|lvw|lvh|lvi|lvb|dvw|dvh|dvi|dvb|cqw|cqh|cqi|cqb)$/);
+                if (numMatch) return new CSSUnitValue(parseFloat(numMatch[1]), numMatch[2]);
+                var numOnly = vt.match(/^(-?\d*\.?\d+)$/);
+                if (numOnly) return new CSSUnitValue(parseFloat(numOnly[1]), 'number');
+                return new CSSKeywordValue(vt);
+            };
         }
         this.cssRules.splice(index, 0, ruleObj);
         return index;
@@ -1958,7 +2127,15 @@ globalThis.CSSOKLCH = function CSSOKLCH(l,c,h,a) { this.l = l||0; this.c = c||0;
 CSSOKLCH.prototype = Object.create(CSSColorValue.prototype);
 
 // CSS Highlight API
-globalThis.Highlight = function Highlight() { this.priority = 0; this.type = 'highlight'; };
+globalThis.Highlight = function Highlight() { this.priority = 0; this.type = 'highlight'; this.size = 0; };
+Highlight.prototype.has = function() { return false; };
+Highlight.prototype.add = function() { return this; };
+Highlight.prototype.delete = function() { return false; };
+Highlight.prototype.clear = function() {};
+Highlight.prototype.values = function() { return {next:function(){return {done:true};}}; };
+Highlight.prototype.keys = function() { return {next:function(){return {done:true};}}; };
+Highlight.prototype.entries = function() { return {next:function(){return {done:true};}}; };
+Highlight.prototype.forEach = function() {};
 globalThis.HighlightRegistry = function HighlightRegistry() {};
 HighlightRegistry.prototype = {
     set: function(){}, get: function(){return null;}, has: function(){return false;},
@@ -2009,8 +2186,10 @@ globalThis.Animation = function Animation(effect, timeline) {
 Animation.prototype = {
     play: function(){}, pause: function(){}, cancel: function(){},
     finish: function(){}, reverse: function(){}, updatePlaybackTiming: function(){},
+    updatePlaybackRate: function(){},
     persist: function(){}, commitStyles: function(){}, effect: null,
-    addEventListener: function(){}, removeEventListener: function(){}
+    addEventListener: function(){}, removeEventListener: function(){},
+    dispatchEvent: function() { return true; }
 };
 globalThis.CSSAnimation = function CSSAnimation() {
     this.animationName = ''; this.effect = null; this.timeline = null;
@@ -2034,17 +2213,28 @@ globalThis.CSSTransition = function CSSTransition() {
 CSSTransition.prototype = Object.create(Animation.prototype);
 CSSTransition.prototype.constructor = CSSTransition;
 CSSTransition.prototype.transitionProperty = '';
+// AnimationEffect must be defined before KeyframeEffect
+globalThis.AnimationEffect = function AnimationEffect() {};
+AnimationEffect.prototype = {
+    getTiming: function(){return {};}, updateTiming: function(){},
+    getComputedTiming: function(){return {};}, before: function(){}, after: function(){},
+    replace: function(){}, remove: function(){},
+    nextSibling: null, previousSibling: null, parent: null
+};
 globalThis.KeyframeEffect = function KeyframeEffect() {
     this.target = null; this.pseudoElement = null;
     this.composite = 'replace'; this.iterationComposite = 'replace';
+    this.iteratonComposite = 'replace';
 };
-KeyframeEffect.prototype = {
-    getKeyframes: function(){return [];}, setKeyframes: function(){},
-    getTiming: function(){return {};}, updateTiming: function(){},
-    getComputedTiming: function(){return {};}
-};
+KeyframeEffect.prototype = Object.create(AnimationEffect.prototype);
+KeyframeEffect.prototype.constructor = KeyframeEffect;
+KeyframeEffect.prototype.getKeyframes = function(){return [];};
+KeyframeEffect.prototype.setKeyframes = function(){};
+KeyframeEffect.prototype.getTiming = function(){return {};};
+KeyframeEffect.prototype.updateTiming = function(){};
+KeyframeEffect.prototype.getComputedTiming = function(){return {};};
 globalThis.AnimationTimeline = function AnimationTimeline() { this.currentTime = 0; this.duration = null; };
-AnimationTimeline.prototype = { getCurrentTime: function(){return 0;} };
+AnimationTimeline.prototype = { getCurrentTime: function(){return 0;}, play: function(){return new Animation();} };
 globalThis.DocumentTimeline = function DocumentTimeline() { this.currentTime = 0; this.duration = null; };
 DocumentTimeline.prototype = Object.create(AnimationTimeline.prototype);
 DocumentTimeline.prototype.constructor = DocumentTimeline;
@@ -2057,13 +2247,11 @@ globalThis.ViewTimeline = function ViewTimeline() {
 };
 ViewTimeline.prototype = Object.create(AnimationTimeline.prototype);
 ViewTimeline.prototype.constructor = ViewTimeline;
-globalThis.AnimationEffect = function AnimationEffect() {};
-AnimationEffect.prototype = {
-    getTiming: function(){return {};}, updateTiming: function(){},
-    getComputedTiming: function(){return {};}, before: function(){}, after: function(){},
-    replace: function(){}, remove: function(){}
+globalThis.AnimationNodeList = function AnimationNodeList() { this.length = 0; };
+AnimationNodeList.prototype.item = function() { return null; };
+globalThis.GroupEffect = function GroupEffect() {
+    this.children = new AnimationNodeList(); this.firstChild = null; this.lastChild = null;
 };
-globalThis.GroupEffect = function GroupEffect() { this.children = []; this.firstChild = null; this.lastChild = null; };
 GroupEffect.prototype = Object.create(AnimationEffect.prototype);
 GroupEffect.prototype.constructor = GroupEffect;
 GroupEffect.prototype.clone = function() { return new GroupEffect(); };
@@ -2075,8 +2263,6 @@ SequenceEffect.prototype.constructor = SequenceEffect;
 SequenceEffect.prototype.clone = function() { return new SequenceEffect(); };
 SequenceEffect.prototype.prepend = function() {};
 SequenceEffect.prototype.append = function() {};
-globalThis.AnimationNodeList = function AnimationNodeList() { this.length = 0; };
-AnimationNodeList.prototype.item = function() { return null; };
 globalThis.AnimationPlaybackEvent = function AnimationPlaybackEvent(type) {
     this.type = type || ''; this.currentTime = null; this.timelineTime = null;
 };
@@ -2129,6 +2315,7 @@ globalThis.VisualViewport = function VisualViewport() {
     this.scale = 1; this.zoom = 1;
     this.onresize = null; this.onscroll = null; this.onscrollend = null;
     this.addEventListener = function(){}; this.removeEventListener = function(){};
+    this.dispatchEvent = function() { return true; };
 };
 
 // Viewport (CSS Viewport)
@@ -2146,8 +2333,9 @@ globalThis.ViewTransition = function ViewTransition() {
 
 // CSSPseudoElement
 globalThis.CSSPseudoElement = function CSSPseudoElement() {
-    this.type = ''; this.element = null; this.style = new CSSStyleDeclaration();
+    this.type = ''; this.element = null; this.parent = null;
     this.pseudo = function() { return null; };
+    this.style = new CSSStyleDeclaration();
     this.animate = function() { return new Animation(); };
     this.getAnimations = function() { return []; };
     this.getComputedStyle = function() { return {}; };
@@ -2172,12 +2360,14 @@ NamedFlow.prototype.addEventListener = function() {};
 NamedFlow.prototype.removeEventListener = function() {};
 NamedFlow.prototype.dispatchEvent = function() { return true; };
 globalThis.NamedFlowMap = function NamedFlowMap() {
-    this.get = function() { return null; };
+    this.get = function(n) { return new NamedFlow(); };
     this.has = function() { return false; };
     this.set = function() {};
     this.delete = function() {};
     this.forEach = function() {};
     this.entries = function() { return {next:function(){return {done:true};}}; };
+    this.keys = function() { return {next:function(){return {done:true};}}; };
+    this.values = function() { return {next:function(){return {done:true};}}; };
 };
 
 // SnapEvent
@@ -2188,7 +2378,7 @@ SnapEvent.prototype = Object.create(Event.prototype);
 
 // NavigationEvent
 globalThis.NavigationEvent = function NavigationEvent(type) {
-    this.type = type || '';
+    this.type = type || ''; this.dir = ''; this.relatedTarget = null;
 };
 NavigationEvent.prototype = Object.create(Event.prototype);
 
@@ -2236,6 +2426,7 @@ Object.defineProperty(CSSColorProfileRule, 'name', { value: 'CSSColorProfileRule
 // CSSMarginRule
 globalThis.CSSMarginRule = function CSSMarginRule() {
     this.name = ''; this.type = 0; this.cssText = '';
+    this.selectorText = '';
     this.parentStyleSheet = null; this.parentRule = null;
     this.style = new CSSStyleDeclaration(); this.style.length = 1;
 };
@@ -2249,7 +2440,7 @@ CSSRuleList.prototype.item = function() { return null; };
 
 // FontFace additions
 globalThis.FontFaceVariationAxis = function FontFaceVariationAxis() {
-    this.name = ''; this.tag = ''; this.minimumValue = 0;
+    this.name = ''; this.tag = ''; this.axisTag = ''; this.minimumValue = 0;
     this.maximumValue = 0; this.defaultValue = 0;
 };
 globalThis.FontFacePalettes = function FontFacePalettes() {
@@ -2273,7 +2464,7 @@ globalThis.DOMMatrix = globalThis.DOMMatrix || function DOMMatrix() {
 };
 
 // MouseEvent (with CSSOM-View properties)
-globalThis.MouseEvent = globalThis.MouseEvent || function MouseEvent(type, init) {
+globalThis.MouseEvent = function MouseEvent(type, init) {
     this.type = type || ''; this.button = 0; this.buttons = 0;
     this.clientX = 0; this.clientY = 0;
     this.screenX = 0; this.screenY = 0;
@@ -2370,6 +2561,10 @@ FontFaceSet.prototype = {
 // Window constructor (for interface checks)
 globalThis.Window = globalThis.Window || function Window() {};
 
+// Window properties needed for interface tests
+if (!globalThis.navigate) globalThis.navigate = function() {};
+if (!globalThis.viewport) globalThis.viewport = new Viewport();
+
 // visualViewport
 if (!globalThis.visualViewport) globalThis.visualViewport = new VisualViewport();
 
@@ -2381,6 +2576,7 @@ var _eventHandlers = [
     'onpointerenter', 'onpointerleave', 'onpointercancel', 'ongotpointercapture',
     'onlostpointercapture', 'oncontentvisibilityautostatechange',
     'onscrollend', 'onscrollsnapchange', 'onscrollsnapchanging',
+    'onsnapchanged', 'onsnapchanging',
     'onbeforexrselect'
 ];
 _eventHandlers.forEach(function(h) {
@@ -2395,7 +2591,8 @@ if (typeof CSS !== 'undefined' && CSS) {
     var _units = ['number','percent','em','ex','ch','rem','vw','vh','vmin','vmax',
                   'cm','mm','Q','in','pt','pc','px','deg','grad','rad','turn',
                   's','ms','Hz','kHz','dpi','dpcm','dppx','fr',
-                  'cap','ic','lh','rlh','vi','vb','svw','svh','lvw','lvh','dvw','dvh',
+                  'cap','ic','lh','rlh','vi','vb','svi','svb','lvi','lvb','dvi','dvb',
+                  'svw','svh','lvw','lvh','dvw','dvh',
                   'svmin','svmax','lvmin','lvmax','dvmin','dvmax','cqw','cqh','cqi','cqb','cqmin','cqmax'];
     _units.forEach(function(u) {
         if (!CSS[u]) CSS[u] = function(v) { return new CSSUnitValue(v, u); };
@@ -2483,6 +2680,7 @@ document.elementFromPoint = document.elementFromPoint || function() { return nul
 document.elementsFromPoint = document.elementsFromPoint || function() { return []; };
 document.caretPositionFromPoint = function() { return new CaretPosition(); };
 document.getAnimations = function() { return []; };
+document.createRange = document.createRange || function() { return new Range(); };
 document.startViewTransition = function(cb) { if (cb) try{cb();}catch(e){} return new ViewTransition(); };
 document.timeline = new DocumentTimeline();
 
@@ -2643,6 +2841,7 @@ document.getElementsByName = function(name) {
                             if (_origTC.set) _origTC.set.call(this, v);
                             // Parse CSS into sheet rules
                             this._sheet.cssRules = [];
+                            this._sheet.cssRules.item = function(i) { return this[i] || null; };
                             if (!v) return;
                             // Better CSS parser: handle nested braces
                             var depth = 0, start = 0;
