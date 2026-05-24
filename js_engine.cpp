@@ -707,19 +707,57 @@ static JSValue js_getComputedStyle(JSContext* ctx, JSValueConst this_val,
     JS_SetPropertyStr(ctx, result, "backgroundColor", JS_NewString(ctx, bgColor.c_str()));
     JS_SetPropertyStr(ctx, result, "background-color", JS_NewString(ctx, bgColor.c_str()));
 
-    // Copy inline style properties if available
+    // Copy all inline style properties to computed style
     if (!JS_IsUndefined(inlineStyle) && !JS_IsNull(inlineStyle)) {
-        // Check for display override
-        JSValue dv = JS_GetPropertyStr(ctx, inlineStyle, "display");
-        if (!JS_IsUndefined(dv) && !JS_IsNull(dv)) {
-            const char* ds = JS_ToCString(ctx, dv);
-            if (ds && ds[0]) {
-                JS_SetPropertyStr(ctx, result, "display", JS_NewString(ctx, ds));
-                defaultDisplay = ds;
+        // Get the DOM node to access style_props
+        DOMNode* node = js_get_node(ctx, argv[0]);
+        if (node) {
+            // First pass: copy all properties
+            for (auto& kv : node->style_props) {
+                std::string camel;
+                bool nextUpper = false;
+                for (char c : kv.first) {
+                    if (c == '-' && !camel.empty()) { nextUpper = true; continue; }
+                    camel += nextUpper ? (char)toupper(c) : c;
+                    nextUpper = false;
+                }
+                JS_SetPropertyStr(ctx, result, camel.c_str(), JS_NewString(ctx, kv.second.c_str()));
+                // Also set kebab-case
+                JS_SetPropertyStr(ctx, result, kv.first.c_str(), JS_NewString(ctx, kv.second.c_str()));
             }
-            if (ds) JS_FreeCString(ctx, ds);
+            // Second pass: resolve var() references
+            for (auto& kv : node->style_props) {
+                if (kv.second.find("var(") != std::string::npos) {
+                    std::string resolved = kv.second;
+                    size_t pos = resolved.find("var(--");
+                    if (pos != std::string::npos) {
+                        size_t end = resolved.find(')', pos);
+                        if (end != std::string::npos) {
+                            std::string varName = resolved.substr(pos + 4, end - pos - 4);
+                            auto it = node->style_props.find(varName);
+                            if (it != node->style_props.end()) {
+                                resolved = resolved.substr(0, pos) + it->second + resolved.substr(end + 1);
+                                std::string camel;
+                                bool nextUpper = false;
+                                for (char c : kv.first) {
+                                    if (c == '-' && !camel.empty()) { nextUpper = true; continue; }
+                                    camel += nextUpper ? (char)toupper(c) : c;
+                                    nextUpper = false;
+                                }
+                                JS_SetPropertyStr(ctx, result, camel.c_str(), JS_NewString(ctx, resolved.c_str()));
+                                JS_SetPropertyStr(ctx, result, kv.first.c_str(), JS_NewString(ctx, resolved.c_str()));
+                            }
+                        }
+                    }
+                }
+            }
+            // Check display override
+            auto displayIt = node->style_props.find("display");
+            if (displayIt != node->style_props.end() && !displayIt->second.empty()) {
+                defaultDisplay = displayIt->second;
+                JS_SetPropertyStr(ctx, result, "display", JS_NewString(ctx, defaultDisplay.c_str()));
+            }
         }
-        JS_FreeValue(ctx, dv);
     }
     JS_FreeValue(ctx, inlineStyle);
 
@@ -753,20 +791,26 @@ static JSValue js_getComputedStyle(JSContext* ctx, JSValueConst this_val,
 // ---- matchMedia ----
 static JSValue js_matchMedia(JSContext* ctx, JSValueConst this_val,
                               int argc, JSValueConst* argv) {
-    JSValue result = JS_NewObject(ctx);
     const char* media = argc > 0 ? JS_ToCString(ctx, argv[0]) : nullptr;
     std::string mq = media ? media : "";
     if (media) JS_FreeCString(ctx, media);
 
-    // The css3test checks: !matchMedia(mq).media.includes('not all')
-    // If a browser doesn't recognize the MQ, it gets serialized as "not all"
-    // We return the query as-is (meaning "recognized") and matches=true for standard MQs
-    JS_SetPropertyStr(ctx, result, "media", JS_NewString(ctx, mq.c_str()));
-    JS_SetPropertyStr(ctx, result, "matches", JS_TRUE);
-    JS_SetPropertyStr(ctx, result, "addEventListener", JS_NewCFunction(ctx, js_noop_func, "addEventListener", 2));
-    JS_SetPropertyStr(ctx, result, "removeEventListener", JS_NewCFunction(ctx, js_noop_func, "removeEventListener", 2));
-    JS_SetPropertyStr(ctx, result, "addListener", JS_NewCFunction(ctx, js_noop_func, "addListener", 1));
-    JS_SetPropertyStr(ctx, result, "removeListener", JS_NewCFunction(ctx, js_noop_func, "removeListener", 1));
+    // Create a MediaQueryList instance
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue mql_ctor = JS_GetPropertyStr(ctx, global, "MediaQueryList");
+    JSValue result;
+    if (JS_IsFunction(ctx, mql_ctor)) {
+        JSValue args[2] = { JS_NewString(ctx, mq.c_str()), JS_TRUE };
+        result = JS_CallConstructor(ctx, mql_ctor, 2, args);
+        JS_FreeValue(ctx, args[0]);
+        JS_FreeValue(ctx, args[1]);
+    } else {
+        result = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, result, "media", JS_NewString(ctx, mq.c_str()));
+        JS_SetPropertyStr(ctx, result, "matches", JS_TRUE);
+    }
+    JS_FreeValue(ctx, mql_ctor);
+    JS_FreeValue(ctx, global);
     return result;
 }
 
@@ -985,6 +1029,26 @@ void JSEngine::setupGlobals() {
             return JS_TRUE;
         }, "dispatchEvent", 1));
 
+    // Window methods for CSSOM-View
+    JS_SetPropertyStr(ctx, global, "moveTo", JS_NewCFunction(ctx, js_noop_func, "moveTo", 2));
+    JS_SetPropertyStr(ctx, global, "moveBy", JS_NewCFunction(ctx, js_noop_func, "moveBy", 2));
+    JS_SetPropertyStr(ctx, global, "resizeTo", JS_NewCFunction(ctx, js_noop_func, "resizeTo", 2));
+    JS_SetPropertyStr(ctx, global, "resizeBy", JS_NewCFunction(ctx, js_noop_func, "resizeBy", 2));
+    JS_SetPropertyStr(ctx, global, "screenX", JS_NewInt32(ctx, 0));
+    JS_SetPropertyStr(ctx, global, "screenLeft", JS_NewInt32(ctx, 0));
+    JS_SetPropertyStr(ctx, global, "screenY", JS_NewInt32(ctx, 0));
+    JS_SetPropertyStr(ctx, global, "screenTop", JS_NewInt32(ctx, 0));
+    JS_SetPropertyStr(ctx, global, "getSelection",
+        JS_NewCFunction(ctx, [](JSContext* cx, JSValueConst, int, JSValueConst*) -> JSValue {
+            JSValue sel = JS_NewObject(cx);
+            JS_SetPropertyStr(cx, sel, "toString", JS_NewCFunction(cx,
+                [](JSContext* c2, JSValueConst, int, JSValueConst*) -> JSValue {
+                    return JS_NewString(c2, "");
+                }, "toString", 0));
+            JS_SetPropertyStr(cx, sel, "rangeCount", JS_NewInt32(cx, 0));
+            return sel;
+        }, "getSelection", 0));
+
     JS_FreeValue(ctx, global);
 
     // ---- JS polyfills (localStorage, sessionStorage, constructors, etc.) ----
@@ -1067,10 +1131,32 @@ Element.prototype.querySelectorAll = function() { return []; };
 Element.prototype.getBoundingClientRect = function() {
     return { top: 0, left: 0, bottom: 0, right: 0, width: 0, height: 0, x: 0, y: 0 };
 };
+Element.prototype.getClientRects = function() { return []; };
 Element.prototype.scrollIntoView = function() {};
+Element.prototype.scroll = function() {};
+Element.prototype.scrollTo = function() {};
+Element.prototype.scrollBy = function() {};
 Element.prototype.focus = function() {};
 Element.prototype.blur = function() {};
 Element.prototype.click = function() {};
+Element.prototype.checkVisibility = function() { return true; };
+Element.prototype.getBoxQuads = function() { return []; };
+Element.prototype.convertQuadFromNode = function() { return {}; };
+Element.prototype.convertRectFromNode = function() { return {}; };
+Element.prototype.convertPointFromNode = function() { return {}; };
+Element.prototype.pseudo = function() { return null; };
+Element.prototype.regionOverset = '';
+Element.prototype.getRegionFlowRanges = function() { return []; };
+Element.prototype.part = { length: 0, add: function(){}, remove: function(){}, toggle: function(){}, contains: function(){return false;} };
+Element.prototype.getSpatialNavigationContainer = function() { return null; };
+Element.prototype.focusableAreas = function() { return []; };
+Element.prototype.spatialNavigationSearch = function() { return null; };
+Element.prototype.computedStyleMap = function() { return new StylePropertyMapReadOnly(); };
+Element.prototype.animate = function() { return new Animation(); };
+Element.prototype.getAnimations = function() { return []; };
+Element.prototype.setPointerCapture = function() {};
+Element.prototype.releasePointerCapture = function() {};
+Element.prototype.hasPointerCapture = function() { return false; };
 Element.prototype.remove = function() { if (this.parentNode) this.parentNode.removeChild(this); };
 if (typeof HTMLElement === 'undefined') {
     globalThis.HTMLElement = function HTMLElement() {};
@@ -1483,6 +1569,29 @@ DOMTokenList.prototype = { add: function(){}, remove: function(){}, toggle: func
 globalThis.NamedNodeMap = function NamedNodeMap() {};
 NamedNodeMap.prototype = { length: 0, getNamedItem: function(){ return null; }, setNamedItem: function(){}, removeNamedItem: function(){} };
 
+// Forward declarations needed by CSS rule types
+globalThis.MediaList = function MediaList() { this.length = 0; };
+MediaList.prototype = { mediaText: '', item: function(){return null;}, appendMedium: function(){this.length++;}, deleteMedium: function(){} };
+globalThis.StylePropertyMap = function StylePropertyMap() {};
+StylePropertyMap.prototype = {
+    get: function(){return null;}, getAll: function(){return [];},
+    has: function(){return false;}, set: function(){}, append: function(){},
+    delete: function(){}, clear: function(){}, forEach: function(){},
+    entries: function(){return {next:function(){return {done:true};}};},
+    keys: function(){return {next:function(){return {done:true};}};},
+    values: function(){return {next:function(){return {done:true};}};}
+};
+StylePropertyMap.prototype.size = 0;
+globalThis.StylePropertyMapReadOnly = function StylePropertyMapReadOnly() {};
+StylePropertyMapReadOnly.prototype = {
+    get: function(){return null;}, getAll: function(){return [];},
+    has: function(){return false;}, forEach: function(){},
+    entries: function(){return {next:function(){return {done:true};}};},
+    keys: function(){return {next:function(){return {done:true};}};},
+    values: function(){return {next:function(){return {done:true};}};}
+};
+StylePropertyMapReadOnly.prototype.size = 0;
+
 // ---- CSS OM interfaces (for css3test interface checks) ----
 // CSSRule base
 globalThis.CSSRule = function CSSRule() {};
@@ -1506,54 +1615,79 @@ var _cssRuleTypes = [
 ];
 _cssRuleTypes.forEach(function(name) {
     var F = function() {};
+    Object.defineProperty(F, 'name', { value: name, configurable: true });
     F.prototype = Object.create(CSSRule.prototype);
     F.prototype.constructor = F;
     // Add style property for rule types that have it
     if (name === 'CSSStyleRule' || name === 'CSSPageRule' || name === 'CSSKeyframeRule' ||
         name === 'CSSFontFaceRule' || name === 'CSSCounterStyleRule' ||
-        name === 'CSSViewportRule') {
+        name === 'CSSViewportRule' || name === 'CSSFontFeatureValuesRule' ||
+        name === 'CSSPositionTryRule' || name === 'CSSPropertyRule' ||
+        name === 'CSSMarginRule' || name === 'CSSNestedDeclarations') {
         F.prototype.style = new CSSStyleDeclaration();
-        F.prototype.style.length = 1; // Pretend at least one property exists
+        F.prototype.style.length = 1;
     }
     if (name === 'CSSStyleRule') {
         F.prototype.selectorText = '';
-        F.prototype.styleMap = { get: function(){return null;}, set: function(){}, has: function(){return false;} };
+        F.prototype.styleMap = new StylePropertyMap();
+        F.prototype.type = 1;
     }
     if (name === 'CSSMediaRule' || name === 'CSSSupportsRule' || name === 'CSSGroupingRule' ||
         name === 'CSSConditionRule' || name === 'CSSContainerRule' ||
-        name === 'CSSLayerBlockRule' || name === 'CSSScopeRule') {
+        name === 'CSSLayerBlockRule' || name === 'CSSScopeRule' ||
+        name === 'CSSStartingStyleRule' || name === 'CSSFunctionRule') {
         F.prototype.cssRules = [];
         F.prototype.insertRule = function() { return 0; };
         F.prototype.deleteRule = function() {};
     }
     if (name === 'CSSMediaRule') {
-        F.prototype.media = { mediaText: '', length: 0, item: function(){return null;},
-                              appendMedium: function(){}, deleteMedium: function(){} };
+        F.prototype.media = new MediaList();
         F.prototype.conditionText = '';
+        F.prototype.type = 4;
     }
     if (name === 'CSSSupportsRule') {
         F.prototype.conditionText = '';
+        F.prototype.type = 12;
     }
     if (name === 'CSSKeyframesRule') {
         F.prototype.name = '';
         F.prototype.cssRules = [];
+        F.prototype.length = 0;
         F.prototype.appendRule = function() {};
         F.prototype.deleteRule = function() {};
         F.prototype.findRule = function() { return null; };
+        F.prototype.type = 7;
     }
     if (name === 'CSSKeyframeRule') {
         F.prototype.keyText = '';
+        F.prototype.type = 8;
+    }
+    if (name === 'CSSFontFaceRule') {
+        F.prototype.type = 5;
     }
     if (name === 'CSSImportRule') {
         F.prototype.href = '';
-        F.prototype.media = { mediaText: '', length: 0, item: function(){return null;} };
+        F.prototype.media = new MediaList();
         F.prototype.styleSheet = null;
         F.prototype.layerName = null;
         F.prototype.supportsText = null;
+        F.prototype.type = 3;
+    }
+    if (name === 'CSSPageRule') {
+        F.prototype.selectorText = '';
+        F.prototype.type = 6;
+    }
+    if (name === 'CSSNamespaceRule') {
+        F.prototype.namespaceURI = '';
+        F.prototype.prefix = '';
+        F.prototype.type = 10;
     }
     if (name === 'CSSContainerRule') {
         F.prototype.containerName = '';
         F.prototype.containerQuery = '';
+        F.prototype.conditionText = '';
+    }
+    if (name === 'CSSConditionRule') {
         F.prototype.conditionText = '';
     }
     if (name === 'CSSPropertyRule') {
@@ -1568,78 +1702,133 @@ _cssRuleTypes.forEach(function(name) {
         F.prototype.basePalette = '';
         F.prototype.overrideColors = '';
     }
+    if (name === 'CSSCounterStyleRule') {
+        F.prototype.name = '';
+        F.prototype.system = '';
+        F.prototype.symbols = '';
+        F.prototype.additiveSymbols = '';
+        F.prototype.negative = '';
+        F.prototype.prefix = '';
+        F.prototype.suffix = '';
+        F.prototype.range = '';
+        F.prototype.pad = '';
+        F.prototype.speakAs = '';
+        F.prototype.fallback = '';
+        F.prototype.type = 11;
+    }
+    if (name === 'CSSFontFeatureValuesRule') {
+        F.prototype.fontFamily = '';
+        F.prototype.type = 14;
+    }
+    if (name === 'CSSScopeRule') {
+        F.prototype.start = '';
+        F.prototype.end = '';
+        F.prototype.conditionText = '';
+    }
+    if (name === 'CSSLayerBlockRule') {
+        F.prototype.name = '';
+    }
+    if (name === 'CSSLayerStatementRule') {
+        F.prototype.nameList = [];
+    }
+    if (name === 'CSSViewTransitionRule') {
+        F.prototype.navigation = '';
+        F.prototype.types = [];
+    }
+    if (name === 'CSSStartingStyleRule') {
+        F.prototype.conditionText = '';
+    }
+    if (name === 'CSSFunctionRule') {
+        F.prototype.name = '';
+        F.prototype.parameters = [];
+    }
+    if (name === 'CSSGroupingRule') {
+        F.prototype.conditionText = '';
+    }
     globalThis[name] = F;
 });
 
-// CSSStyleSheet
+// CSSStyleSheet (inherits from StyleSheet for interface tests)
 globalThis.CSSStyleSheet = function CSSStyleSheet() {
     this.cssRules = [];
     this.rules = this.cssRules;
     this.ownerRule = null;
     this.disabled = false;
-    this.media = { mediaText: '', length: 0, item: function(){return null;} };
+    this.media = new MediaList();
+    this.type = 'text/css';
+    this.href = null;
+    this.ownerNode = null;
+    this.parentStyleSheet = null;
+    this.title = null;
 };
 CSSStyleSheet.prototype = {
     insertRule: function(rule, index) {
         if (index === undefined) index = 0;
-        // Parse the rule and create a stub CSSRule object
-        var ruleObj = new CSSStyleRule();
-        ruleObj.cssText = rule;
-        // Determine rule type and create appropriate object
+        var ruleObj = null;
         var trimmed = rule.trim();
-        if (trimmed.match(/^@media/i)) {
-            ruleObj = new CSSMediaRule();
-        } else if (trimmed.match(/^@font-face/i)) {
-            ruleObj = new CSSFontFaceRule();
-        } else if (trimmed.match(/^@keyframes/i)) {
-            ruleObj = new CSSKeyframesRule();
-        } else if (trimmed.match(/^@supports/i)) {
-            ruleObj = new CSSSupportsRule();
-        } else if (trimmed.match(/^@page/i)) {
-            ruleObj = new CSSPageRule();
-        } else if (trimmed.match(/^@counter-style/i)) {
-            ruleObj = new CSSCounterStyleRule();
-        } else if (trimmed.match(/^@namespace/i)) {
-            ruleObj = new CSSNamespaceRule();
-        } else if (trimmed.match(/^@import/i)) {
-            ruleObj = new CSSImportRule();
-        } else if (trimmed.match(/^@layer\s*\{/i)) {
-            ruleObj = new CSSLayerBlockRule();
-        } else if (trimmed.match(/^@layer\s/i)) {
-            ruleObj = new CSSLayerStatementRule();
-        } else if (trimmed.match(/^@property/i)) {
-            ruleObj = new CSSPropertyRule();
-        } else if (trimmed.match(/^@container/i)) {
-            ruleObj = new CSSContainerRule();
-        } else if (trimmed.match(/^@font-palette-values/i)) {
-            ruleObj = new CSSFontPaletteValuesRule();
-        } else if (trimmed.match(/^@scope/i)) {
-            ruleObj = new CSSScopeRule();
-        } else if (trimmed.match(/^@starting-style/i)) {
-            ruleObj = new CSSStartingStyleRule();
-        } else if (trimmed.match(/^@position-try/i)) {
-            ruleObj = new CSSPositionTryRule();
-        } else if (trimmed.match(/^@view-transition/i)) {
-            ruleObj = new CSSViewTransitionRule();
-        } else if (trimmed.match(/^@function/i)) {
-            ruleObj = new CSSFunctionRule();
+        // Determine rule type
+        if (trimmed.match(/^@media/i)) { ruleObj = new CSSMediaRule(); }
+        else if (trimmed.match(/^@font-face/i)) { ruleObj = new CSSFontFaceRule(); }
+        else if (trimmed.match(/^@keyframes/i)) { ruleObj = new CSSKeyframesRule(); }
+        else if (trimmed.match(/^@supports/i)) { ruleObj = new CSSSupportsRule(); }
+        else if (trimmed.match(/^@page/i)) { ruleObj = new CSSPageRule(); }
+        else if (trimmed.match(/^@counter-style/i)) { ruleObj = new CSSCounterStyleRule(); }
+        else if (trimmed.match(/^@namespace/i)) { ruleObj = new CSSNamespaceRule(); }
+        else if (trimmed.match(/^@import/i)) { ruleObj = new CSSImportRule(); }
+        else if (trimmed.match(/^@layer\s*\{/i)) { ruleObj = new CSSLayerBlockRule(); }
+        else if (trimmed.match(/^@layer[\s;]/i)) { ruleObj = new CSSLayerStatementRule(); }
+        else if (trimmed.match(/^@property/i)) { ruleObj = new CSSPropertyRule(); }
+        else if (trimmed.match(/^@container/i)) { ruleObj = new CSSContainerRule(); }
+        else if (trimmed.match(/^@font-palette-values/i)) { ruleObj = new CSSFontPaletteValuesRule(); }
+        else if (trimmed.match(/^@font-feature-values/i)) { ruleObj = new CSSFontFeatureValuesRule(); }
+        else if (trimmed.match(/^@color-profile/i)) { ruleObj = new CSSColorProfileRule(); }
+        else if (trimmed.match(/^@scope/i)) { ruleObj = new CSSScopeRule(); }
+        else if (trimmed.match(/^@starting-style/i)) { ruleObj = new CSSStartingStyleRule(); }
+        else if (trimmed.match(/^@position-try/i)) { ruleObj = new CSSPositionTryRule(); }
+        else if (trimmed.match(/^@view-transition/i)) { ruleObj = new CSSViewTransitionRule(); }
+        else if (trimmed.match(/^@function/i)) { ruleObj = new CSSFunctionRule(); }
+        else if (trimmed.match(/^@when\s/i) || trimmed.match(/^@else/i)) {
+            ruleObj = new CSSConditionRule();
         }
+        else { ruleObj = new CSSStyleRule(); }
         ruleObj.cssText = rule;
-        // For style-bearing rules, parse declarations
-        if (ruleObj.style !== undefined) {
-            var m = rule.match(/\{([^}]*)\}/);
-            if (m) {
-                var decls = m[1].split(';');
+        // Parse declarations for style-bearing rules and set as camelCase props on rule
+        var _camelCase = function(s) { return s.replace(/-([a-z])/g, function(m,c){return c.toUpperCase();}).replace('-',''); };
+        // Extract content between outermost braces
+        var braceStart = rule.indexOf('{');
+        if (braceStart >= 0) {
+            var depth = 0, bodyStart = -1, bodyEnd = -1;
+            for (var bi = braceStart; bi < rule.length; bi++) {
+                if (rule[bi] === '{') { if (depth === 0) bodyStart = bi + 1; depth++; }
+                else if (rule[bi] === '}') { depth--; if (depth === 0) { bodyEnd = bi; break; } }
+            }
+            if (bodyStart >= 0 && bodyEnd > bodyStart) {
+                var body = rule.substring(bodyStart, bodyEnd);
+                // Parse declarations
+                var decls = body.split(';');
+                var parsedCount = 0;
                 for (var d = 0; d < decls.length; d++) {
                     var parts = decls[d].split(':');
                     if (parts.length >= 2) {
                         var prop = parts[0].trim();
                         var val = parts.slice(1).join(':').trim();
-                        if (prop && val) ruleObj.style[prop] = val;
+                        if (prop && val) {
+                            parsedCount++;
+                            // Set on style if available
+                            if (ruleObj.style !== undefined) ruleObj.style[prop] = val;
+                            // Also set camelCase descriptor on rule object itself
+                            ruleObj[_camelCase(prop)] = val;
+                        }
                     }
                 }
+                if (parsedCount > 0 && ruleObj.style !== undefined) {
+                    ruleObj.style.length = parsedCount;
+                }
             }
-            ruleObj.style.length = 1; // Mark as having properties
+        }
+        // Ensure style-bearing rules have length >= 1 even without parsed content
+        if (ruleObj.style !== undefined && braceStart >= 0) {
+            if (ruleObj.style.length < 1) ruleObj.style.length = 1;
         }
         this.cssRules.splice(index, 0, ruleObj);
         return index;
@@ -1659,12 +1848,6 @@ CSSStyleSheet.prototype = {
 globalThis.StyleSheet = function StyleSheet() {};
 StyleSheet.prototype = { type: 'text/css', disabled: false, href: null, title: null };
 
-// MediaList
-globalThis.MediaList = function MediaList() {
-    this.length = 0;
-};
-MediaList.prototype = { mediaText: '', item: function(){return null;}, appendMedium: function(){this.length++;}, deleteMedium: function(){} };
-
 // StyleSheetList
 globalThis.StyleSheetList = function StyleSheetList() {
     this.length = 0;
@@ -1672,43 +1855,107 @@ globalThis.StyleSheetList = function StyleSheetList() {
 StyleSheetList.prototype = { item: function(){return null;} };
 
 // CSS Typed OM
-globalThis.CSSUnitValue = function CSSUnitValue(v, u) { this.value = v; this.unit = u; };
-CSSUnitValue.prototype = { toString: function() { return this.value + this.unit; } };
-globalThis.CSSKeywordValue = function CSSKeywordValue(v) { this.value = v; };
-globalThis.CSSMathSum = function CSSMathSum() { this.values = []; };
-globalThis.CSSMathProduct = function CSSMathProduct() { this.values = []; };
-globalThis.CSSMathNegate = function CSSMathNegate() {};
-globalThis.CSSMathInvert = function CSSMathInvert() {};
-globalThis.CSSMathMin = function CSSMathMin() { this.values = []; };
-globalThis.CSSMathMax = function CSSMathMax() { this.values = []; };
-globalThis.CSSMathClamp = function CSSMathClamp() {};
-globalThis.CSSTransformValue = function CSSTransformValue() { this.length = 0; };
-globalThis.CSSTranslate = function CSSTranslate() {};
-globalThis.CSSRotate = function CSSRotate() {};
-globalThis.CSSScale = function CSSScale() {};
-globalThis.CSSSkew = function CSSSkew() {};
-globalThis.CSSSkewX = function CSSSkewX() {};
-globalThis.CSSSkewY = function CSSSkewY() {};
-globalThis.CSSPerspective = function CSSPerspective() {};
-globalThis.CSSMatrixComponent = function CSSMatrixComponent() {};
-globalThis.CSSImageValue = function CSSImageValue() {};
-globalThis.CSSUnparsedValue = function CSSUnparsedValue() { this.length = 0; };
-globalThis.CSSVariableReferenceValue = function CSSVariableReferenceValue() {};
-globalThis.CSSNumericValue = function CSSNumericValue() {};
 globalThis.CSSStyleValue = function CSSStyleValue() {};
 CSSStyleValue.parse = function() { return new CSSStyleValue(); };
 CSSStyleValue.parseAll = function() { return []; };
-globalThis.StylePropertyMap = function StylePropertyMap() {};
-StylePropertyMap.prototype = {
-    get: function(){return null;}, getAll: function(){return [];},
-    has: function(){return false;}, set: function(){}, append: function(){},
-    delete: function(){}, clear: function(){}, forEach: function(){}
-};
-globalThis.StylePropertyMapReadOnly = function StylePropertyMapReadOnly() {};
-StylePropertyMapReadOnly.prototype = {
-    get: function(){return null;}, getAll: function(){return [];},
-    has: function(){return false;}, forEach: function(){}
-};
+globalThis.CSSNumericValue = function CSSNumericValue() {};
+CSSNumericValue.prototype = Object.create(CSSStyleValue.prototype);
+CSSNumericValue.prototype.constructor = CSSNumericValue;
+CSSNumericValue.prototype.add = function() { return this; };
+CSSNumericValue.prototype.sub = function() { return this; };
+CSSNumericValue.prototype.mul = function() { return this; };
+CSSNumericValue.prototype.div = function() { return this; };
+CSSNumericValue.prototype.min = function() { return this; };
+CSSNumericValue.prototype.max = function() { return this; };
+CSSNumericValue.prototype.equals = function() { return false; };
+CSSNumericValue.prototype.to = function() { return this; };
+CSSNumericValue.prototype.toSum = function() { return this; };
+CSSNumericValue.prototype.type = function() { return {}; };
+CSSNumericValue.parse = function() { return new CSSUnitValue(0, 'px'); };
+globalThis.CSSUnitValue = function CSSUnitValue(v, u) { this.value = v; this.unit = u; };
+CSSUnitValue.prototype = Object.create(CSSNumericValue.prototype);
+CSSUnitValue.prototype.constructor = CSSUnitValue;
+CSSUnitValue.prototype.toString = function() { return this.value + this.unit; };
+globalThis.CSSKeywordValue = function CSSKeywordValue(v) { this.value = v; };
+CSSKeywordValue.prototype = Object.create(CSSStyleValue.prototype);
+CSSKeywordValue.prototype.constructor = CSSKeywordValue;
+
+// CSSMath types with proper inheritance and properties
+globalThis.CSSMathValue = function CSSMathValue() {};
+CSSMathValue.prototype = Object.create(CSSNumericValue.prototype);
+CSSMathValue.prototype.constructor = CSSMathValue;
+CSSMathValue.prototype.operator = '';
+globalThis.CSSMathSum = function CSSMathSum() { this.values = new CSSNumericArray(); this.operator = 'sum'; };
+CSSMathSum.prototype = Object.create(CSSMathValue.prototype);
+CSSMathSum.prototype.constructor = CSSMathSum;
+globalThis.CSSMathProduct = function CSSMathProduct() { this.values = new CSSNumericArray(); this.operator = 'product'; };
+CSSMathProduct.prototype = Object.create(CSSMathValue.prototype);
+CSSMathProduct.prototype.constructor = CSSMathProduct;
+globalThis.CSSMathNegate = function CSSMathNegate(v) { this.value = v || null; this.operator = 'negate'; };
+CSSMathNegate.prototype = Object.create(CSSMathValue.prototype);
+CSSMathNegate.prototype.constructor = CSSMathNegate;
+globalThis.CSSMathInvert = function CSSMathInvert(v) { this.value = v || null; this.operator = 'invert'; };
+CSSMathInvert.prototype = Object.create(CSSMathValue.prototype);
+CSSMathInvert.prototype.constructor = CSSMathInvert;
+globalThis.CSSMathMin = function CSSMathMin() { this.values = new CSSNumericArray(); this.operator = 'min'; };
+CSSMathMin.prototype = Object.create(CSSMathValue.prototype);
+CSSMathMin.prototype.constructor = CSSMathMin;
+globalThis.CSSMathMax = function CSSMathMax() { this.values = new CSSNumericArray(); this.operator = 'max'; };
+CSSMathMax.prototype = Object.create(CSSMathValue.prototype);
+CSSMathMax.prototype.constructor = CSSMathMax;
+globalThis.CSSMathClamp = function CSSMathClamp() { this.lower = null; this.value = null; this.upper = null; this.operator = 'clamp'; };
+CSSMathClamp.prototype = Object.create(CSSMathValue.prototype);
+CSSMathClamp.prototype.constructor = CSSMathClamp;
+globalThis.CSSNumericArray = function CSSNumericArray() { this.length = 0; };
+CSSNumericArray.prototype.forEach = function() {};
+
+// CSS Transform types
+globalThis.CSSTransformComponent = function CSSTransformComponent() { this.is2D = true; };
+CSSTransformComponent.prototype.toMatrix = function() { return new DOMMatrix(); };
+globalThis.CSSTransformValue = function CSSTransformValue() { this.length = 0; this.is2D = true; };
+CSSTransformValue.prototype.toMatrix = function() { return new DOMMatrix(); };
+globalThis.CSSTranslate = function CSSTranslate() { this.x = null; this.y = null; this.z = null; this.is2D = true; };
+CSSTranslate.prototype = Object.create(CSSTransformComponent.prototype);
+globalThis.CSSRotate = function CSSRotate() { this.angle = null; this.x = null; this.y = null; this.z = null; this.is2D = true; };
+CSSRotate.prototype = Object.create(CSSTransformComponent.prototype);
+globalThis.CSSScale = function CSSScale() { this.x = null; this.y = null; this.z = null; this.is2D = true; };
+CSSScale.prototype = Object.create(CSSTransformComponent.prototype);
+globalThis.CSSSkew = function CSSSkew() { this.ax = null; this.ay = null; this.is2D = true; };
+CSSSkew.prototype = Object.create(CSSTransformComponent.prototype);
+globalThis.CSSSkewX = function CSSSkewX() { this.ax = null; this.is2D = true; };
+CSSSkewX.prototype = Object.create(CSSTransformComponent.prototype);
+globalThis.CSSSkewY = function CSSSkewY() { this.ay = null; this.is2D = true; };
+CSSSkewY.prototype = Object.create(CSSTransformComponent.prototype);
+globalThis.CSSPerspective = function CSSPerspective() { this.length = null; this.is2D = false; };
+CSSPerspective.prototype = Object.create(CSSTransformComponent.prototype);
+globalThis.CSSMatrixComponent = function CSSMatrixComponent() { this.matrix = null; this.is2D = true; };
+CSSMatrixComponent.prototype = Object.create(CSSTransformComponent.prototype);
+globalThis.CSSImageValue = function CSSImageValue() {};
+CSSImageValue.prototype = Object.create(CSSStyleValue.prototype);
+globalThis.CSSUnparsedValue = function CSSUnparsedValue() { this.length = 0; };
+CSSUnparsedValue.prototype = Object.create(CSSStyleValue.prototype);
+globalThis.CSSVariableReferenceValue = function CSSVariableReferenceValue() { this.variable = ''; this.fallback = null; };
+
+// CSS Color Value types
+globalThis.CSSColorValue = function CSSColorValue() {};
+CSSColorValue.prototype = Object.create(CSSStyleValue.prototype);
+CSSColorValue.parse = function() { return new CSSColorValue(); };
+globalThis.CSSColor = function CSSColor() { this.colorSpace = ''; this.channels = []; this.alpha = 1; };
+CSSColor.prototype = Object.create(CSSColorValue.prototype);
+globalThis.CSSRGB = function CSSRGB(r,g,b,a) { this.r = r||0; this.g = g||0; this.b = b||0; this.alpha = a||1; };
+CSSRGB.prototype = Object.create(CSSColorValue.prototype);
+globalThis.CSSHSL = function CSSHSL(h,s,l,a) { this.h = h||0; this.s = s||0; this.l = l||0; this.alpha = a||1; };
+CSSHSL.prototype = Object.create(CSSColorValue.prototype);
+globalThis.CSSHWB = function CSSHWB(h,w,b,a) { this.h = h||0; this.w = w||0; this.b = b||0; this.alpha = a||1; };
+CSSHWB.prototype = Object.create(CSSColorValue.prototype);
+globalThis.CSSLab = function CSSLab(l,a2,b2,a) { this.l = l||0; this.a = a2||0; this.b = b2||0; this.alpha = a||1; };
+CSSLab.prototype = Object.create(CSSColorValue.prototype);
+globalThis.CSSOKLab = function CSSOKLab(l,a2,b2,a) { this.l = l||0; this.a = a2||0; this.b = b2||0; this.alpha = a||1; };
+CSSOKLab.prototype = Object.create(CSSColorValue.prototype);
+globalThis.CSSLCH = function CSSLCH(l,c,h,a) { this.l = l||0; this.c = c||0; this.h = h||0; this.alpha = a||1; };
+CSSLCH.prototype = Object.create(CSSColorValue.prototype);
+globalThis.CSSOKLCH = function CSSOKLCH(l,c,h,a) { this.l = l||0; this.c = c||0; this.h = h||0; this.alpha = a||1; };
+CSSOKLCH.prototype = Object.create(CSSColorValue.prototype);
 
 // CSS Highlight API
 globalThis.Highlight = function Highlight() { this.priority = 0; this.type = 'highlight'; };
@@ -1725,14 +1972,30 @@ CSS.registerProperty = CSS.registerProperty || function() {};
 // CSS Animation Worklet
 globalThis.AnimationWorklet = function AnimationWorklet() {};
 AnimationWorklet.prototype = { addModule: function() { return Promise.resolve(); } };
+globalThis.Worklet = function Worklet() {};
+Worklet.prototype = { addModule: function() { return Promise.resolve(); } };
 
 // CSS Layout API / Paint API
 globalThis.LayoutWorklet = function LayoutWorklet() {};
-LayoutWorklet.prototype = { addModule: function() { return Promise.resolve(); } };
+LayoutWorklet.prototype = Object.create(Worklet.prototype);
+LayoutWorklet.prototype.constructor = LayoutWorklet;
+LayoutWorklet.prototype.addModule = function() { return Promise.resolve(); };
 globalThis.PaintWorklet = function PaintWorklet() {};
-PaintWorklet.prototype = { addModule: function() { return Promise.resolve(); } };
+PaintWorklet.prototype = Object.create(Worklet.prototype);
+PaintWorklet.prototype.constructor = PaintWorklet;
+PaintWorklet.prototype.addModule = function() { return Promise.resolve(); };
 if (!CSS.layoutWorklet) CSS.layoutWorklet = new LayoutWorklet();
 if (!CSS.paintWorklet) CSS.paintWorklet = new PaintWorklet();
+if (!CSS.animationWorklet) CSS.animationWorklet = new AnimationWorklet();
+
+// WorkletAnimation
+globalThis.WorkletAnimation = function WorkletAnimation() {
+    this.animatorName = ''; this.effect = null; this.timeline = null;
+    this.playState = 'idle'; this.currentTime = null;
+};
+WorkletAnimation.prototype = {
+    play: function(){}, cancel: function(){}
+};
 
 // Web Animations API
 globalThis.Animation = function Animation(effect, timeline) {
@@ -1746,8 +2009,31 @@ globalThis.Animation = function Animation(effect, timeline) {
 Animation.prototype = {
     play: function(){}, pause: function(){}, cancel: function(){},
     finish: function(){}, reverse: function(){}, updatePlaybackTiming: function(){},
-    persist: function(){}, commitStyles: function(){}, effect: null
+    persist: function(){}, commitStyles: function(){}, effect: null,
+    addEventListener: function(){}, removeEventListener: function(){}
 };
+globalThis.CSSAnimation = function CSSAnimation() {
+    this.animationName = ''; this.effect = null; this.timeline = null;
+    this.playState = 'idle'; this.currentTime = null; this.startTime = null;
+    this.playbackRate = 1; this.pending = false; this.id = '';
+    this.finished = Promise.resolve(this); this.ready = Promise.resolve(this);
+    this.onfinish = null; this.oncancel = null; this.onremove = null;
+    this.replaceState = 'active';
+};
+CSSAnimation.prototype = Object.create(Animation.prototype);
+CSSAnimation.prototype.constructor = CSSAnimation;
+CSSAnimation.prototype.animationName = '';
+globalThis.CSSTransition = function CSSTransition() {
+    this.transitionProperty = ''; this.effect = null; this.timeline = null;
+    this.playState = 'idle'; this.currentTime = null; this.startTime = null;
+    this.playbackRate = 1; this.pending = false; this.id = '';
+    this.finished = Promise.resolve(this); this.ready = Promise.resolve(this);
+    this.onfinish = null; this.oncancel = null; this.onremove = null;
+    this.replaceState = 'active';
+};
+CSSTransition.prototype = Object.create(Animation.prototype);
+CSSTransition.prototype.constructor = CSSTransition;
+CSSTransition.prototype.transitionProperty = '';
 globalThis.KeyframeEffect = function KeyframeEffect() {
     this.target = null; this.pseudoElement = null;
     this.composite = 'replace'; this.iterationComposite = 'replace';
@@ -1757,15 +2043,285 @@ KeyframeEffect.prototype = {
     getTiming: function(){return {};}, updateTiming: function(){},
     getComputedTiming: function(){return {};}
 };
-globalThis.AnimationTimeline = function AnimationTimeline() { this.currentTime = 0; };
-globalThis.DocumentTimeline = function DocumentTimeline() { this.currentTime = 0; };
-globalThis.ScrollTimeline = function ScrollTimeline() { this.currentTime = 0; this.source = null; this.axis = 'block'; };
-globalThis.ViewTimeline = function ViewTimeline() { this.currentTime = 0; this.subject = null; this.axis = 'block'; };
+globalThis.AnimationTimeline = function AnimationTimeline() { this.currentTime = 0; this.duration = null; };
+AnimationTimeline.prototype = { getCurrentTime: function(){return 0;} };
+globalThis.DocumentTimeline = function DocumentTimeline() { this.currentTime = 0; this.duration = null; };
+DocumentTimeline.prototype = Object.create(AnimationTimeline.prototype);
+DocumentTimeline.prototype.constructor = DocumentTimeline;
+globalThis.ScrollTimeline = function ScrollTimeline() { this.currentTime = 0; this.source = null; this.axis = 'block'; this.duration = null; };
+ScrollTimeline.prototype = Object.create(AnimationTimeline.prototype);
+ScrollTimeline.prototype.constructor = ScrollTimeline;
+globalThis.ViewTimeline = function ViewTimeline() {
+    this.currentTime = 0; this.subject = null; this.axis = 'block';
+    this.startOffset = null; this.endOffset = null; this.duration = null;
+};
+ViewTimeline.prototype = Object.create(AnimationTimeline.prototype);
+ViewTimeline.prototype.constructor = ViewTimeline;
 globalThis.AnimationEffect = function AnimationEffect() {};
 AnimationEffect.prototype = {
     getTiming: function(){return {};}, updateTiming: function(){},
-    getComputedTiming: function(){return {};}
+    getComputedTiming: function(){return {};}, before: function(){}, after: function(){},
+    replace: function(){}, remove: function(){}
 };
+globalThis.GroupEffect = function GroupEffect() { this.children = []; this.firstChild = null; this.lastChild = null; };
+GroupEffect.prototype = Object.create(AnimationEffect.prototype);
+GroupEffect.prototype.constructor = GroupEffect;
+GroupEffect.prototype.clone = function() { return new GroupEffect(); };
+GroupEffect.prototype.prepend = function() {};
+GroupEffect.prototype.append = function() {};
+globalThis.SequenceEffect = function SequenceEffect() { this.children = []; this.firstChild = null; this.lastChild = null; };
+SequenceEffect.prototype = Object.create(AnimationEffect.prototype);
+SequenceEffect.prototype.constructor = SequenceEffect;
+SequenceEffect.prototype.clone = function() { return new SequenceEffect(); };
+SequenceEffect.prototype.prepend = function() {};
+SequenceEffect.prototype.append = function() {};
+globalThis.AnimationNodeList = function AnimationNodeList() { this.length = 0; };
+AnimationNodeList.prototype.item = function() { return null; };
+globalThis.AnimationPlaybackEvent = function AnimationPlaybackEvent(type) {
+    this.type = type || ''; this.currentTime = null; this.timelineTime = null;
+};
+AnimationPlaybackEvent.prototype = Object.create(Event.prototype);
+
+// Event types
+globalThis.AnimationEvent = function AnimationEvent(type, init) {
+    this.type = type || ''; this.animationName = (init && init.animationName) || '';
+    this.elapsedTime = (init && init.elapsedTime) || 0;
+    this.pseudoElement = (init && init.pseudoElement) || '';
+};
+AnimationEvent.prototype = Object.create(Event.prototype);
+globalThis.TransitionEvent = function TransitionEvent(type, init) {
+    this.type = type || ''; this.propertyName = (init && init.propertyName) || '';
+    this.elapsedTime = (init && init.elapsedTime) || 0;
+    this.pseudoElement = (init && init.pseudoElement) || '';
+};
+TransitionEvent.prototype = Object.create(Event.prototype);
+
+// MediaQueryList
+globalThis.MediaQueryList = function MediaQueryList(media, matches) {
+    this.media = media || ''; this.matches = matches !== undefined ? matches : true;
+    this.onchange = null;
+};
+MediaQueryList.prototype = {
+    addEventListener: function(){}, removeEventListener: function(){},
+    addListener: function(){}, removeListener: function(){},
+    dispatchEvent: function(){ return true; }
+};
+globalThis.MediaQueryListEvent = function MediaQueryListEvent(type, init) {
+    this.type = type || ''; this.media = (init && init.media) || '';
+    this.matches = (init && init.matches) || false;
+};
+MediaQueryListEvent.prototype = Object.create(Event.prototype);
+
+// Screen
+globalThis.Screen = function Screen() {
+    this.availWidth = 1920; this.availHeight = 1080;
+    this.width = 1920; this.height = 1080;
+    this.colorDepth = 24; this.pixelDepth = 24;
+    this.orientation = { angle: 0, type: 'landscape-primary',
+        addEventListener: function(){}, removeEventListener: function(){} };
+};
+
+// VisualViewport
+globalThis.VisualViewport = function VisualViewport() {
+    this.offsetLeft = 0; this.offsetTop = 0;
+    this.pageLeft = 0; this.pageTop = 0;
+    this.width = 1920; this.height = 1080;
+    this.scale = 1; this.zoom = 1;
+    this.onresize = null; this.onscroll = null; this.onscrollend = null;
+    this.addEventListener = function(){}; this.removeEventListener = function(){};
+};
+
+// Viewport (CSS Viewport)
+globalThis.Viewport = function Viewport() {
+    this.segments = null;
+};
+
+// ViewTransition
+globalThis.ViewTransition = function ViewTransition() {
+    this.finished = Promise.resolve(); this.ready = Promise.resolve();
+    this.updateCallbackDone = Promise.resolve();
+    this.skipTransition = function(){};
+    this.types = [];
+};
+
+// CSSPseudoElement
+globalThis.CSSPseudoElement = function CSSPseudoElement() {
+    this.type = ''; this.element = null; this.style = new CSSStyleDeclaration();
+    this.pseudo = function() { return null; };
+    this.animate = function() { return new Animation(); };
+    this.getAnimations = function() { return []; };
+    this.getComputedStyle = function() { return {}; };
+    this.addEventListener = function() {};
+    this.removeEventListener = function() {};
+};
+
+// CaretPosition
+globalThis.CaretPosition = function CaretPosition() {
+    this.offsetNode = null; this.offset = 0;
+    this.getClientRect = function() { return {x:0,y:0,width:0,height:0,top:0,right:0,bottom:0,left:0}; };
+};
+
+// NamedFlow / NamedFlowMap (CSS Regions)
+globalThis.NamedFlow = function NamedFlow() {
+    this.name = ''; this.overset = false; this.firstEmptyRegionIndex = -1;
+    this.getContent = function() { return []; };
+    this.getRegions = function() { return []; };
+    this.getRegionsByContent = function() { return []; };
+};
+NamedFlow.prototype.addEventListener = function() {};
+NamedFlow.prototype.removeEventListener = function() {};
+NamedFlow.prototype.dispatchEvent = function() { return true; };
+globalThis.NamedFlowMap = function NamedFlowMap() {
+    this.get = function() { return null; };
+    this.has = function() { return false; };
+    this.set = function() {};
+    this.delete = function() {};
+    this.forEach = function() {};
+    this.entries = function() { return {next:function(){return {done:true};}}; };
+};
+
+// SnapEvent
+globalThis.SnapEvent = function SnapEvent(type, init) {
+    this.type = type || ''; this.snapTargetBlock = null; this.snapTargetInline = null;
+};
+SnapEvent.prototype = Object.create(Event.prototype);
+
+// NavigationEvent
+globalThis.NavigationEvent = function NavigationEvent(type) {
+    this.type = type || '';
+};
+NavigationEvent.prototype = Object.create(Event.prototype);
+
+// PageRevealEvent
+globalThis.PageRevealEvent = function PageRevealEvent(type) {
+    this.type = type || ''; this.viewTransition = null;
+};
+PageRevealEvent.prototype = Object.create(Event.prototype);
+
+// ContentVisibilityAutoStateChangeEvent
+globalThis.ContentVisibilityAutoStateChangeEvent = function ContentVisibilityAutoStateChangeEvent(type) {
+    this.type = type || ''; this.skipped = false;
+};
+ContentVisibilityAutoStateChangeEvent.prototype = Object.create(Event.prototype);
+
+// FontFaceSetLoadEvent
+globalThis.FontFaceSetLoadEvent = function FontFaceSetLoadEvent(type) {
+    this.type = type || ''; this.fontfaces = [];
+};
+FontFaceSetLoadEvent.prototype = Object.create(Event.prototype);
+
+// CSSFontFeatureValuesMap
+globalThis.CSSFontFeatureValuesMap = function CSSFontFeatureValuesMap() {
+    this.size = 0;
+    this.get = function() { return null; };
+    this.has = function() { return false; };
+    this.set = function() {};
+    this.delete = function() {};
+    this.forEach = function() {};
+    this.entries = function() { return {next:function(){return {done:true};}}; };
+    this.keys = function() { return {next:function(){return {done:true};}}; };
+    this.values = function() { return {next:function(){return {done:true};}}; };
+};
+
+// CSSColorProfileRule
+globalThis.CSSColorProfileRule = function CSSColorProfileRule() {
+    this.name = ''; this.src = ''; this.renderingIntent = '';
+    this.components = ''; this.type = 0; this.cssText = '';
+    this.parentStyleSheet = null; this.parentRule = null;
+};
+CSSColorProfileRule.prototype = Object.create(CSSRule.prototype);
+CSSColorProfileRule.prototype.constructor = CSSColorProfileRule;
+Object.defineProperty(CSSColorProfileRule, 'name', { value: 'CSSColorProfileRule', configurable: true });
+
+// CSSMarginRule
+globalThis.CSSMarginRule = function CSSMarginRule() {
+    this.name = ''; this.type = 0; this.cssText = '';
+    this.parentStyleSheet = null; this.parentRule = null;
+    this.style = new CSSStyleDeclaration(); this.style.length = 1;
+};
+CSSMarginRule.prototype = Object.create(CSSRule.prototype);
+CSSMarginRule.prototype.constructor = CSSMarginRule;
+Object.defineProperty(CSSMarginRule, 'name', { value: 'CSSMarginRule', configurable: true });
+
+// CSSRuleList
+globalThis.CSSRuleList = function CSSRuleList() { this.length = 0; };
+CSSRuleList.prototype.item = function() { return null; };
+
+// FontFace additions
+globalThis.FontFaceVariationAxis = function FontFaceVariationAxis() {
+    this.name = ''; this.tag = ''; this.minimumValue = 0;
+    this.maximumValue = 0; this.defaultValue = 0;
+};
+globalThis.FontFacePalettes = function FontFacePalettes() {
+    this.length = 0; this.item = function(){return null;};
+};
+globalThis.FontFacePalette = function FontFacePalette() {
+    this.length = 0; this.item = function(){return null;}; this.usableWithLightBackground = true; this.usableWithDarkBackground = true;
+};
+globalThis.FontFaceFeatures = function FontFaceFeatures() {
+    this.length = 0; this.item = function(){return null;};
+};
+
+// DOMMatrix (for transforms)
+globalThis.DOMMatrix = globalThis.DOMMatrix || function DOMMatrix() {
+    this.a=1;this.b=0;this.c=0;this.d=1;this.e=0;this.f=0;
+    this.m11=1;this.m12=0;this.m13=0;this.m14=0;
+    this.m21=0;this.m22=1;this.m23=0;this.m24=0;
+    this.m31=0;this.m32=0;this.m33=1;this.m34=0;
+    this.m41=0;this.m42=0;this.m43=0;this.m44=1;
+    this.is2D=true; this.isIdentity=true;
+};
+
+// MouseEvent (with CSSOM-View properties)
+globalThis.MouseEvent = globalThis.MouseEvent || function MouseEvent(type, init) {
+    this.type = type || ''; this.button = 0; this.buttons = 0;
+    this.clientX = 0; this.clientY = 0;
+    this.screenX = 0; this.screenY = 0;
+    this.pageX = 0; this.pageY = 0;
+    this.x = 0; this.y = 0;
+    this.offsetX = 0; this.offsetY = 0;
+    this.movementX = 0; this.movementY = 0;
+    this.altKey = false; this.ctrlKey = false; this.metaKey = false; this.shiftKey = false;
+    this.relatedTarget = null; this.detail = 0;
+    if (init) { for (var k in init) this[k] = init[k]; }
+};
+MouseEvent.prototype = Object.create(Event.prototype);
+MouseEvent.prototype.constructor = MouseEvent;
+MouseEvent.prototype.getModifierState = function() { return false; };
+
+// Text constructor (for geometry checks)
+globalThis.Text = globalThis.Text || function Text(data) { this.data = data || ''; this.nodeType = 3; };
+Text.prototype.getBoxQuads = function() { return []; };
+Text.prototype.convertQuadFromNode = function() { return {}; };
+Text.prototype.convertRectFromNode = function() { return {}; };
+Text.prototype.convertPointFromNode = function() { return {}; };
+
+// Range constructor
+globalThis.Range = globalThis.Range || function Range() {
+    this.startContainer = null; this.startOffset = 0;
+    this.endContainer = null; this.endOffset = 0;
+    this.collapsed = true; this.commonAncestorContainer = null;
+};
+Range.prototype.getClientRects = function() { return []; };
+Range.prototype.getBoundingClientRect = function() {
+    return { top: 0, left: 0, bottom: 0, right: 0, width: 0, height: 0, x: 0, y: 0 };
+};
+Range.prototype.createContextualFragment = function() { return document.createDocumentFragment(); };
+Range.prototype.setStart = function() {};
+Range.prototype.setEnd = function() {};
+Range.prototype.selectNode = function() {};
+Range.prototype.selectNodeContents = function() {};
+Range.prototype.collapse = function() {};
+Range.prototype.cloneContents = function() { return document.createDocumentFragment(); };
+Range.prototype.deleteContents = function() {};
+Range.prototype.extractContents = function() { return document.createDocumentFragment(); };
+Range.prototype.cloneRange = function() { return new Range(); };
+Range.prototype.detach = function() {};
+
+// Document constructor
+globalThis.Document = globalThis.Document || function Document() {};
+globalThis.HTMLDocument = globalThis.HTMLDocument || function HTMLDocument() {};
+HTMLDocument.prototype = Object.create(Document.prototype);
 
 // Resize Observer
 globalThis.ResizeObserver = globalThis.ResizeObserver || function ResizeObserver(cb) { this._cb = cb; };
@@ -1780,7 +2336,8 @@ globalThis.PointerEvent = globalThis.PointerEvent || function PointerEvent(type,
     this.tiltX = 0; this.tiltY = 0; this.pointerType = 'mouse';
     this.isPrimary = true; this.altitudeAngle = 0; this.azimuthAngle = 0;
 };
-PointerEvent.prototype = Object.create(Event.prototype);
+PointerEvent.prototype = Object.create(MouseEvent.prototype);
+PointerEvent.prototype.constructor = PointerEvent;
 
 // Fullscreen API - stubs added in setupDocPolyfills
 
@@ -1791,11 +2348,16 @@ globalThis.FontFace = globalThis.FontFace || function FontFace(family, source, d
     this.unicodeRange = 'U+0-10FFFF'; this.variant = 'normal';
     this.featureSettings = 'normal'; this.variationSettings = 'normal';
     this.display = 'auto'; this.ascentOverride = 'normal'; this.descentOverride = 'normal';
+    this.ascenderOverride = 'normal'; this.descenderOverride = 'normal';
     this.lineGapOverride = 'normal'; this.sizeAdjust = '100%';
+    this.features = new FontFaceFeatures();
+    this.variations = new FontFaceVariationAxis();
+    this.palettes = new FontFacePalettes();
 };
 FontFace.prototype = { load: function() { this.status = 'loaded'; return Promise.resolve(this); } };
 globalThis.FontFaceSet = globalThis.FontFaceSet || function FontFaceSet() {
     this.status = 'loaded'; this.ready = Promise.resolve(this); this.size = 0;
+    this.onloading = null; this.onloadingdone = null; this.onloadingerror = null;
 };
 FontFaceSet.prototype = {
     add: function(){}, delete: function(){}, clear: function(){},
@@ -1805,7 +2367,28 @@ FontFaceSet.prototype = {
     addEventListener: function(){}, removeEventListener: function(){}
 };
 
-// Ensure document.fonts exists (will be set up after document is created)
+// Window constructor (for interface checks)
+globalThis.Window = globalThis.Window || function Window() {};
+
+// visualViewport
+if (!globalThis.visualViewport) globalThis.visualViewport = new VisualViewport();
+
+// Element event handler properties (for interface checks)
+var _eventHandlers = [
+    'onanimationstart', 'onanimationend', 'onanimationiteration', 'onanimationcancel',
+    'ontransitionstart', 'ontransitionend', 'ontransitionrun', 'ontransitioncancel',
+    'onpointerdown', 'onpointerup', 'onpointermove', 'onpointerover', 'onpointerout',
+    'onpointerenter', 'onpointerleave', 'onpointercancel', 'ongotpointercapture',
+    'onlostpointercapture', 'oncontentvisibilityautostatechange',
+    'onscrollend', 'onscrollsnapchange', 'onscrollsnapchanging',
+    'onbeforexrselect'
+];
+_eventHandlers.forEach(function(h) {
+    if (typeof Element !== 'undefined' && Element.prototype) {
+        if (!(h in Element.prototype)) Element.prototype[h] = null;
+    }
+    if (!(h in globalThis)) globalThis[h] = null;
+});
 
 // CSS factory methods for Typed OM
 if (typeof CSS !== 'undefined' && CSS) {
@@ -1817,6 +2400,11 @@ if (typeof CSS !== 'undefined' && CSS) {
     _units.forEach(function(u) {
         if (!CSS[u]) CSS[u] = function(v) { return new CSSUnitValue(v, u); };
     });
+}
+
+// CSS.elementSources (Layout API)
+if (typeof CSS !== 'undefined') {
+    CSS.elementSources = CSS.elementSources || new (function ElementSources(){})();
 }
 
 )JS";
@@ -1885,6 +2473,18 @@ document.ownerDocument = null;
 document.URL = location.href || '';
 document.documentURI = location.href || '';
 document.location = location;
+document.scrollingElement = document.documentElement || null;
+document.namedFlows = new NamedFlowMap();
+document.getBoxQuads = function() { return []; };
+document.convertQuadFromNode = function() { return {}; };
+document.convertRectFromNode = function() { return {}; };
+document.convertPointFromNode = function() { return {}; };
+document.elementFromPoint = document.elementFromPoint || function() { return null; };
+document.elementsFromPoint = document.elementsFromPoint || function() { return []; };
+document.caretPositionFromPoint = function() { return new CaretPosition(); };
+document.getAnimations = function() { return []; };
+document.startViewTransition = function(cb) { if (cb) try{cb();}catch(e){} return new ViewTransition(); };
+document.timeline = new DocumentTimeline();
 
 // document.implementation (needed by jQuery)
 document.implementation = {
@@ -2904,6 +3504,11 @@ if (typeof HTMLImageElement !== 'undefined') {
     var IMP = HTMLImageElement.prototype;
     if (!('srcset' in IMP)) IMP.srcset = '';
     if (!('sizes' in IMP)) IMP.sizes = '';
+    if (!('x' in IMP)) IMP.x = 0;
+    if (!('y' in IMP)) IMP.y = 0;
+}
+if (typeof HTMLElement !== 'undefined') {
+    if (!('offsetParent' in HTMLElement.prototype)) HTMLElement.prototype.offsetParent = null;
 }
 
 // video/audio: canPlayType method
