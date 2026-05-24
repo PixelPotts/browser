@@ -1560,13 +1560,34 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
                 doc->body->z_index = elem->z_index;
                 doc->body->is_body = true;
                 doc->body->inline_style_raw = elem->inline_style_raw;
+                doc->body->fi_computed = elem->fi_computed;
+                doc->body->text_decoration = elem->text_decoration;
+                doc->body->text_decoration_color = elem->text_decoration_color;
+                doc->body->text_decoration_style = elem->text_decoration_style;
+                doc->body->letter_spacing = elem->letter_spacing;
+                doc->body->word_spacing = elem->word_spacing;
+                doc->body->font_variant = elem->font_variant;
+                doc->body->white_space = elem->white_space;
+                doc->body->text_indent = elem->text_indent;
+                doc->body->text_overflow = elem->text_overflow;
+                doc->body->font_stretch = elem->font_stretch;
+                doc->body->text_shadow = elem->text_shadow;
+                doc->body->before_content = elem->before_content;
+                doc->body->after_content = elem->after_content;
                 if (!elem->id.empty()) {
                     doc->body->id = elem->id;
                     doc->id_map[elem->id] = doc->body;
                 }
                 doc->body->class_list = elem->class_list;
-                stack.push_back({doc->body, tname, elem->class_list, elem->id});
-                // cur_parent stays as body
+                // Update existing stack entry for body instead of pushing duplicate
+                for (auto& se : stack) {
+                    if (se.node == doc->body) {
+                        se.cls = elem->class_list;
+                        se.id = elem->id;
+                        break;
+                    }
+                }
+                cur_parent = doc->body;
                 continue;
             }
 
@@ -1587,6 +1608,9 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
         }
     }
     flush();
+
+    // All parsed elements are owned by the tree now; clear orphans to free extra refs
+    doc->orphans.clear();
 
     return doc;
 }
