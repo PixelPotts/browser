@@ -1,6 +1,6 @@
 CXX      = g++
 CC       = gcc
-CXXFLAGS = -std=c++17 -O2 -g -Wall -Wno-unused-result -rdynamic \
+CXXFLAGS = -std=c++17 -O2 -g -Wall -Wno-unused-result -rdynamic -fno-strict-aliasing \
            $(shell pkg-config --cflags gtk+-3.0) \
            -I quickjs
 CFLAGS   = -std=gnu11 -O2 -Wall -Wno-unused-result \

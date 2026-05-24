@@ -222,6 +222,10 @@ CairoColor parse_css_color(const std::string& color) {
 // ---- Display list generation ----
 
 static void paint_box(LayoutBox* box, DisplayList& dl, float offset_x, float offset_y) {
+    if (!box) return;
+    fprintf(stderr, "[PAINT] paint_box type=%d dom=%p children=%zu rect=(%.0f,%.0f,%.0f,%.0f)\n",
+            (int)box->type, (void*)box->dom_node, box->children.size(),
+            box->content_rect.x, box->content_rect.y, box->content_rect.w, box->content_rect.h);
     if (box->type == LayoutBoxType::None) return;
 
     DOMNode* node = box->dom_node;

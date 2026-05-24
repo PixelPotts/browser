@@ -771,6 +771,12 @@ static void layout_inline(LayoutBox* box, float containing_width, PangoContext* 
     box->pango_layout = layout;
     box->text = full_text;
 
+    // Store text run mapping for hit testing
+    box->text_runs.clear();
+    for (auto& r : runs) {
+        box->text_runs.push_back({r.node, r.start, r.length});
+    }
+
     // Build line boxes from PangoLayout lines
     box->line_boxes.clear();
     PangoLayoutIter* iter = pango_layout_get_iter(layout);

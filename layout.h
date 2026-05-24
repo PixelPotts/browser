@@ -92,6 +92,14 @@ struct LayoutBox {
     std::string text;
     PangoLayout* pango_layout = nullptr;  // for text nodes
 
+    // Text run mapping (for inline hit testing - maps char ranges to DOM nodes)
+    struct TextRunInfo {
+        DOMNode* node;
+        int start;   // byte offset in full_text
+        int length;
+    };
+    std::vector<TextRunInfo> text_runs;
+
     // Style data read from DOMNode (cached for layout)
     int font_size = 16;
     int font_weight = 400;
