@@ -735,136 +735,8 @@ static bool is_void(const std::string& t) {
 
 static const char* BOLD_TAGS[]={"b","strong","h1","h2","h3","h4","h5","h6",nullptr};
 
-struct StackEntry {
-    std::string tag; std::vector<std::string> cls; std::string id;
-    int    fw_own       = -1;
-    int    fs_computed  = 16;
-    double lh_own       = -1.0;
-    std::string color_own;
-    int    text_align_own = -1; // -1=inherit, 0=left, 1=center, 2=right, 3=justify
-    BoxModel box;
-    std::string href; // non-empty for <a> elements
-};
+// (selector matching unified in dom.cpp via dom_sel_matches)
 
-// Strip attribute selectors [attr...] and pseudo-classes from a simple selector,
-// returning the base selector part (tag.class#id).
-// Sets has_pseudo_element=true if selector targets ::before, ::after, etc.
-static std::string strip_selector_extras(const std::string& raw, bool& has_pseudo_element) {
-    std::string result;
-    has_pseudo_element = false;
-    size_t i = 0, n = raw.size();
-    while (i < n) {
-        if (raw[i] == '[') {
-            int depth = 1; ++i;
-            while (i < n && depth > 0) { if (raw[i]=='[') ++depth; else if (raw[i]==']') --depth; ++i; }
-        } else if (raw[i] == ':') {
-            ++i;
-            bool is_double = (i < n && raw[i] == ':');
-            if (is_double) ++i; // ::pseudo-element
-            // Extract pseudo name
-            size_t ps = i;
-            while (i < n && raw[i] != '.' && raw[i] != '#' && raw[i] != '[' && raw[i] != ':' && raw[i] != '(') ++i;
-            std::string pname = raw.substr(ps, i - ps);
-            // Skip function args if present
-            if (i < n && raw[i] == '(') { int d=1; ++i; while(i<n&&d>0){if(raw[i]=='(')++d;else if(raw[i]==')')--d;++i;} }
-            // Check for pseudo-elements (target generated content, not the element itself)
-            if (is_double || pname == "before" || pname == "after" ||
-                pname == "first-line" || pname == "first-letter" || pname == "placeholder")
-                has_pseudo_element = true;
-        } else {
-            result += raw[i++];
-        }
-    }
-    return result;
-}
-
-// Match a single simple selector token (tag, .class, #id, tag.class, .a.b, with optional :pseudo and [attr])
-static bool simple_match(const std::string& raw, const StackEntry& e) {
-    if (raw.empty() || raw=="*") return true;
-    bool has_pseudo_element = false;
-    std::string tok = strip_selector_extras(raw, has_pseudo_element);
-    // Pseudo-elements (::before, ::after, etc.) target generated content,
-    // not the element itself — never match the actual element.
-    if (has_pseudo_element) return false;
-    // If raw had content but stripping [attr] and :pseudo left nothing,
-    // the selector is purely attribute/pseudo-based (e.g. "[hidden]").
-    // We can't evaluate these, so conservatively return false.
-    if (tok.empty()) return false;
-    if (tok[0]=='#') return e.id == tok.substr(1);
-    // parse tag part and class parts from e.g. "div.foo.bar" or ".foo.bar" or "div"
-    std::string tag_part;
-    std::vector<std::string> req_cls;
-    size_t i = 0;
-    if (tok[i] != '.') {
-        size_t d = tok.find('.'); tag_part = tok.substr(0, d);
-        if (d != std::string::npos) i = d + 1; else i = tok.size();
-    } else { ++i; }
-    while (i <= tok.size()) {
-        size_t d = tok.find('.', i);
-        std::string c = tok.substr(i, d==std::string::npos ? std::string::npos : d-i);
-        if (!c.empty()) req_cls.push_back(c);
-        if (d==std::string::npos) break; i = d+1;
-    }
-    if (!tag_part.empty() && e.tag != tag_part) return false;
-    for (const auto& c : req_cls)
-        if (std::find(e.cls.begin(),e.cls.end(),c)==e.cls.end()) return false;
-    return true;
-}
-
-// Match a full selector (handles descendant/child combinators) against ancestors + current element
-static bool sel_matches(const std::string& sel,
-                         const std::vector<StackEntry>& ancestors,
-                         const StackEntry& cur) {
-    if (sel.empty()) return false;
-    // Split selector into tokens, discarding '>' combinator tokens
-    std::vector<std::string> parts;
-    size_t i = 0, n = sel.size();
-    while (i < n) {
-        while (i<n && sel[i]==' ') ++i;
-        size_t j = i; while (j<n && sel[j]!=' ') ++j;
-        if (j>i) { std::string p=sel.substr(i,j-i); if (p!=">") parts.push_back(p); }
-        i = j;
-    }
-    if (parts.empty()) return false;
-    if (!simple_match(parts.back(), cur)) return false;
-    if (parts.size()==1) return true;
-    // greedily match remaining parts against ancestors (right-to-left)
-    int pi = (int)parts.size()-2, ai = (int)ancestors.size()-1;
-    while (pi>=0 && ai>=0) { if (simple_match(parts[pi],ancestors[ai])) --pi; --ai; }
-    return pi < 0;
-}
-
-static int    compute_fw(const std::vector<StackEntry>& s) {
-    int fw=PANGO_WEIGHT_NORMAL; for(auto&e:s) if(e.fw_own!=-1) fw=e.fw_own; return fw;
-}
-static double compute_lh(const std::vector<StackEntry>& s) {
-    double lh=-1.0; for(auto&e:s) if(e.lh_own>=0) lh=e.lh_own; return lh;
-}
-static std::string compute_href(const std::vector<StackEntry>& s) {
-    for (int i=(int)s.size()-1; i>=0; --i) if (!s[i].href.empty()) return s[i].href;
-    return "";
-}
-static std::string compute_color(const std::vector<StackEntry>& s) {
-    for (int i=(int)s.size()-1; i>=0; --i) if (!s[i].color_own.empty()) return s[i].color_own;
-    return "";
-}
-static int compute_text_align(const std::vector<StackEntry>& s) {
-    for (int i=(int)s.size()-1; i>=0; --i) if (s[i].text_align_own>=0) return s[i].text_align_own;
-    return 0;
-}
-
-// ---- Element ----
-
-struct Element {
-    enum {TEXT,IMAGE,DIV_OPEN,DIV_CLOSE} type;
-    std::string content;
-    int fw=PANGO_WEIGHT_NORMAL; int fs_px=16; double lh=-1.0;
-    std::string color;   // text color (TEXT only)
-    int text_align = 0;  // 0=left,1=center,2=right,3=justify (TEXT only)
-    BoxModel box; // DIV_OPEN only
-    std::string href; // non-empty for link text
-    bool is_body = false; // DIV_OPEN only
-};
 
 static std::vector<CSSRule> fetch_linked_css(const std::string& html, const std::string& base) {
     std::vector<CSSRule> all;
@@ -886,187 +758,6 @@ static std::vector<CSSRule> fetch_linked_css(const std::string& html, const std:
         for (auto& r : parse_css(buf.data)) { r.src_url = url; all.push_back(std::move(r)); }
     }
     return all;
-}
-
-static std::vector<Element> parse_elements(const std::string& html, const std::string& base) {
-    auto css = extract_css(html);
-    for (auto& r : fetch_linked_css(html, base)) css.push_back(std::move(r));
-    std::vector<Element> elems;
-    std::vector<StackEntry> stack;
-    std::string acc;
-    auto flush = [&]() {
-        std::string t = collapse_ws(decode_entities(acc));
-        if (!t.empty()) {
-            int fs = stack.empty() ? 16 : stack.back().fs_computed;
-            Element el; el.type=Element::TEXT; el.content=t;
-            el.fw=compute_fw(stack); el.fs_px=fs; el.lh=compute_lh(stack);
-            el.href=compute_href(stack);
-            el.color=compute_color(stack);
-            el.text_align=compute_text_align(stack);
-            elems.push_back(std::move(el));
-        }
-        acc.clear();
-    };
-
-    enum { NORM, SCRIPT_SKIP, STYLE_SKIP, COMMENT } state = NORM;
-    int skip_depth = 0; // for display:none subtrees
-    size_t i=0, n=html.size();
-
-    while (i<n) {
-        if (state==COMMENT) {
-            size_t p = html.find("-->", i);
-            i = p==std::string::npos ? n : p+3;
-            state=NORM; continue;
-        }
-        if (state==SCRIPT_SKIP) {
-            size_t p = find_ci(html, "</script>", i);
-            i = p==std::string::npos ? n : p+9;
-            state=NORM; continue;
-        }
-        if (state==STYLE_SKIP) {
-            size_t p = find_ci(html, "</style>", i);
-            i = p==std::string::npos ? n : p+8;
-            state=NORM; continue;
-        }
-        if (html[i]!='<') { if (!skip_depth) acc+=html[i]; ++i; continue; }
-        flush(); ++i;
-        if (i>=n) break;
-        if (i+2<n && html[i]=='!' && html[i+1]=='-' && html[i+2]=='-') {
-            state=COMMENT; i+=3; continue;
-        }
-        // find tag end, respecting quoted attributes
-        size_t ts=i; bool inq=false; char qc=0;
-        while (i<n) {
-            if (!inq && html[i]=='>') break;
-            if (inq && html[i]==qc) inq=false;
-            else if (!inq && (html[i]=='"'||html[i]=='\'')) { inq=true; qc=html[i]; }
-            ++i;
-        }
-        std::string tag = html.substr(ts, i-ts);
-        if (i<n) ++i;
-        if (tag.empty()) continue;
-
-        bool closing = (tag[0]=='/');
-        size_t ks=closing?1:0, k=ks;
-        while (k<tag.size() && !std::isspace((unsigned char)tag[k]) && tag[k]!='>') ++k;
-        std::string tname = tolower_s(tag.substr(ks, k-ks));
-
-        // handle display:none skip region
-        if (skip_depth > 0) {
-            bool self_closing = (!tag.empty() && tag.back() == '/');
-            if (!closing && !self_closing && !is_void(tname)) skip_depth++;
-            else if (closing) { if (--skip_depth == 0) acc.clear(); }
-            continue;
-        }
-
-        if (!closing && tname=="script") { state=SCRIPT_SKIP; continue; }
-        if (!closing && tname=="style")  { state=STYLE_SKIP;  continue; }
-        if (!tname.empty() && tname[0] == '!') continue; // skip <!DOCTYPE> etc.
-
-        if (!closing && tname=="img") {
-            std::string src = extract_attr(tag, "src");
-            if (!src.empty()) {
-                std::string u = resolve(base, src);
-                if (!u.empty()) elems.push_back({Element::IMAGE, u});
-            }
-            continue;
-        }
-
-        if (!closing && !is_void(tname)) {
-            int parent_fs = stack.empty() ? 16 : stack.back().fs_computed;
-            StackEntry e;
-            e.tag = tname;
-            e.cls = split_classes(extract_attr(tag, "class"));
-            e.id  = tolower_s(extract_attr(tag, "id"));
-            e.fs_computed = parent_fs;
-            // UA defaults
-            for (int bi=0; BOLD_TAGS[bi]; ++bi)
-                if (tname==BOLD_TAGS[bi]) e.fw_own=PANGO_WEIGHT_BOLD;
-            // CSS rules
-            std::string bg_img_src; // track src_url of the rule that set bg_image
-            for (const auto& r : css) {
-                if (!sel_matches(r.sel, stack, e)) continue;
-                if (tname == "body") {
-                    FILE* fl = fopen("/tmp/browser_debug.log","a");
-                    if (fl) { fprintf(fl, "body CSS match: sel='%s'\n", r.sel.c_str()); fclose(fl); }
-                }
-                if (r.fw!=-1) e.fw_own = r.fw;
-                if (!r.fs_raw.empty()) { int px=parse_fs(r.fs_raw,parent_fs); if(px>0) e.fs_computed=px; }
-                if (!r.lh_raw.empty()) { double f=parse_lh(r.lh_raw,e.fs_computed); if(f>=0) e.lh_own=f; }
-                std::string prev_bg = e.box.bg_image;
-                apply_box(r.decls, e.box);
-                if (e.box.bg_image != prev_bg) bg_img_src = r.src_url;
-                { auto s=prop_val(r.decls,"color"); if(!s.empty()) e.color_own=collapse_ws(s); }
-                { auto s=tolower_s(prop_val(r.decls,"text-align"));
-                  if      (s=="center")  e.text_align_own=1;
-                  else if (s=="right")   e.text_align_own=2;
-                  else if (s=="justify") e.text_align_own=3;
-                  else if (s=="left")    e.text_align_own=0; }
-            }
-            // anchor href
-            if (tname=="a") {
-                std::string h = extract_attr(tag, "href");
-                if (!h.empty()) e.href = resolve(base, h);
-            }
-            // inline style
-            std::string ist = extract_attr(tag, "style");
-            { int v=fw_value(prop_val(ist,"font-weight"));    if(v!=-1)   e.fw_own=v; }
-            { int px=parse_fs(prop_val(ist,"font-size"),parent_fs); if(px>0) e.fs_computed=px; }
-            { double f=parse_lh(prop_val(ist,"line-height"),e.fs_computed); if(f>=0) e.lh_own=f; }
-            apply_box(ist, e.box);
-            { auto s=prop_val(ist,"color"); if(!s.empty()) e.color_own=collapse_ws(s); }
-            { auto s=tolower_s(prop_val(ist,"text-align"));
-              if      (s=="center")  e.text_align_own=1;
-              else if (s=="right")   e.text_align_own=2;
-              else if (s=="justify") e.text_align_own=3;
-              else if (s=="left")    e.text_align_own=0; }
-
-            // resolve bg_image: use CSS file URL if it came from a linked sheet
-            if (!e.box.bg_image.empty()) {
-                const std::string& res_base = !bg_img_src.empty() ? bg_img_src : base;
-                e.box.bg_image = resolve(res_base, e.box.bg_image);
-            }
-
-            // display:none — skip this subtree entirely
-            if (e.box.display == BoxModel::Display::None) {
-                skip_depth = 1; acc.clear(); continue;
-            }
-
-            // decide if this element creates a block container
-            bool floated = e.box.floatdir != BoxModel::Float::None;
-            bool emits_block = floated
-                || e.box.display == BoxModel::Display::Flex
-                || e.box.display == BoxModel::Display::InlineBlock
-                || e.box.display == BoxModel::Display::Block
-                || (is_block_element(tname) && e.box.display != BoxModel::Display::Inline);
-
-            stack.push_back(e);
-            if (emits_block) {
-                Element d; d.type=Element::DIV_OPEN; d.box=e.box;
-                if (tname == "body") d.is_body = true;
-                elems.push_back(d);
-            }
-        } else if (closing) {
-            for (int j=(int)stack.size()-1; j>=0; --j) {
-                if (stack[j].tag==tname) {
-                    bool floated = stack[j].box.floatdir != BoxModel::Float::None;
-                    bool had_block = floated
-                        || stack[j].box.display == BoxModel::Display::Flex
-                        || stack[j].box.display == BoxModel::Display::InlineBlock
-                        || stack[j].box.display == BoxModel::Display::Block
-                        || (is_block_element(tname) && stack[j].box.display != BoxModel::Display::Inline);
-                    if (had_block) {
-                        Element d; d.type=Element::DIV_CLOSE;
-                        elems.push_back(d);
-                    }
-                    stack.erase(stack.begin()+j, stack.end());
-                    break;
-                }
-            }
-        }
-    }
-    flush();
-    return elems;
 }
 
 // ---- parse HTML to DOM tree ----
@@ -1144,18 +835,7 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
         acc.clear();
     };
 
-    // Adapter: build StackEntry from ParseEntry for sel_matches compatibility
-    auto make_stack_entries = [&]() -> std::vector<StackEntry> {
-        std::vector<StackEntry> entries;
-        for (auto& pe : stack) {
-            StackEntry se;
-            se.tag = pe.tag;
-            se.cls = pe.cls;
-            se.id = pe.id;
-            entries.push_back(se);
-        }
-        return entries;
-    };
+    // (make_stack_entries removed — now using dom_sel_matches directly)
 
     enum { NORM, SCRIPT_CAP, STYLE_SKIP, NOSCRIPT_SKIP, COMMENT } state = NORM;
     std::string script_content;
@@ -1335,18 +1015,27 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
             // UA defaults for <abbr> - dotted underline
             if (tname == "abbr") { elem->text_decoration = 1; elem->text_decoration_style = 2; }
 
-            // Build StackEntry for CSS matching
-            StackEntry se;
-            se.tag = tname;
-            se.cls = elem->class_list;
-            se.id = elem->id;
-            auto ancestors = make_stack_entries();
+            // Insert into tree BEFORE CSS matching so dom_sel_matches can walk parents
+            // (for body, set attributes on existing body node instead)
+            DOMNode* match_node = elem.get();
+            if (tname == "body") {
+                doc->body->class_list = elem->class_list;
+                doc->body->id = elem->id;
+                doc->body->attributes = elem->attributes;
+                match_node = doc->body;
+            } else {
+                cur_parent->children.push_back(elem);
+                elem->parent = cur_parent;
+                doc->registerNode(elem.get());
+                if (!elem->id.empty())
+                    doc->id_map[elem->id] = elem.get();
+            }
 
             // CSS rules
             std::string bg_img_src;
             BoxModel bm;
             for (const auto& r : css) {
-                if (!sel_matches(r.sel, ancestors, se)) continue;
+                if (!dom_sel_matches(r.sel, match_node)) continue;
                 if (r.fw != -1) elem->fw_computed = r.fw;
                 if (!r.fs_raw.empty()) {
                     int px = parse_fs(r.fs_raw, parent_fs);
@@ -1690,15 +1379,7 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
                 continue;
             }
 
-            // Register ID
-            if (!elem->id.empty())
-                doc->id_map[elem->id] = elem.get();
-
-            // Add to tree
-            cur_parent->children.push_back(elem);
-            elem->parent = cur_parent;
-            doc->registerNode(elem.get());
-
+            // Tree insertion and ID registration already done before CSS matching
             stack.push_back({elem.get(), tname, elem->class_list, elem->id});
             cur_parent = elem.get();
 

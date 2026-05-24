@@ -1237,7 +1237,8 @@ bool dom_simple_match(const std::string& raw, DOMNode* node) {
     return true;
 }
 
-bool dom_sel_matches(const std::string& sel, DOMNode* node) {
+// Match a single (non-comma-separated) complex selector against node
+static bool dom_sel_matches_single(const std::string& sel, DOMNode* node) {
     if (sel.empty()) return false;
 
     // Tokenize: selectors and combinators
@@ -1256,12 +1257,15 @@ bool dom_sel_matches(const std::string& sel, DOMNode* node) {
             ++i;
             continue;
         }
-        // Read selector part (may contain . # [ : etc but not whitespace)
+        // Read selector part — skip inside brackets and parentheses
         size_t j = i;
         while (j < n && sel[j] != ' ' && sel[j] != '>' && sel[j] != '+' && sel[j] != '~') {
-            if (sel[j] == '[') { // skip inside brackets
-                while (j < n && sel[j] != ']') ++j;
-                if (j < n) ++j;
+            if (sel[j] == '[') {
+                int depth = 1; ++j;
+                while (j < n && depth > 0) { if (sel[j]=='[') ++depth; else if (sel[j]==']') --depth; ++j; }
+            } else if (sel[j] == '(') {
+                int depth = 1; ++j;
+                while (j < n && depth > 0) { if (sel[j]=='(') ++depth; else if (sel[j]==')') --depth; ++j; }
             } else {
                 ++j;
             }
@@ -1282,18 +1286,9 @@ bool dom_sel_matches(const std::string& sel, DOMNode* node) {
     DOMNode* cur = node;
 
     while (ti >= 0 && cur) {
-        Comb comb = tokens[ti + 1].combinator; // combinator between tokens[ti] and tokens[ti+1]
-        // Actually combinator is stored on the LEFT token (between it and the next)
-        // tokens[ti].combinator tells how to traverse FROM tokens[ti] TO tokens[ti+1]
-        // We stored combinator on tokens.back() as the one coming before token (to the right)
-        // Let me re-think: tokens are left-to-right [A desc B child C]
-        // tokens[0]={A, DESC}, tokens[1]={B, CHILD}, tokens[2]={C, DESC}
-        // So to match C (the node), we look at tokens[1].combinator=CHILD
-        // meaning B must be direct parent of C
-        comb = tokens[ti].combinator;
+        Comb comb = tokens[ti].combinator;
 
         if (comb == DESC) {
-            // Ancestor: walk up parents
             DOMNode* p = cur->parent;
             bool found = false;
             while (p) {
@@ -1306,12 +1301,10 @@ bool dom_sel_matches(const std::string& sel, DOMNode* node) {
             }
             if (!found) return false;
         } else if (comb == CHILD) {
-            // Direct parent only
             DOMNode* p = cur->parent;
             if (!p || !dom_simple_match(tokens[ti].selector, p)) return false;
             cur = p;
         } else if (comb == ADJ_SIB) {
-            // Immediately preceding sibling element
             if (!cur->parent) return false;
             auto& siblings = cur->parent->children;
             DOMNode* prev = nullptr;
@@ -1323,7 +1316,6 @@ bool dom_sel_matches(const std::string& sel, DOMNode* node) {
             if (!prev || !dom_simple_match(tokens[ti].selector, prev)) return false;
             cur = prev;
         } else if (comb == GEN_SIB) {
-            // Any preceding sibling element
             if (!cur->parent) return false;
             auto& siblings = cur->parent->children;
             bool found = false;
@@ -1341,6 +1333,46 @@ bool dom_sel_matches(const std::string& sel, DOMNode* node) {
         --ti;
     }
     return ti < 0;
+}
+
+// Split comma-separated selector list, respecting brackets and parens
+static std::vector<std::string> split_selector_list(const std::string& sel) {
+    std::vector<std::string> parts;
+    size_t i = 0, n = sel.size(), start = 0;
+    int bracket_depth = 0, paren_depth = 0;
+    while (i < n) {
+        if (sel[i] == '[') ++bracket_depth;
+        else if (sel[i] == ']') --bracket_depth;
+        else if (sel[i] == '(') ++paren_depth;
+        else if (sel[i] == ')') --paren_depth;
+        else if (sel[i] == ',' && bracket_depth == 0 && paren_depth == 0) {
+            std::string part = sel.substr(start, i - start);
+            // trim
+            size_t a = 0, b = part.size();
+            while (a < b && isspace((unsigned char)part[a])) ++a;
+            while (b > a && isspace((unsigned char)part[b-1])) --b;
+            if (a < b) parts.push_back(part.substr(a, b - a));
+            start = i + 1;
+        }
+        ++i;
+    }
+    // last part
+    std::string part = sel.substr(start);
+    size_t a = 0, b = part.size();
+    while (a < b && isspace((unsigned char)part[a])) ++a;
+    while (b > a && isspace((unsigned char)part[b-1])) --b;
+    if (a < b) parts.push_back(part.substr(a, b - a));
+    return parts;
+}
+
+bool dom_sel_matches(const std::string& sel, DOMNode* node) {
+    if (sel.empty()) return false;
+    // Handle comma-separated selector lists
+    auto parts = split_selector_list(sel);
+    for (const auto& part : parts) {
+        if (dom_sel_matches_single(part, node)) return true;
+    }
+    return false;
 }
 
 DOMNode* Document::querySelector(const std::string& selector) const {
