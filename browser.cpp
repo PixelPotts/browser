@@ -1317,6 +1317,13 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
                 // font-stretch
                 { auto s = tolower_s(prop_val(r.decls, "font-stretch"));
                   if (!s.empty()) { int st = parse_font_stretch(s); if (st >= 0) elem->font_stretch = st; } }
+                // object-fit
+                { auto s = tolower_s(prop_val(r.decls, "object-fit"));
+                  if      (s == "fill")       elem->object_fit = 0;
+                  else if (s == "contain")    elem->object_fit = 1;
+                  else if (s == "cover")      elem->object_fit = 2;
+                  else if (s == "scale-down") elem->object_fit = 3;
+                  else if (s == "none")       elem->object_fit = 4; }
                 // text-shadow (store only)
                 { auto s = prop_val(r.decls, "text-shadow");
                   if (!s.empty()) elem->text_shadow = s; }
@@ -1444,6 +1451,13 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
             // font-stretch (inline)
             { auto s = tolower_s(prop_val(ist, "font-stretch"));
               if (!s.empty()) { int st = parse_font_stretch(s); if (st >= 0) elem->font_stretch = st; } }
+            // object-fit (inline)
+            { auto s = tolower_s(prop_val(ist, "object-fit"));
+              if      (s == "fill")       elem->object_fit = 0;
+              else if (s == "contain")    elem->object_fit = 1;
+              else if (s == "cover")      elem->object_fit = 2;
+              else if (s == "scale-down") elem->object_fit = 3;
+              else if (s == "none")       elem->object_fit = 4; }
             // text-shadow (inline, store only)
             { auto s = prop_val(ist, "text-shadow");
               if (!s.empty()) elem->text_shadow = s; }
@@ -2471,6 +2485,48 @@ static gboolean draw_svg(GtkWidget* w, cairo_t* cr, gpointer data) {
 // ---- page fetch ----
 
 static void navigate(AppState* st, const std::string& raw); // forward decl
+
+// Draw callback for <img> elements with object-fit support
+static gboolean draw_img(GtkWidget* w, cairo_t* cr, gpointer) {
+    GdkPixbuf* pb = (GdkPixbuf*)g_object_get_data(G_OBJECT(w), "img_pb");
+    if (!pb) return FALSE;
+    int alloc_w = gtk_widget_get_allocated_width(w);
+    int alloc_h = gtk_widget_get_allocated_height(w);
+    int img_w = gdk_pixbuf_get_width(pb);
+    int img_h = gdk_pixbuf_get_height(pb);
+    int fit = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "img_object_fit"));
+
+    double sx = 1.0, sy = 1.0;
+    double dx = 0.0, dy = 0.0;
+
+    if (fit == 0) { // fill: stretch to fill box
+        sx = (double)alloc_w / img_w;
+        sy = (double)alloc_h / img_h;
+    } else if (fit == 1 || fit == 3) { // contain / scale-down
+        double s = std::min((double)alloc_w / img_w, (double)alloc_h / img_h);
+        if (fit == 3 && s > 1.0) s = 1.0; // scale-down: never upscale
+        sx = sy = s;
+        dx = (alloc_w - img_w * s) / 2.0;
+        dy = (alloc_h - img_h * s) / 2.0;
+    } else if (fit == 2) { // cover: scale to cover, clip overflow
+        double s = std::max((double)alloc_w / img_w, (double)alloc_h / img_h);
+        sx = sy = s;
+        dx = (alloc_w - img_w * s) / 2.0;
+        dy = (alloc_h - img_h * s) / 2.0;
+        cairo_rectangle(cr, 0, 0, alloc_w, alloc_h);
+        cairo_clip(cr);
+    } else if (fit == 4) { // none: no scaling, centered
+        sx = sy = 1.0;
+        dx = (alloc_w - img_w) / 2.0;
+        dy = (alloc_h - img_h) / 2.0;
+    }
+
+    cairo_translate(cr, dx, dy);
+    cairo_scale(cr, sx, sy);
+    gdk_cairo_set_source_pixbuf(cr, pb, 0, 0);
+    cairo_paint(cr);
+    return TRUE;
+}
 
 static gboolean draw_bg(GtkWidget* w, cairo_t* cr, gpointer) {
     GdkPixbuf* pb    = (GdkPixbuf*)g_object_get_data(G_OBJECT(w), "bg_pb");
@@ -3577,16 +3633,87 @@ static void render_node(AppState* st, TabState* tab, DOMNode* node, int gen,
     if (node->tag_name == "img") {
         float_rows.back() = nullptr;
         GtkWidget* cur = cstack.back();
-        GtkWidget* img = gtk_image_new();
-        gtk_box_pack_start(GTK_BOX(cur), img, FALSE, FALSE, 2);
-        gtk_widget_show(img);
-        g_object_ref(img);
+
+        // --- Gather sizing info from CSS and HTML attributes ---
+        BoxModel bm = dom_node_to_boxmodel(node);
+        int css_w = bm.width;       // -1 = auto
+        int css_h = bm.height;      // -1 = auto
+        int css_maxw = bm.max_width;
+        int css_maxh = bm.max_height;
+        int css_minw = bm.min_width;
+        int css_minh = bm.min_height;
+        int css_wpct = bm.width_pct;
+        int object_fit = node->object_fit; // 0=fill,1=contain,2=cover,3=scale-down,4=none
+
+        // HTML width/height attributes as fallback if CSS not set
+        int html_w = -1, html_h = -1;
+        { auto it = node->attributes.find("width");
+          if (it != node->attributes.end()) { try { html_w = (int)std::stod(it->second); } catch(...){} } }
+        { auto it = node->attributes.find("height");
+          if (it != node->attributes.end()) { try { html_h = (int)std::stod(it->second); } catch(...){} } }
+
+        // Effective requested dimensions: CSS overrides HTML attrs
+        int req_w = css_w > 0 ? css_w : html_w;
+        int req_h = css_h > 0 ? css_h : html_h;
+
+        // Create drawing area for proper object-fit rendering
+        GtkWidget* da = gtk_drawing_area_new();
+        // Set initial size from requested dims or a placeholder
+        int init_w = req_w > 0 ? req_w : (css_wpct >= 0 ? -1 : -1);
+        int init_h = req_h > 0 ? req_h : -1;
+        if (init_w > 0 || init_h > 0)
+            gtk_widget_set_size_request(da, init_w > 0 ? init_w : -1, init_h > 0 ? init_h : -1);
+
+        // Store object-fit on the widget
+        g_object_set_data(G_OBJECT(da), "img_object_fit", GINT_TO_POINTER(object_fit));
+        g_object_set_data(G_OBJECT(da), "img_req_w", GINT_TO_POINTER(req_w));
+        g_object_set_data(G_OBJECT(da), "img_req_h", GINT_TO_POINTER(req_h));
+        g_object_set_data(G_OBJECT(da), "img_maxw", GINT_TO_POINTER(css_maxw));
+        g_object_set_data(G_OBJECT(da), "img_maxh", GINT_TO_POINTER(css_maxh));
+        g_object_set_data(G_OBJECT(da), "img_minw", GINT_TO_POINTER(css_minw));
+        g_object_set_data(G_OBJECT(da), "img_minh", GINT_TO_POINTER(css_minh));
+
+        // Draw callback: renders pixbuf with object-fit
+        g_signal_connect(da, "draw", G_CALLBACK(draw_img), nullptr);
+
+        // Apply margins/borders from box model
+        gtk_widget_set_margin_top(da,    std::max(0, bm.margin[0]));
+        gtk_widget_set_margin_end(da,    std::max(0, bm.margin[1]));
+        gtk_widget_set_margin_bottom(da, std::max(0, bm.margin[2]));
+        gtk_widget_set_margin_start(da,  std::max(0, bm.margin[3]));
+
+        // Apply border via CSS provider
+        {
+            std::string props;
+            bool has_border = bm.border_width[0]||bm.border_width[1]||bm.border_width[2]||bm.border_width[3];
+            if (has_border) {
+                std::string bstyle = bm.border_style.empty() ? "solid" : bm.border_style;
+                std::string bcolor = bm.border_color.empty() ? "currentColor" : bm.border_color;
+                if (!has_css_var(bcolor))
+                    props += "border: " + std::to_string(bm.border_width[0]) + "px " + bstyle + " " + bcolor + "; ";
+            }
+            if (bm.border_radius > 0)
+                props += "border-radius: " + std::to_string(bm.border_radius) + "px; ";
+            if (!props.empty()) {
+                GtkCssProvider* cp = gtk_css_provider_new();
+                gtk_css_provider_load_from_data(cp, ("* { " + props + "}").c_str(), -1, nullptr);
+                gtk_style_context_add_provider(gtk_widget_get_style_context(da),
+                    GTK_STYLE_PROVIDER(cp), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+                g_object_unref(cp);
+            }
+        }
+
+        gtk_box_pack_start(GTK_BOX(cur), da, FALSE, FALSE, 2);
+        gtk_widget_show(da);
+        g_object_ref(da);
+        tab->node_widget_map[node->node_id] = da;
+
         std::string img_url = node->attributes.count("src") ? node->attributes.at("src") : "";
         if (!img_url.empty()) {
-            std::thread([st, tab, img, img_url, gen]() {
+            std::thread([st, tab, da, img_url, gen, req_w, req_h, css_maxw, css_maxh, css_minw, css_minh, css_wpct]() {
                 Buf ibuf;
                 if (gen != tab->generation || !fetch(img_url, ibuf)) {
-                    idle_add([img](){ g_object_unref(img); });
+                    idle_add([da](){ g_object_unref(da); });
                     return;
                 }
                 GdkPixbufLoader* loader = gdk_pixbuf_loader_new();
@@ -3596,23 +3723,64 @@ static void render_node(AppState* st, TabState* tab, DOMNode* node, int gen,
                 GdkPixbuf* pb = nullptr;
                 if (!err) {
                     pb = gdk_pixbuf_loader_get_pixbuf(loader);
-                    if (pb) {
-                        int w = gdk_pixbuf_get_width(pb);
-                        if (w > 900) {
-                            int h = gdk_pixbuf_get_height(pb);
-                            pb = gdk_pixbuf_scale_simple(pb, 900, (int)(h*900.0/w), GDK_INTERP_BILINEAR);
-                        } else {
-                            g_object_ref(pb);
-                        }
-                    }
+                    if (pb) g_object_ref(pb);
                 }
                 if (err) g_error_free(err);
                 g_object_unref(loader);
-                idle_add([st, tab, img, pb, gen]() {
-                    if (gen == tab->generation && pb)
-                        gtk_image_set_from_pixbuf(GTK_IMAGE(img), pb);
-                    if (pb) g_object_unref(pb);
-                    g_object_unref(img);
+                if (!pb) {
+                    idle_add([da](){ g_object_unref(da); });
+                    return;
+                }
+
+                int iw = gdk_pixbuf_get_width(pb);
+                int ih = gdk_pixbuf_get_height(pb);
+                double ar = (ih > 0) ? (double)iw / ih : 1.0;
+
+                // Compute final box dimensions
+                int fw = req_w, fh = req_h;
+
+                // If only one dimension set, compute the other from aspect ratio
+                if (fw > 0 && fh <= 0) fh = (int)(fw / ar);
+                if (fh > 0 && fw <= 0) fw = (int)(fh * ar);
+                // If neither set, use intrinsic
+                if (fw <= 0 && fh <= 0) { fw = iw; fh = ih; }
+
+                // Apply max-width constraint (preserve AR)
+                if (css_maxw > 0 && fw > css_maxw) {
+                    fw = css_maxw;
+                    if (req_h <= 0) fh = (int)(fw / ar); // only adjust h if it wasn't explicitly set
+                }
+                // Apply max-height constraint (preserve AR)
+                if (css_maxh > 0 && fh > css_maxh) {
+                    fh = css_maxh;
+                    if (req_w <= 0) fw = (int)(fh * ar);
+                }
+                // Apply min-width
+                if (css_minw > 0 && fw < css_minw) {
+                    fw = css_minw;
+                    if (req_h <= 0) fh = (int)(fw / ar);
+                }
+                // Apply min-height
+                if (css_minh > 0 && fh < css_minh) {
+                    fh = css_minh;
+                    if (req_w <= 0) fw = (int)(fh * ar);
+                }
+
+                // Clamp to reasonable max (viewport protection)
+                if (fw > 4096) { fh = (int)(fh * 4096.0 / fw); fw = 4096; }
+                if (fh > 4096) { fw = (int)(fw * 4096.0 / fh); fh = 4096; }
+                if (fw < 1) fw = 1;
+                if (fh < 1) fh = 1;
+
+                idle_add([st, tab, da, pb, gen, fw, fh]() {
+                    if (gen == tab->generation) {
+                        g_object_set_data_full(G_OBJECT(da), "img_pb", pb, (GDestroyNotify)g_object_unref);
+                        gtk_widget_set_size_request(da, fw, fh);
+                        gtk_widget_queue_draw(da);
+                    } else {
+                        g_object_unref(pb);
+                    }
+                    g_object_unref(da);
                 });
             }).detach();
         }
