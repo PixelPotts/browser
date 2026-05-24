@@ -76,8 +76,13 @@ static std::string resolve(const std::string& base, const std::string& href) {
     if (href.size()>=4 && href.substr(0,4)=="http") return href;
     if (href.size()>=2 && href.substr(0,2)=="//")   return "https:"+href;
     if (href[0]=='/')                                return origin_of(base)+href;
+    // Find last '/' after the protocol (skip "https://")
+    auto proto_end = base.find("://");
+    size_t search_from = (proto_end != std::string::npos) ? proto_end + 3 : 0;
     auto last = base.rfind('/');
-    return (last!=std::string::npos ? base.substr(0,last+1) : base+"/") + href;
+    if (last == std::string::npos || last < search_from)
+        return base + "/" + href;  // No path component, append
+    return base.substr(0,last+1) + href;
 }
 
 // ---- HTML helpers ----
@@ -4332,6 +4337,11 @@ static void fetch_page(AppState* st, TabState* tab, std::string url, int gen) {
             console.warn('[DEBUG-CSS3] typeof runTests = ' + typeof runTests);
             console.warn('[DEBUG-CSS3] typeof window.onload = ' + typeof window.onload);
             console.warn('[DEBUG-CSS3] typeof Supports = ' + typeof Supports);
+            // Debug constructor.name
+            console.warn('[DEBUG-NAME] CSSKeyframesRule.name = ' + CSSKeyframesRule.name);
+            var _kr = new CSSKeyframesRule();
+            console.warn('[DEBUG-NAME] instance.constructor.name = ' + _kr.constructor.name);
+            console.warn('[DEBUG-NAME] instance.constructor === CSSKeyframesRule = ' + (_kr.constructor === CSSKeyframesRule));
 
             // Patch Score.update to log individual test failures
             if (typeof Score !== 'undefined' && Score.prototype) {
@@ -4399,12 +4409,33 @@ static void fetch_page(AppState* st, TabState* tab, std::string url, int gen) {
                         return r;
                     };
                 }
-                // Log interface failures
+                // Log interface failures with detailed trace
                 var _origAttrOrMethod = Supports.attributeOrMethod;
+                var _ifaceTraceCount = 0;
                 if (_origAttrOrMethod) {
                     Supports.attributeOrMethod = function(name, value, required, iface) {
                         var r = _origAttrOrMethod.call(this, name, value, required, iface);
-                        if (!r || !r.success) console.warn('[FAIL-IFACE] ' + name + '.' + value + ' iface=' + iface);
+                        if (!r || !r.success) {
+                            _ifaceTraceCount++;
+                            if (_ifaceTraceCount <= 5 && !iface) {
+                                // Detailed trace: use the SAME style element as Supports
+                                if (required) {
+                                    // Check the actual Supports style element
+                                    var styles = document.querySelectorAll('style');
+                                    var styleEl = styles.length > 0 ? styles[styles.length - 1] : null;
+                                    var hasSheet = styleEl ? !!styleEl.sheet : false;
+                                    var rulesLen = (styleEl && styleEl.sheet) ? styleEl.sheet.cssRules.length : -1;
+                                    // Try creating fresh
+                                    var testEl = document.createElement('style');
+                                    testEl.textContent = required;
+                                    var freshRules = testEl.sheet ? testEl.sheet.cssRules.length : -1;
+                                    console.warn('[IFACE-TRACE] ' + name + '.' + value + ' required=' + (required||'').substring(0,50) +
+                                        ' lastStyleSheet=' + hasSheet + ' lastRules=' + rulesLen +
+                                        ' freshSheet=' + !!testEl.sheet + ' freshRules=' + freshRules);
+                                }
+                            }
+                            console.warn('[FAIL-IFACE] ' + name + '.' + value + ' iface=' + iface);
+                        }
                         return r;
                     };
                 }

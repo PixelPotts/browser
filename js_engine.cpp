@@ -2628,7 +2628,14 @@ document.getElementsByName = function(name) {
             if (!el._sheet) {
                 el._sheet = new CSSStyleSheet();
                 // Override textContent setter to update the sheet
-                var _origTC = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'textContent');
+                // Walk prototype chain to find the C++ textContent accessor (on HTMLElement.prototype/elem_proto)
+                var _origTC = null;
+                var _p = Object.getPrototypeOf(el);
+                while (_p) {
+                    var _d = Object.getOwnPropertyDescriptor(_p, 'textContent');
+                    if (_d && _d.set) { _origTC = _d; break; }
+                    _p = Object.getPrototypeOf(_p);
+                }
                 if (_origTC && _origTC.set) {
                     Object.defineProperty(el, 'textContent', {
                         get: function() { return _origTC.get ? _origTC.get.call(this) : ''; },
