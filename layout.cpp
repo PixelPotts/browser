@@ -180,12 +180,12 @@ std::unique_ptr<LayoutBox> build_layout_tree(DOMNode* node, PangoContext* pango_
     if (dtype == LayoutBoxType::Replaced) {
         // Get natural dimensions from attributes
         auto wit = node->attributes.find("width");
-        auto hit = node->attributes.find("height");
+        auto hit_it = node->attributes.find("height");
         if (wit != node->attributes.end()) {
             try { box->natural_width = std::stoi(wit->second); } catch (...) {}
         }
-        if (hit != node->attributes.end()) {
-            try { box->natural_height = std::stoi(hit->second); } catch (...) {}
+        if (hit_it != node->attributes.end()) {
+            try { box->natural_height = std::stoi(hit_it->second); } catch (...) {}
         }
         if (box->natural_width <= 0) box->natural_width = 300;
         if (box->natural_height <= 0) box->natural_height = 150;

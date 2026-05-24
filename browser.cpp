@@ -30,6 +30,13 @@ struct CanvasState {
 };
 extern std::unordered_map<uint32_t, CanvasState> g_canvas_map;
 
+// Image surface cache for layout engine (node_id → cairo surface)
+struct ImgSurface {
+    cairo_surface_t* surface = nullptr;
+    int width = 0, height = 0;
+};
+static std::unordered_map<uint32_t, ImgSurface> g_img_surfaces;
+
 static gboolean draw_canvas(GtkWidget* w, cairo_t* cr, gpointer data) {
     uint32_t node_id = GPOINTER_TO_UINT(data);
     auto it = g_canvas_map.find(node_id);
@@ -80,6 +87,8 @@ static std::string origin_of(const std::string& url) {
 static std::string resolve(const std::string& base, const std::string& href) {
     if (href.empty() || href[0]=='#') return "";
     if (href.size()>=4 && href.substr(0,4)=="http") return href;
+    if (href.size()>=7 && href.substr(0,7)=="file://") return href;
+    if (href.size()>=5 && href.substr(0,5)=="data:") return href;
     if (href.size()>=2 && href.substr(0,2)=="//")   return "https:"+href;
     if (href[0]=='/')                                return origin_of(base)+href;
     // Find last '/' after the protocol (skip "https://")
@@ -3134,16 +3143,72 @@ static TabBarHitResult hit_test_tab_bar(AppState* st, double x, double y) {
 // ---- Layout+Paint Pipeline ----
 
 // Connect replaced element surfaces (canvas, img) to layout boxes
-static void connect_replaced_surfaces(LayoutBox* box) {
+// Load an image URL and create a Cairo surface (cached)
+static cairo_surface_t* load_image_surface(TabState* tab, const std::string& url, uint32_t node_id) {
+    // Check cache first
+    auto cit = g_img_surfaces.find(node_id);
+    if (cit != g_img_surfaces.end()) return cit->second.surface;
+
+    std::string resolved = resolve(tab->current_url, url);
+    Buf ibuf;
+    if (!fetch(resolved, ibuf) || ibuf.data.empty()) return nullptr;
+
+    GdkPixbufLoader* loader = gdk_pixbuf_loader_new();
+    GError* err = nullptr;
+    gdk_pixbuf_loader_write(loader, (const guchar*)ibuf.data.data(), ibuf.data.size(), &err);
+    gdk_pixbuf_loader_close(loader, nullptr);
+
+    GdkPixbuf* pb = nullptr;
+    if (!err) {
+        pb = gdk_pixbuf_loader_get_pixbuf(loader);
+        if (pb) g_object_ref(pb);
+    }
+    if (err) g_error_free(err);
+    g_object_unref(loader);
+    if (!pb) return nullptr;
+
+    int iw = gdk_pixbuf_get_width(pb);
+    int ih = gdk_pixbuf_get_height(pb);
+
+    // Create Cairo surface from pixbuf
+    cairo_surface_t* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, iw, ih);
+    cairo_t* cr = cairo_create(surface);
+    gdk_cairo_set_source_pixbuf(cr, pb, 0, 0);
+    cairo_paint(cr);
+    cairo_destroy(cr);
+    g_object_unref(pb);
+
+    g_img_surfaces[node_id] = {surface, iw, ih};
+    fprintf(stderr, "[IMG] Loaded image %s (%dx%d) for node %u\n", url.c_str(), iw, ih, node_id);
+    return surface;
+}
+
+static void connect_replaced_surfaces(LayoutBox* box, TabState* tab) {
     if (!box) return;
     if (box->type == LayoutBoxType::Replaced && box->dom_node) {
+        DOMNode* node = box->dom_node;
         // Canvas elements
-        auto it = g_canvas_map.find(box->dom_node->node_id);
-        if (it != g_canvas_map.end() && it->second.surface)
+        auto it = g_canvas_map.find(node->node_id);
+        if (it != g_canvas_map.end() && it->second.surface) {
             box->replaced_surface = it->second.surface;
+        }
+        // Image elements
+        else if (node->tag_name == "img" && node->attributes.count("src")) {
+            std::string src = node->attributes.at("src");
+            if (!src.empty()) {
+                cairo_surface_t* surf = load_image_surface(tab, src, node->node_id);
+                if (surf) {
+                    box->replaced_surface = surf;
+                    // Update natural dimensions from the actual image
+                    auto& img = g_img_surfaces[node->node_id];
+                    box->natural_width = img.width;
+                    box->natural_height = img.height;
+                }
+            }
+        }
     }
     for (auto& child : box->children)
-        connect_replaced_surfaces(child.get());
+        connect_replaced_surfaces(child.get(), tab);
 }
 
 // Build layout tree, perform layout, generate display list
@@ -3176,6 +3241,21 @@ static void layout_and_paint(TabState* tab) {
     fprintf(stderr, "[LAYOUT] Starting layout_and_paint, body=%p children=%zu viewport_w=%.0f\n",
             start, start->children.size(), tab->viewport_width);
 
+    // Pre-load images into surface cache before layout (so natural dimensions are available)
+    {
+        std::function<void(DOMNode*)> preload = [&](DOMNode* n) {
+            if (!n) return;
+            if (n->tag_name == "img" && n->attributes.count("src") && !n->attributes.at("src").empty()) {
+                auto cit = g_img_surfaces.find(n->node_id);
+                if (cit == g_img_surfaces.end()) {
+                    load_image_surface(tab, n->attributes.at("src"), n->node_id);
+                }
+            }
+            for (auto& c : n->children) preload(c.get());
+        };
+        preload(start);
+    }
+
     // Build layout tree from DOM
     tab->layout_root = build_layout_tree(start, tab->pango_ctx);
     if (!tab->layout_root) {
@@ -3200,7 +3280,7 @@ static void layout_and_paint(TabState* tab) {
             tab->layout_root->content_rect.w, tab->layout_root->content_rect.h);
 
     // Connect canvas/img surfaces
-    connect_replaced_surfaces(tab->layout_root.get());
+    connect_replaced_surfaces(tab->layout_root.get(), tab);
 
     // Generate display list
     tab->display_list = generate_display_list(tab->layout_root.get());
@@ -5576,6 +5656,12 @@ static void load_url(AppState* st, const std::string& url) {
         if (cs.surface) cairo_surface_destroy(cs.surface);
     }
     g_canvas_map.clear();
+
+    // Clean up image surfaces
+    for (auto& [nid, img] : g_img_surfaces) {
+        if (img.surface) cairo_surface_destroy(img.surface);
+    }
+    g_img_surfaces.clear();
 
     // Clear layout engine state
     tab->layout_root.reset();
