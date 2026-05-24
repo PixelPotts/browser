@@ -1418,8 +1418,38 @@ bool dom_simple_match(const std::string& raw, DOMNode* node) {
             std::string arg = ps.substr(18, ps.size() - 19);
             auto [a, b] = parse_anb(arg);
             if (!matches_anb(a, b, element_type_index_last(node))) return false;
+        } else if (ps == "hover") {
+            if (!node->is_hovered) return false;
+        } else if (ps == "focus") {
+            if (!node->is_focused) return false;
+        } else if (ps == "focus-within") {
+            bool has_focus = node->is_focused;
+            if (!has_focus) {
+                std::function<bool(DOMNode*)> check = [&](DOMNode* n) -> bool {
+                    for (auto& c : n->children) {
+                        if (c->is_focused) return true;
+                        if (check(c.get())) return true;
+                    }
+                    return false;
+                };
+                has_focus = check(node);
+            }
+            if (!has_focus) return false;
+        } else if (ps == "active") {
+            if (!node->is_active) return false;
+        } else if (ps == "link") {
+            if (node->tag_name != "a" || node->attributes.find("href") == node->attributes.end())
+                return false;
+        } else if (ps == "visited") {
+            return false; // Always false for privacy
+        } else if (ps == "any-link") {
+            if (node->tag_name != "a" || node->attributes.find("href") == node->attributes.end())
+                return false;
+        } else if (ps == "target") {
+            // Would need URL fragment tracking — silently fail for now
+            return false;
         }
-        // other pseudo-classes: silently ignore (hover, focus, etc.)
+        // other unknown pseudo-classes: silently ignore
     }
 
     return true;

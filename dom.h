@@ -104,6 +104,11 @@ struct DOMNode {
     bool dirty = false;
     bool is_body = false;
 
+    // Interactive state
+    bool is_hovered = false;
+    bool is_focused = false;
+    bool is_active = false; // mouse-down state
+
     void markDirty();
 
     // Helper: is this a block-level element?
