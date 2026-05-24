@@ -150,17 +150,15 @@ JSValue js_wrap_node(JSContext* ctx, DOMNode* node) {
     auto* op = new ElementOpaque{node->node_id};
     JS_SetOpaque(obj, op);
 
-    // Set specific element prototype based on tag name for instanceof support
+    // instanceof support: copy tag-specific prototype properties onto the object,
+    // but keep elem_proto (class proto) as the actual prototype for C++ getters.
     const char* ctor_name = tag_to_constructor(node->tag_name);
     if (ctor_name) {
         JSValue global = JS_GetGlobalObject(ctx);
         JSValue ctor = JS_GetPropertyStr(ctx, global, ctor_name);
-        if (!JS_IsUndefined(ctor)) {
-            JSValue proto = JS_GetPropertyStr(ctx, ctor, "prototype");
-            if (!JS_IsUndefined(proto)) {
-                JS_SetPrototype(ctx, obj, proto);
-            }
-            JS_FreeValue(ctx, proto);
+        if (!JS_IsUndefined(ctor) && !JS_IsNull(ctor)) {
+            // Make instanceof work by setting Symbol.hasInstance or constructor
+            JS_SetPropertyStr(ctx, obj, "constructor", JS_DupValue(ctx, ctor));
         }
         JS_FreeValue(ctx, ctor);
         JS_FreeValue(ctx, global);
@@ -399,6 +397,18 @@ static JSValue js_element_get_parentNode(JSContext* ctx, JSValueConst this_val) 
     return js_wrap_node(ctx, node->parent);
 }
 
+static JSValue js_element_get_ownerDocument(JSContext* ctx, JSValueConst this_val) {
+    // All nodes' ownerDocument is the global document object
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue doc = JS_GetPropertyStr(ctx, global, "document");
+    JS_FreeValue(ctx, global);
+    if (JS_IsNull(doc) || JS_IsUndefined(doc)) {
+        fprintf(stderr, "[DBG-OD] ownerDocument getter: doc is %s\n",
+                JS_IsNull(doc) ? "null" : "undefined");
+    }
+    return doc;
+}
+
 static JSValue js_element_get_children(JSContext* ctx, JSValueConst this_val) {
     DOMNode* node = js_get_node(ctx, this_val);
     if (!node) return JS_NULL;
@@ -435,6 +445,42 @@ static JSValue js_element_get_nextSibling(JSContext* ctx, JSValueConst this_val)
     for (size_t i = 0; i < siblings.size(); i++) {
         if (siblings[i].get() == node && i + 1 < siblings.size())
             return js_wrap_node(ctx, siblings[i+1].get());
+    }
+    return JS_NULL;
+}
+
+static JSValue js_element_get_previousSibling(JSContext* ctx, JSValueConst this_val) {
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node || !node->parent) return JS_NULL;
+    auto& siblings = node->parent->children;
+    for (size_t i = 0; i < siblings.size(); i++) {
+        if (siblings[i].get() == node && i > 0)
+            return js_wrap_node(ctx, siblings[i-1].get());
+    }
+    return JS_NULL;
+}
+
+static JSValue js_element_get_nextElementSibling(JSContext* ctx, JSValueConst this_val) {
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node || !node->parent) return JS_NULL;
+    auto& siblings = node->parent->children;
+    bool found = false;
+    for (size_t i = 0; i < siblings.size(); i++) {
+        if (siblings[i].get() == node) { found = true; continue; }
+        if (found && siblings[i]->node_type == DOMNode::ELEMENT)
+            return js_wrap_node(ctx, siblings[i].get());
+    }
+    return JS_NULL;
+}
+
+static JSValue js_element_get_previousElementSibling(JSContext* ctx, JSValueConst this_val) {
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node || !node->parent) return JS_NULL;
+    auto& siblings = node->parent->children;
+    DOMNode* prev_elem = nullptr;
+    for (size_t i = 0; i < siblings.size(); i++) {
+        if (siblings[i].get() == node) return prev_elem ? js_wrap_node(ctx, prev_elem) : JS_NULL;
+        if (siblings[i]->node_type == DOMNode::ELEMENT) prev_elem = siblings[i].get();
     }
     return JS_NULL;
 }
@@ -2537,6 +2583,10 @@ void js_bindings_init(JSEngine* engine) {
         JS_NewCFunction(ctx, js_element_set_className, "set className", 1),
         JS_PROP_CONFIGURABLE);
     JS_DefinePropertyGetSet(ctx, elem_proto,
+        JS_NewAtom(ctx, "ownerDocument"),
+        JS_NewCFunction(ctx, (JSCFunction*)js_element_get_ownerDocument, "get ownerDocument", 0),
+        JS_NewCFunction(ctx, js_noop_setter, "set ownerDocument", 1), JS_PROP_CONFIGURABLE);
+    JS_DefinePropertyGetSet(ctx, elem_proto,
         JS_NewAtom(ctx, "parentNode"),
         JS_NewCFunction(ctx, (JSCFunction*)js_element_get_parentNode, "get parentNode", 0),
         JS_NewCFunction(ctx, js_noop_setter, "set parentNode", 1), JS_PROP_CONFIGURABLE);
@@ -2564,6 +2614,18 @@ void js_bindings_init(JSEngine* engine) {
         JS_NewAtom(ctx, "nextSibling"),
         JS_NewCFunction(ctx, (JSCFunction*)js_element_get_nextSibling, "get nextSibling", 0),
         JS_NewCFunction(ctx, js_noop_setter, "set nextSibling", 1), JS_PROP_CONFIGURABLE);
+    JS_DefinePropertyGetSet(ctx, elem_proto,
+        JS_NewAtom(ctx, "previousSibling"),
+        JS_NewCFunction(ctx, (JSCFunction*)js_element_get_previousSibling, "get previousSibling", 0),
+        JS_NewCFunction(ctx, js_noop_setter, "set previousSibling", 1), JS_PROP_CONFIGURABLE);
+    JS_DefinePropertyGetSet(ctx, elem_proto,
+        JS_NewAtom(ctx, "nextElementSibling"),
+        JS_NewCFunction(ctx, (JSCFunction*)js_element_get_nextElementSibling, "get nextElementSibling", 0),
+        JS_NewCFunction(ctx, js_noop_setter, "set nextElementSibling", 1), JS_PROP_CONFIGURABLE);
+    JS_DefinePropertyGetSet(ctx, elem_proto,
+        JS_NewAtom(ctx, "previousElementSibling"),
+        JS_NewCFunction(ctx, (JSCFunction*)js_element_get_previousElementSibling, "get previousElementSibling", 0),
+        JS_NewCFunction(ctx, js_noop_setter, "set previousElementSibling", 1), JS_PROP_CONFIGURABLE);
     JS_DefinePropertyGetSet(ctx, elem_proto,
         JS_NewAtom(ctx, "style"),
         JS_NewCFunction(ctx, (JSCFunction*)js_element_get_style, "get style", 0),

@@ -1594,8 +1594,28 @@ Comment.prototype.constructor = Comment;
 // NodeList / HTMLCollection constructors
 globalThis.NodeList = function NodeList() {};
 NodeList.prototype = { length: 0, item: function(i) { return this[i] || null; }, forEach: Array.prototype.forEach };
+NodeList.prototype[Symbol.iterator] = function() {
+    var i = 0, self = this;
+    return { next: function() { return i < self.length ? { value: self[i++], done: false } : { done: true }; } };
+};
+NodeList.prototype.entries = function() {
+    var i = 0, self = this;
+    return { next: function() { return i < self.length ? { value: [i, self[i++]], done: false } : { done: true }; }, [Symbol.iterator]: function() { return this; } };
+};
+NodeList.prototype.keys = function() {
+    var i = 0, self = this;
+    return { next: function() { return i < self.length ? { value: i++, done: false } : { done: true }; }, [Symbol.iterator]: function() { return this; } };
+};
+NodeList.prototype.values = function() {
+    var i = 0, self = this;
+    return { next: function() { return i < self.length ? { value: self[i++], done: false } : { done: true }; }, [Symbol.iterator]: function() { return this; } };
+};
 globalThis.HTMLCollection = function HTMLCollection() {};
 HTMLCollection.prototype = { length: 0, item: function(i) { return this[i] || null; }, namedItem: function() { return null; } };
+HTMLCollection.prototype[Symbol.iterator] = function() {
+    var i = 0, self = this;
+    return { next: function() { return i < self.length ? { value: self[i++], done: false } : { done: true }; } };
+};
 
 // Window constructor
 globalThis.Window = function Window() {};
@@ -2689,6 +2709,31 @@ setTimeout(function() {
     }
 }, 50);
 
+// Make C++ NodeList instances iterable (Symbol.iterator)
+(function() {
+    var nl = document.querySelectorAll('*');
+    var nlProto = Object.getPrototypeOf(nl);
+    if (nlProto && !nlProto[Symbol.iterator]) {
+        nlProto[Symbol.iterator] = function() {
+            var i = 0, self = this;
+            return { next: function() { return i < self.length ? { value: self[i++], done: false } : { done: true }; } };
+        };
+        nlProto.entries = function() {
+            var i = 0, self = this;
+            return { next: function() { return i < self.length ? { value: [i, self[i++]], done: false } : { done: true }; }, [Symbol.iterator]: function() { return this; } };
+        };
+        nlProto.keys = function() {
+            var i = 0, self = this;
+            return { next: function() { return i < self.length ? { value: i++, done: false } : { done: true }; }, [Symbol.iterator]: function() { return this; } };
+        };
+        nlProto.values = function() {
+            var i = 0, self = this;
+            return { next: function() { return i < self.length ? { value: self[i++], done: false } : { done: true }; }, [Symbol.iterator]: function() { return this; } };
+        };
+        nlProto.item = function(i) { return this[i] || null; };
+    }
+})();
+
 // document additions
 document.addEventListener = function() {};
 document.removeEventListener = function() {};
@@ -2962,6 +3007,25 @@ if (typeof window.adsbygoogle === 'undefined') window.adsbygoogle = [];
 // Google Ads bootstrapper stubs
 if (typeof window.__google_ad_request_done === 'undefined') window.__google_ad_request_done = function() {};
 if (typeof window._gaq === 'undefined') window._gaq = { push: function() {} };
+
+// Piano/Tinypass SDK stubs (used by media sites)
+if (typeof window.tp === 'undefined') window.tp = [];
+window.tp.push = function(cb) { if (typeof cb === 'function') { try { cb(window.tp); } catch(e){} } };
+window.tp.piano = { id: {} };
+window.tp.aid = '';
+window.tp.pianoId = { show: function(){}, logout: function(){}, getUser: function(){ return null; }, isUserValid: function(){ return false; } };
+window.tp.offer = { show: function(){}, close: function(){} };
+window.tp.experience = { execute: function(){} };
+window.tp.init = function() {};
+
+// Prebid.js / Amazon APS stubs
+if (typeof window.pbjs === 'undefined') window.pbjs = { que: [], cmd: [], requestBids: function(){}, setConfig: function(){}, addAdUnits: function(){}, removeAdUnit: function(){}, getBidResponses: function(){ return {}; }, getAllWinningBids: function(){ return []; } };
+if (typeof window.apstag === 'undefined') window.apstag = { init: function(){}, fetchBids: function(cfg, cb){ if(cb) cb([]); }, setDisplayBids: function(){}, targetingKeys: function(){ return []; } };
+
+// CMP / Consent Management stubs
+if (typeof window.__tcfapi === 'undefined') window.__tcfapi = function(cmd, ver, cb) { if (cb) cb({ cmpId: 0, cmpVersion: 0, gdprApplies: false, tcfPolicyVersion: 2, tcString: '', purposeOneTreatment: false, eventStatus: 'tcloaded' }, true); };
+if (typeof window.__uspapi === 'undefined') window.__uspapi = function(cmd, ver, cb) { if (cb) cb({ version: 1, uspString: '1---' }, true); };
+if (typeof window.__cmp === 'undefined') window.__cmp = function(cmd, arg, cb) { if (cb) cb({ consentData: '', gdprApplies: false }, true); };
 
 // picturefill stub (responsive images library)
 if (typeof window.picturefill === 'undefined') window.picturefill = function() {};
