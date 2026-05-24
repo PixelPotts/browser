@@ -1005,13 +1005,14 @@ static bool check_attr_selector(const std::string& expr, DOMNode* node) {
     // expr is contents inside [...], e.g. "attr", "attr=val", "attr^=val", etc.
     // Find operator position
     size_t op_pos = std::string::npos;
-    int op_type = 0; // 0=has, 1==, 2=^=, 3=$=, 4=*=, 5=~=
+    int op_type = 0; // 0=has, 1==, 2=^=, 3=$=, 4=*=, 5=~=, 6=|=
     for (size_t i = 0; i < expr.size(); ++i) {
         if (expr[i] == '=' && i > 0 && expr[i-1] == '^') { op_pos = i-1; op_type = 2; break; }
         if (expr[i] == '=' && i > 0 && expr[i-1] == '$') { op_pos = i-1; op_type = 3; break; }
         if (expr[i] == '=' && i > 0 && expr[i-1] == '*') { op_pos = i-1; op_type = 4; break; }
         if (expr[i] == '=' && i > 0 && expr[i-1] == '~') { op_pos = i-1; op_type = 5; break; }
-        if (expr[i] == '=' && (i == 0 || (expr[i-1] != '^' && expr[i-1] != '$' && expr[i-1] != '*' && expr[i-1] != '~')))
+        if (expr[i] == '=' && i > 0 && expr[i-1] == '|') { op_pos = i-1; op_type = 6; break; }
+        if (expr[i] == '=' && (i == 0 || (expr[i-1] != '^' && expr[i-1] != '$' && expr[i-1] != '*' && expr[i-1] != '~' && expr[i-1] != '|')))
             { op_pos = i; op_type = 1; break; }
     }
     if (op_pos == std::string::npos) {
@@ -1026,29 +1027,46 @@ static bool check_attr_selector(const std::string& expr, DOMNode* node) {
     std::string val_part = expr.substr(op_type == 1 ? op_pos + 1 : op_pos + 2);
     while (!val_part.empty() && isspace((unsigned char)val_part.front())) val_part.erase(val_part.begin());
     while (!val_part.empty() && isspace((unsigned char)val_part.back())) val_part.pop_back();
+
+    // Check for case-sensitivity flag: i or s at end after space
+    bool case_insensitive = false;
+    if (val_part.size() >= 2) {
+        char last = val_part.back();
+        if ((last == 'i' || last == 'I' || last == 's' || last == 'S') &&
+            val_part.size() >= 3 && isspace((unsigned char)val_part[val_part.size()-2])) {
+            case_insensitive = (last == 'i' || last == 'I');
+            val_part.pop_back();
+            while (!val_part.empty() && isspace((unsigned char)val_part.back())) val_part.pop_back();
+        }
+    }
+
     // strip quotes
     if (val_part.size() >= 2 && (val_part.front() == '"' || val_part.front() == '\''))
         val_part = val_part.substr(1, val_part.size() - 2);
 
     auto it = node->attributes.find(attr);
     if (it == node->attributes.end()) return false;
-    const std::string& v = it->second;
+    std::string v = it->second;
+    std::string vp = val_part;
+    if (case_insensitive) { v = str_lower(v); vp = str_lower(vp); }
 
     switch (op_type) {
-        case 1: return v == val_part; // exact
-        case 2: return v.size() >= val_part.size() && v.substr(0, val_part.size()) == val_part; // ^=
-        case 3: return v.size() >= val_part.size() && v.substr(v.size() - val_part.size()) == val_part; // $=
-        case 4: return v.find(val_part) != std::string::npos; // *=
+        case 1: return v == vp; // exact
+        case 2: return v.size() >= vp.size() && v.substr(0, vp.size()) == vp; // ^=
+        case 3: return v.size() >= vp.size() && v.substr(v.size() - vp.size()) == vp; // $=
+        case 4: return v.find(vp) != std::string::npos; // *=
         case 5: { // ~= word match
             std::string word;
             for (char c : v) {
                 if (isspace((unsigned char)c)) {
-                    if (word == val_part) return true;
+                    if (word == vp) return true;
                     word.clear();
                 } else word += c;
             }
-            return word == val_part;
+            return word == vp;
         }
+        case 6: // |= dash-separated prefix
+            return v == vp || (v.size() > vp.size() && v.substr(0, vp.size()) == vp && v[vp.size()] == '-');
     }
     return false;
 }
