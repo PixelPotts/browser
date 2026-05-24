@@ -1714,9 +1714,15 @@ void Document::removeChild(DOMNode* parent, DOMNode* child) {
     auto& siblings = parent->children;
     for (auto it = siblings.begin(); it != siblings.end(); ++it) {
         if (it->get() == child) {
-            unregisterNode(child);
+            // Keep the node alive in orphans so JS can still reference/re-append it
+            std::shared_ptr<DOMNode> preserved = *it;
             child->parent = nullptr;
             siblings.erase(it);
+            orphans.push_back(preserved);
+            // Remove from id_map (detached nodes shouldn't be found by getElementById)
+            // but keep in node_map so JS wrappers can still access the node
+            if (!child->id.empty())
+                id_map.erase(child->id);
             parent->markDirty();
             if (on_mutated) on_mutated();
             if (on_mutation) on_mutation(parent->node_id, "childList");
@@ -1738,6 +1744,11 @@ void Document::insertBefore(DOMNode* parent, std::shared_ptr<DOMNode> newChild, 
                 [&](const std::shared_ptr<DOMNode>& n) { return n.get() == newChild.get(); }),
             siblings.end());
     }
+    // Remove from orphans if present
+    orphans.erase(
+        std::remove_if(orphans.begin(), orphans.end(),
+            [&](const std::shared_ptr<DOMNode>& n) { return n.get() == newChild.get(); }),
+        orphans.end());
     newChild->parent = parent;
     auto& siblings = parent->children;
     for (auto it = siblings.begin(); it != siblings.end(); ++it) {

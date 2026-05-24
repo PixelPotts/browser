@@ -905,13 +905,15 @@ static JSValue js_element_appendChild(JSContext* ctx, JSValueConst this_val,
         doc->appendChild(parent, child_ptr);
 
         // Dynamic script loading: if appending a <script> with src, fetch & execute it
-        fprintf(stderr, "[appendChild] checking script: tag='%s' attrs:", child->tag_name.c_str());
-        for (auto& kv : child->attributes) fprintf(stderr, " %s='%s'", kv.first.c_str(), kv.second.c_str());
-        fprintf(stderr, "\n");
-        if (child->tag_name == "script") {
-            auto it = child->attributes.find("src");
-            fprintf(stderr, "[appendChild] script src found: %s\n", it != child->attributes.end() ? it->second.c_str() : "NO");
-            if (it != child->attributes.end() && !it->second.empty()) {
+        // Use child_ptr.get() after appendChild since on_mutation may have run arbitrary JS
+        DOMNode* appended = child_ptr.get();
+        if (appended && appended->tag_name == "script") {
+            fprintf(stderr, "[appendChild] script attrs:");
+            for (auto& kv : appended->attributes) fprintf(stderr, " %s='%s'", kv.first.c_str(), kv.second.c_str());
+            fprintf(stderr, "\n");
+            auto it = appended->attributes.find("src");
+            fprintf(stderr, "[appendChild] script src found: %s\n", it != appended->attributes.end() ? it->second.c_str() : "NO");
+            if (it != appended->attributes.end() && !it->second.empty()) {
                 std::string src_url = it->second;
                 // Resolve relative URLs
                 if (!src_url.empty() && src_url[0] != 'h' && src_url[0] != 'f' && src_url[0] != 'd') {
@@ -952,8 +954,8 @@ static JSValue js_element_appendChild(JSContext* ctx, JSValueConst this_val,
                 }
                 if (fetched) {
                     // Check if this is a module script
-                    auto type_it = child->attributes.find("type");
-                    bool is_module = (type_it != child->attributes.end() && type_it->second == "module");
+                    auto type_it = appended->attributes.find("type");
+                    bool is_module = (type_it != appended->attributes.end() && type_it->second == "module");
                     if (is_module) {
                         fprintf(stderr, "[script] Evaluating as ES6 module: %s\n", src_url.c_str());
                         g_js_engine->evalModule(script_body, src_url);
@@ -967,9 +969,9 @@ static JSValue js_element_appendChild(JSContext* ctx, JSValueConst this_val,
         }
 
         // Dynamic iframe loading: if appending an <iframe> with src, fetch & execute
-        if (child->tag_name == "iframe") {
-            auto src_it = child->attributes.find("src");
-            if (src_it != child->attributes.end() && !src_it->second.empty()) {
+        if (appended && appended->tag_name == "iframe") {
+            auto src_it = appended->attributes.find("src");
+            if (src_it != appended->attributes.end() && !src_it->second.empty()) {
                 std::string iframe_url = src_it->second;
                 // Resolve relative URLs
                 if (!iframe_url.empty() && iframe_url[0] == '/' && iframe_url.find("://") == std::string::npos) {
