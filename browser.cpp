@@ -1448,6 +1448,35 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
                     auto s = prop_val(r.decls, "font-family"); if (!s.empty()) elem->font_family = css_font_to_pango(s); }
             }
 
+            // Pseudo-elements: ::before and ::after content
+            for (const auto& r : css) {
+                std::string sel = r.sel;
+                bool is_before = false, is_after = false;
+                // Check for ::before / ::after (or :before / :after)
+                if (sel.size() > 8 && sel.substr(sel.size()-8) == "::before") {
+                    sel = sel.substr(0, sel.size()-8); is_before = true;
+                } else if (sel.size() > 7 && sel.substr(sel.size()-7) == ":before") {
+                    sel = sel.substr(0, sel.size()-7); is_before = true;
+                } else if (sel.size() > 7 && sel.substr(sel.size()-7) == "::after") {
+                    sel = sel.substr(0, sel.size()-7); is_after = true;
+                } else if (sel.size() > 6 && sel.substr(sel.size()-6) == ":after") {
+                    sel = sel.substr(0, sel.size()-6); is_after = true;
+                }
+                if (!is_before && !is_after) continue;
+                // Trim trailing whitespace from base selector
+                while (!sel.empty() && sel.back() == ' ') sel.pop_back();
+                if (sel.empty()) sel = "*";
+                if (!dom_sel_matches(sel, match_node)) continue;
+                // Extract content property
+                std::string content = prop_val(r.decls, "content");
+                if (content.empty() || content == "none" || content == "normal") continue;
+                // Strip quotes
+                if (content.size() >= 2 && (content.front()=='"' || content.front()=='\''))
+                    content = content.substr(1, content.size()-2);
+                if (is_before) elem->before_content = content;
+                else elem->after_content = content;
+            }
+
             // Resolve bg_image
             if (!bm.bg_image.empty()) {
                 const std::string& res_base = !bg_img_src.empty() ? bg_img_src : base;
@@ -3112,6 +3141,33 @@ static BoxModel dom_node_to_boxmodel(DOMNode* node) {
 
 static void render_dom_to_gtk(AppState* st, TabState* tab, Document* doc, int gen);
 
+// Render ::before or ::after pseudo-element content as inline text
+static void render_pseudo_content(const std::string& content, DOMNode* node,
+                                   GtkWidget* parent_w) {
+    if (content.empty()) return;
+    GtkWidget* lbl = gtk_label_new(nullptr);
+    // Build Pango markup
+    int fs = node->fs_computed > 0 ? node->fs_computed : 16;
+    std::string markup = "<span";
+    markup += " size=\"" + std::to_string(fs * PANGO_SCALE) + "\"";
+    if (node->fw_computed > 0) markup += " weight=\"" + std::to_string(node->fw_computed) + "\"";
+    if (!node->color_computed.empty()) markup += " foreground=\"" + node->color_computed + "\"";
+    if (!node->font_family.empty()) markup += " face=\"" + node->font_family + "\"";
+    markup += ">";
+    // Escape content for Pango
+    std::string escaped;
+    for (char c : content) {
+        if (c == '&') escaped += "&amp;";
+        else if (c == '<') escaped += "&lt;";
+        else if (c == '>') escaped += "&gt;";
+        else escaped += c;
+    }
+    markup += escaped + "</span>";
+    gtk_label_set_markup(GTK_LABEL(lbl), markup.c_str());
+    gtk_box_pack_start(GTK_BOX(parent_w), lbl, FALSE, FALSE, 0);
+    gtk_widget_show(lbl);
+}
+
 static void render_node(AppState* st, TabState* tab, DOMNode* node, int gen,
                          std::vector<GtkWidget*>& cstack,
                          std::vector<GtkWidget*>& float_rows) {
@@ -3750,8 +3806,10 @@ static void render_node(AppState* st, TabState* tab, DOMNode* node, int gen,
         }
         cstack.push_back(tab->content_box);
         float_rows.push_back(nullptr);
+        if (!node->before_content.empty()) render_pseudo_content(node->before_content, node, tab->content_box);
         for (auto& child : node->children)
             render_node(st, tab, child.get(), gen, cstack, float_rows);
+        if (!node->after_content.empty()) render_pseudo_content(node->after_content, node, tab->content_box);
         cstack.pop_back();
         float_rows.pop_back();
         return;
@@ -3912,8 +3970,10 @@ static void render_node(AppState* st, TabState* tab, DOMNode* node, int gen,
 
         cstack.push_back(new_blk);
         float_rows.push_back(nullptr);
+        if (!node->before_content.empty()) render_pseudo_content(node->before_content, node, new_blk);
         for (auto& child : node->children)
             render_node(st, tab, child.get(), gen, cstack, float_rows);
+        if (!node->after_content.empty()) render_pseudo_content(node->after_content, node, new_blk);
         // Apply flex align-items to children
         if (is_flex && node->align_items != 0) {
             GtkOrientation orient = (node->flex_direction == 0 || node->flex_direction == 2)
@@ -3948,8 +4008,10 @@ static void render_node(AppState* st, TabState* tab, DOMNode* node, int gen,
         cstack.pop_back();
         float_rows.pop_back();
     } else {
+        if (!node->before_content.empty()) render_pseudo_content(node->before_content, node, cstack.back());
         for (auto& child : node->children)
             render_node(st, tab, child.get(), gen, cstack, float_rows);
+        if (!node->after_content.empty()) render_pseudo_content(node->after_content, node, cstack.back());
     }
 }
 

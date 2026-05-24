@@ -90,6 +90,10 @@ struct DOMNode {
     std::string bg_image;
     std::string bg_color;
 
+    // Pseudo-element content (::before / ::after)
+    std::string before_content; // empty = no ::before
+    std::string after_content;  // empty = no ::after
+
     // Event listeners
     struct Listener {
         std::string type;
