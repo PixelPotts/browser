@@ -1839,6 +1839,21 @@ struct AppState {
 
 // ---- geometry helper for js_bindings (getBoundingClientRect / offset*) ----
 
+// Helper: register a widget in node_widget_map with auto-cleanup on destroy
+static void register_node_widget(TabState* tab, uint32_t node_id, GtkWidget* widget) {
+    tab->node_widget_map[node_id] = widget;
+    uint32_t* stored_id = new uint32_t(node_id);
+    g_object_set_data(G_OBJECT(widget), "dom_node_id", GUINT_TO_POINTER(node_id));
+    g_signal_connect(widget, "destroy", G_CALLBACK(+[](GtkWidget* w, gpointer data) {
+        auto* tab = static_cast<TabState*>(data);
+        uint32_t nid = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(w), "dom_node_id"));
+        auto it = tab->node_widget_map.find(nid);
+        if (it != tab->node_widget_map.end() && it->second == w)
+            tab->node_widget_map.erase(it);
+    }), tab);
+    delete stored_id;
+}
+
 void js_get_node_geometry(TabState* tab, uint32_t node_id, int& x, int& y, int& w, int& h) {
     x = y = w = h = 0;
     if (!tab) return;
@@ -3677,9 +3692,7 @@ static void render_node(AppState* st, TabState* tab, DOMNode* node, int gen,
         cs.width = cw;
         cs.height = ch;
         g_canvas_map[node->node_id] = cs;
-        // Store node_id on widget
-        g_object_set_data(G_OBJECT(da), "dom_node_id", GUINT_TO_POINTER(node->node_id));
-        tab->node_widget_map[node->node_id] = da;
+        register_node_widget(tab, node->node_id, da);
         return;
     }
 
@@ -3763,7 +3776,7 @@ static void render_node(AppState* st, TabState* tab, DOMNode* node, int gen,
         gtk_box_pack_start(GTK_BOX(cur), da, FALSE, FALSE, 2);
         gtk_widget_show(da);
         g_object_ref(da);
-        tab->node_widget_map[node->node_id] = da;
+        register_node_widget(tab, node->node_id, da);
 
         std::string img_url = node->attributes.count("src") ? node->attributes.at("src") : "";
         if (!img_url.empty()) {
@@ -3945,9 +3958,7 @@ static void render_node(AppState* st, TabState* tab, DOMNode* node, int gen,
         gtk_box_pack_start(GTK_BOX(table_outer), grid, FALSE, FALSE, 0);
         gtk_widget_show(grid);
 
-        // Store node_id
-        g_object_set_data(G_OBJECT(table_outer), "dom_node_id", GUINT_TO_POINTER(node->node_id));
-        tab->node_widget_map[node->node_id] = table_outer;
+        register_node_widget(tab, node->node_id, table_outer);
 
         // Collect all <tr> rows from thead/tbody/tfoot or direct children
         std::vector<DOMNode*> all_rows;
@@ -4139,9 +4150,7 @@ static void render_node(AppState* st, TabState* tab, DOMNode* node, int gen,
                 gtk_grid_attach(GTK_GRID(grid), cell_box, col_idx, row_idx, colspan, rowspan);
                 gtk_widget_show(cell_box);
 
-                // Store node_id
-                g_object_set_data(G_OBJECT(cell_box), "dom_node_id", GUINT_TO_POINTER(cell_child->node_id));
-                tab->node_widget_map[cell_child->node_id] = cell_box;
+                register_node_widget(tab, cell_child->node_id, cell_box);
 
                 // Render cell contents
                 cstack.push_back(cell_box);
@@ -4202,7 +4211,7 @@ static void render_node(AppState* st, TabState* tab, DOMNode* node, int gen,
                 }), st);
             gtk_box_pack_start(GTK_BOX(cur), cb, FALSE, FALSE, 2);
             gtk_widget_show(cb);
-            tab->node_widget_map[nid] = cb;
+            register_node_widget(tab, nid, cb);
         } else if (type == "radio") {
             GtkWidget* rb = gtk_radio_button_new(nullptr);
             if (node->attributes.count("checked")) gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(rb), TRUE);
@@ -4222,7 +4231,7 @@ static void render_node(AppState* st, TabState* tab, DOMNode* node, int gen,
                 }), st);
             gtk_box_pack_start(GTK_BOX(cur), rb, FALSE, FALSE, 2);
             gtk_widget_show(rb);
-            tab->node_widget_map[nid] = rb;
+            register_node_widget(tab, nid, rb);
         } else if (type == "submit" || type == "reset") {
             std::string label = init_val.empty() ? (type == "submit" ? "Submit" : "Reset") : init_val;
             GtkWidget* btn = gtk_button_new_with_label(label.c_str());
@@ -4238,7 +4247,7 @@ static void render_node(AppState* st, TabState* tab, DOMNode* node, int gen,
                 }), st);
             gtk_box_pack_start(GTK_BOX(cur), btn, FALSE, FALSE, 2);
             gtk_widget_show(btn);
-            tab->node_widget_map[nid] = btn;
+            register_node_widget(tab, nid, btn);
         } else {
             // text, password, email, number, search, etc.
             GtkWidget* entry = gtk_entry_new();
@@ -4278,7 +4287,7 @@ static void render_node(AppState* st, TabState* tab, DOMNode* node, int gen,
                 }), st);
             gtk_box_pack_start(GTK_BOX(cur), entry, FALSE, FALSE, 2);
             gtk_widget_show(entry);
-            tab->node_widget_map[nid] = entry;
+            register_node_widget(tab, nid, entry);
         }
         return;
     }
@@ -4344,7 +4353,7 @@ static void render_node(AppState* st, TabState* tab, DOMNode* node, int gen,
             }), st);
         gtk_box_pack_start(GTK_BOX(cur), scroll, FALSE, FALSE, 2);
         gtk_widget_show_all(scroll);
-        tab->node_widget_map[nid] = scroll;
+        register_node_widget(tab, nid, scroll);
         return;
     }
 
@@ -4408,7 +4417,7 @@ static void render_node(AppState* st, TabState* tab, DOMNode* node, int gen,
             }), st);
         gtk_box_pack_start(GTK_BOX(cur), combo, FALSE, FALSE, 2);
         gtk_widget_show(combo);
-        tab->node_widget_map[nid] = combo;
+        register_node_widget(tab, nid, combo);
         return;
     }
 
@@ -4448,7 +4457,7 @@ static void render_node(AppState* st, TabState* tab, DOMNode* node, int gen,
 
         gtk_box_pack_start(GTK_BOX(cur), btn, FALSE, FALSE, 2);
         gtk_widget_show(btn);
-        tab->node_widget_map[nid] = btn;
+        register_node_widget(tab, nid, btn);
         fprintf(stderr, "[DEBUG render_node] <button id='%s'> label='%s' node_id=%u\n",
                 node->id.c_str(), label.c_str(), node->node_id);
         return;
@@ -4637,7 +4646,7 @@ static void render_node(AppState* st, TabState* tab, DOMNode* node, int gen,
         // Store node_id on widget for click dispatch
         g_object_set_data(G_OBJECT(new_blk), "dom_node_id",
             GUINT_TO_POINTER(node->node_id));
-        tab->node_widget_map[node->node_id] = new_blk;
+        register_node_widget(tab, node->node_id, new_blk);
 
         // Add click event handling if node has listeners
         if (!node->listeners.empty()) {
@@ -4886,6 +4895,8 @@ static void fetch_page(AppState* st, TabState* tab, std::string url, int gen) {
             else tab->title = url;
         }
 
+        // Clear old widget map before re-rendering (prevents dangling widget pointers)
+        tab->node_widget_map.clear();
         render_dom_to_gtk(st, tab, doc.get(), gen);
 
         // Destroy previous JS engine
