@@ -13,7 +13,8 @@ QJS_SRCS = quickjs/quickjs.c quickjs/libregexp.c quickjs/libunicode.c \
 QJS_OBJS = $(QJS_SRCS:.c=.o)
 
 # Our C++ sources
-CXX_SRCS = browser.cpp dom.cpp js_engine.cpp js_bindings.cpp js_event.cpp
+CXX_SRCS = browser.cpp dom.cpp js_engine.cpp js_bindings.cpp js_event.cpp \
+           layout.cpp paint.cpp hit_test.cpp
 CXX_OBJS = $(CXX_SRCS:.cpp=.o)
 
 TARGET = browser

@@ -18,6 +18,9 @@
 #include "js_event.h"
 #include <unordered_map>
 #include <unordered_set>
+#include "layout.h"
+#include "paint.h"
+#include "hit_test.h"
 
 // ---- Canvas state (shared with js_bindings.cpp) ----
 struct CanvasState {
@@ -1780,10 +1783,19 @@ struct TabState {
     GtkWidget* viewport = nullptr;       // viewport inside scroll
     GtkWidget* content_box = nullptr;    // main content container
 
-    // Node-to-widget map for getBoundingClientRect / offset*
+    // Node-to-widget map for getBoundingClientRect / offset* (legacy)
     std::unordered_map<uint32_t, GtkWidget*> node_widget_map;
     uint32_t focused_node_id = 0;
     gulong body_draw_signal = 0;
+
+    // Layout engine state
+    GtkWidget* drawing_area = nullptr;           // single Cairo surface for rendering
+    std::unique_ptr<LayoutBox> layout_root;      // layout tree
+    DisplayList display_list;                    // paint commands
+    PangoContext* pango_ctx = nullptr;           // shared Pango context
+    float scroll_x = 0, scroll_y = 0;           // viewport scroll position
+    float content_height = 0;                    // total page height for scrollbar
+    float viewport_width = 1100;                 // current viewport width
 
     // Inspector panel
     GtkWidget* inspector_box = nullptr;
@@ -1854,27 +1866,30 @@ static void register_node_widget(TabState* tab, uint32_t node_id, GtkWidget* wid
     delete stored_id;
 }
 
+// Walk layout tree to find box for a given node_id
+static LayoutBox* find_layout_box(LayoutBox* box, uint32_t node_id) {
+    if (!box) return nullptr;
+    if (box->dom_node && box->dom_node->node_id == node_id) return box;
+    for (auto& child : box->children) {
+        LayoutBox* found = find_layout_box(child.get(), node_id);
+        if (found) return found;
+    }
+    return nullptr;
+}
+
 void js_get_node_geometry(TabState* tab, uint32_t node_id, int& x, int& y, int& w, int& h) {
     x = y = w = h = 0;
-    if (!tab) return;
-    auto it = tab->node_widget_map.find(node_id);
-    if (it == tab->node_widget_map.end()) return;
-    GtkWidget* widget = it->second;
-    if (!widget || !GTK_IS_WIDGET(widget) || !gtk_widget_get_realized(widget)) return;
-    GtkAllocation alloc;
-    gtk_widget_get_allocation(widget, &alloc);
-    w = alloc.width;
-    h = alloc.height;
-    // Translate to viewport-relative coordinates
-    if (tab->viewport && GTK_IS_WIDGET(tab->viewport) && gtk_widget_get_realized(tab->viewport)) {
-        int vx = 0, vy = 0;
-        gtk_widget_translate_coordinates(widget, tab->viewport, 0, 0, &vx, &vy);
-        x = vx;
-        y = vy;
-    } else {
-        x = alloc.x;
-        y = alloc.y;
-    }
+    if (!tab || !tab->layout_root) return;
+
+    LayoutBox* box = find_layout_box(tab->layout_root.get(), node_id);
+    if (!box) return;
+
+    Rect bb = box->border_box();
+    // abs_x/abs_y are the absolute document coordinates of the border box
+    x = (int)(box->abs_x - tab->scroll_x);
+    y = (int)(box->abs_y - tab->scroll_y);
+    w = (int)(bb.w);
+    h = (int)(bb.h);
 }
 
 // ---- block container builder (main thread only) ----
@@ -3101,6 +3116,203 @@ static TabBarHitResult hit_test_tab_bar(AppState* st, double x, double y) {
     return r;
 }
 
+// ---- Layout+Paint Pipeline ----
+
+// Connect replaced element surfaces (canvas, img) to layout boxes
+static void connect_replaced_surfaces(LayoutBox* box) {
+    if (!box) return;
+    if (box->type == LayoutBoxType::Replaced && box->dom_node) {
+        // Canvas elements
+        auto it = g_canvas_map.find(box->dom_node->node_id);
+        if (it != g_canvas_map.end() && it->second.surface)
+            box->replaced_surface = it->second.surface;
+    }
+    for (auto& child : box->children)
+        connect_replaced_surfaces(child.get());
+}
+
+// Build layout tree, perform layout, generate display list
+static void layout_and_paint(TabState* tab) {
+    if (!tab || !tab->document || !tab->document->root) return;
+
+    DOMNode* start = tab->document->body ? tab->document->body : tab->document->root.get();
+
+    // Create PangoContext if needed
+    if (!tab->pango_ctx && tab->drawing_area) {
+        tab->pango_ctx = gtk_widget_create_pango_context(tab->drawing_area);
+    }
+    if (!tab->pango_ctx) return;
+
+    // Get viewport width from the drawing area allocation
+    if (tab->drawing_area && gtk_widget_get_realized(tab->drawing_area)) {
+        GtkAllocation alloc;
+        gtk_widget_get_allocation(tab->drawing_area, &alloc);
+        if (alloc.width > 0) tab->viewport_width = (float)alloc.width;
+    }
+
+    // Build layout tree from DOM
+    tab->layout_root = build_layout_tree(start, tab->pango_ctx);
+    if (!tab->layout_root) return;
+
+    // Copy body background to layout root
+    if (start->bg_color.empty() || start->bg_color == "transparent") {
+        // Default white background
+        tab->layout_root->bg_color = "white";
+    }
+
+    // Perform layout
+    perform_layout(tab->layout_root.get(), tab->viewport_width, 0, tab->pango_ctx);
+
+    // Connect canvas/img surfaces
+    connect_replaced_surfaces(tab->layout_root.get());
+
+    // Generate display list
+    tab->display_list = generate_display_list(tab->layout_root.get());
+
+    // Update content height for scrollbar
+    tab->content_height = get_content_height(tab->layout_root.get());
+
+    // Set drawing area size to content height so scrollbar works
+    if (tab->drawing_area) {
+        int h = std::max(1, (int)tab->content_height);
+        gtk_widget_set_size_request(tab->drawing_area, -1, h);
+        gtk_widget_queue_draw(tab->drawing_area);
+    }
+}
+
+// Draw callback for the main content drawing area
+static gboolean on_draw_content(GtkWidget* widget, cairo_t* cr, gpointer data) {
+    TabState* tab = static_cast<TabState*>(data);
+    if (!tab || tab->display_list.empty()) {
+        // White background when empty
+        cairo_set_source_rgb(cr, 1, 1, 1);
+        cairo_paint(cr);
+        return FALSE;
+    }
+
+    // White background
+    cairo_set_source_rgb(cr, 1, 1, 1);
+    cairo_paint(cr);
+
+    // Get visible area for scroll offset
+    float sx = 0, sy = 0;
+    GtkAllocation alloc;
+    gtk_widget_get_allocation(widget, &alloc);
+
+    render_display_list(cr, tab->display_list, sx, sy,
+                        (float)alloc.width, (float)alloc.height);
+    return FALSE;
+}
+
+// Mouse click handler for the drawing area
+static gboolean on_draw_area_click(GtkWidget* widget, GdkEventButton* ev, gpointer data) {
+    AppState* st = static_cast<AppState*>(data);
+    TabState* tab = st->ct;
+    if (!tab) return FALSE;
+
+    // Right-click: context menu (inspect)
+    if (ev->button == 3) {
+        GtkWidget* menu = gtk_menu_new();
+        GtkWidget* item = gtk_menu_item_new_with_label("Inspect");
+        gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+        g_signal_connect(item, "activate", G_CALLBACK(on_inspect), st);
+        gtk_widget_show_all(menu);
+        gtk_menu_popup_at_pointer(GTK_MENU(menu), (GdkEvent*)ev);
+        return TRUE;
+    }
+
+    if (ev->button != 1) return FALSE;
+
+    // Get scroll offset from the viewport
+    float scroll_y = 0;
+    if (tab->viewport) {
+        GtkAdjustment* vadj = gtk_scrollable_get_vadjustment(GTK_SCROLLABLE(tab->viewport));
+        if (vadj) scroll_y = (float)gtk_adjustment_get_value(vadj);
+    }
+
+    // Hit test at document coordinates
+    float doc_x = (float)ev->x;
+    float doc_y = (float)ev->y;
+
+    HitTestResult hit = hit_test(tab->layout_root.get(), doc_x, doc_y);
+
+    if (!hit.node) return FALSE;
+
+    fprintf(stderr, "[HIT] click at (%.0f, %.0f) => <%s id='%s'>\n",
+            doc_x, doc_y, hit.node->tag_name.c_str(), hit.node->id.c_str());
+
+    // Check for link click - walk up to find <a> with href
+    DOMNode* link_node = hit.node;
+    while (link_node) {
+        if (link_node->tag_name == "a") {
+            auto it = link_node->attributes.find("href");
+            if (it != link_node->attributes.end() && !it->second.empty()) {
+                std::string href = it->second;
+                if (href[0] == '#') {
+                    // Anchor link - TODO: scroll to element
+                    return TRUE;
+                }
+                std::string url = resolve(tab->current_url, href);
+                fprintf(stderr, "[CLICK] navigate to %s\n", url.c_str());
+                navigate(st, url);
+                return TRUE;
+            }
+        }
+        link_node = link_node->parent;
+    }
+
+    // Dispatch JS click event
+    if (tab->js_engine && tab->document) {
+        tab->js_engine->dispatchEvent(hit.node->node_id, "click",
+                                       (int)doc_x, (int)doc_y);
+    }
+
+    return TRUE;
+}
+
+// Mouse motion handler for cursor changes
+static gboolean on_draw_area_motion(GtkWidget* widget, GdkEventMotion* ev, gpointer data) {
+    AppState* st = static_cast<AppState*>(data);
+    TabState* tab = st->ct;
+    if (!tab || !tab->layout_root) return FALSE;
+
+    float doc_x = (float)ev->x;
+    float doc_y = (float)ev->y;
+
+    HitTestResult hit = hit_test(tab->layout_root.get(), doc_x, doc_y);
+
+    // Check if over a link
+    bool over_link = false;
+    DOMNode* n = hit.node;
+    while (n) {
+        if (n->tag_name == "a") {
+            auto it = n->attributes.find("href");
+            if (it != n->attributes.end() && !it->second.empty()) {
+                over_link = true;
+                break;
+            }
+        }
+        n = n->parent;
+    }
+
+    GdkWindow* win = gtk_widget_get_window(widget);
+    if (win) {
+        GdkCursor* cursor = gdk_cursor_new_from_name(
+            gdk_display_get_default(),
+            over_link ? "pointer" : "default");
+        gdk_window_set_cursor(win, cursor);
+        if (cursor) g_object_unref(cursor);
+    }
+
+    // Dispatch mousemove to JS
+    if (tab->js_engine && hit.node) {
+        tab->js_engine->dispatchEvent(hit.node->node_id, "mousemove",
+                                       (int)doc_x, (int)doc_y);
+    }
+
+    return FALSE;
+}
+
 // ---- Tab lifecycle ----
 
 static void create_tab_widgets(AppState* st, std::shared_ptr<TabState> tab) {
@@ -3114,13 +3326,25 @@ static void create_tab_widgets(AppState* st, std::shared_ptr<TabState> tab) {
 
     tab->viewport = gtk_viewport_new(nullptr, nullptr);
     gtk_container_add(GTK_CONTAINER(tab->scroll), tab->viewport);
-    gtk_widget_add_events(tab->viewport, GDK_BUTTON_PRESS_MASK);
-    g_signal_connect(tab->viewport, "button-press-event", G_CALLBACK(on_content_click), st);
 
-    tab->content_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-    gtk_widget_set_hexpand(tab->content_box, TRUE);
-    gtk_widget_set_vexpand(tab->content_box, TRUE);
-    gtk_container_add(GTK_CONTAINER(tab->viewport), tab->content_box);
+    // Single GtkDrawingArea for the entire page content
+    tab->drawing_area = gtk_drawing_area_new();
+    tab->content_box = tab->drawing_area; // alias for compatibility
+    gtk_widget_set_hexpand(tab->drawing_area, TRUE);
+    gtk_widget_set_vexpand(tab->drawing_area, TRUE);
+    gtk_container_add(GTK_CONTAINER(tab->viewport), tab->drawing_area);
+
+    // Connect draw signal
+    g_signal_connect(tab->drawing_area, "draw", G_CALLBACK(on_draw_content), tab.get());
+
+    // Connect mouse events
+    gtk_widget_add_events(tab->drawing_area,
+        GDK_BUTTON_PRESS_MASK | GDK_BUTTON_RELEASE_MASK |
+        GDK_POINTER_MOTION_MASK | GDK_SCROLL_MASK);
+    g_signal_connect(tab->drawing_area, "button-press-event",
+                     G_CALLBACK(on_draw_area_click), st);
+    g_signal_connect(tab->drawing_area, "motion-notify-event",
+                     G_CALLBACK(on_draw_area_motion), st);
 
     // Add to content stack
     gtk_stack_add_named(GTK_STACK(st->content_stack), tab->paned,
@@ -3337,6 +3561,8 @@ static gboolean tab_bar_leave(GtkWidget*, GdkEventCrossing*, gpointer data) {
     return TRUE;
 }
 
+// Old GTK widget rendering code disabled - replaced by layout+paint pipeline
+#if 0
 struct LinkClickData { AppState* st; std::string url; };
 static gboolean on_link_click(GtkWidget*, GdkEventButton* ev, gpointer d) {
     if (ev->button==1 && ev->type==GDK_BUTTON_PRESS) {
@@ -4765,35 +4991,14 @@ static void render_dom_to_gtk(AppState* st, TabState* tab, Document* doc, int ge
             render_node(st, tab, child.get(), gen, cstack, float_rows);
     }
 }
+#endif // old GTK widget rendering
 
 // Called by JSEngine::rerender_callback when DOM is dirty
 void do_rerender(AppState* st, TabState* tab) {
     if (!tab || !tab->document) return;
-    int gen = tab->generation;
 
-    // Clean up previous body styles
-    if (tab->body_draw_signal) {
-        g_signal_handler_disconnect(tab->content_box, tab->body_draw_signal);
-        tab->body_draw_signal = 0;
-        gtk_widget_set_app_paintable(tab->content_box, FALSE);
-        g_object_set_data(G_OBJECT(tab->content_box), "bg_pb", nullptr);
-        g_object_set_data(G_OBJECT(tab->content_box), "bg_color_str", nullptr);
-    }
-    gtk_widget_set_margin_top(tab->content_box, 0);
-    gtk_widget_set_margin_end(tab->content_box, 0);
-    gtk_widget_set_margin_bottom(tab->content_box, 0);
-    gtk_widget_set_margin_start(tab->content_box, 0);
-
-    // Clear node-to-widget map
-    tab->node_widget_map.clear();
-
-    // Remove all children
-    GList* ch = gtk_container_get_children(GTK_CONTAINER(tab->content_box));
-    for (GList* l = ch; l; l = l->next) gtk_widget_destroy(GTK_WIDGET(l->data));
-    g_list_free(ch);
-
-    // Re-render
-    render_dom_to_gtk(st, tab, tab->document.get(), gen);
+    // Re-run layout+paint pipeline
+    layout_and_paint(tab);
 
     // Clear dirty flags
     std::function<void(DOMNode*)> clear_dirty = [&](DOMNode* n) {
@@ -4822,7 +5027,15 @@ static void fetch_page(AppState* st, TabState* tab, std::string url, int gen) {
             gtk_window_set_title(GTK_WINDOW(st->window), ("Failed: "+url).c_str());
             tab->title = "Failed";
             if (st->tab_bar_area) gtk_widget_queue_draw(st->tab_bar_area);
-            // Show error message in the page
+            // Show error message in the page via overlay box
+            if (tab->drawing_area) {
+                gtk_container_remove(GTK_CONTAINER(tab->viewport), tab->drawing_area);
+                tab->drawing_area = nullptr;
+                tab->content_box = nullptr;
+            }
+            GtkWidget* ebox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+            gtk_widget_set_hexpand(ebox, TRUE);
+            gtk_widget_set_vexpand(ebox, TRUE);
             GtkWidget* lbl = gtk_label_new(nullptr);
             std::string msg = "<span size='x-large' weight='bold'>Unable to connect</span>\n\n"
                               "Could not load <b>" + url + "</b>\n\n"
@@ -4832,8 +5045,9 @@ static void fetch_page(AppState* st, TabState* tab, std::string url, int gen) {
             gtk_widget_set_halign(lbl, GTK_ALIGN_CENTER);
             gtk_widget_set_valign(lbl, GTK_ALIGN_CENTER);
             gtk_widget_set_vexpand(lbl, TRUE);
-            gtk_box_pack_start(GTK_BOX(tab->content_box), lbl, TRUE, TRUE, 40);
-            gtk_widget_show(lbl);
+            gtk_box_pack_start(GTK_BOX(ebox), lbl, TRUE, TRUE, 40);
+            gtk_container_add(GTK_CONTAINER(tab->viewport), ebox);
+            gtk_widget_show_all(ebox);
         });
         return;
     }
@@ -4844,6 +5058,12 @@ static void fetch_page(AppState* st, TabState* tab, std::string url, int gen) {
         idle_add([st, tab, gen, url, raw=std::move(raw)]() {
             if (gen != tab->generation) return;
             gtk_window_set_title(GTK_WINDOW(st->window), url.c_str());
+            // Replace drawing area with text view for view-source
+            if (tab->drawing_area) {
+                gtk_container_remove(GTK_CONTAINER(tab->viewport), tab->drawing_area);
+                tab->drawing_area = nullptr;
+                tab->content_box = nullptr;
+            }
             GtkWidget* tv = gtk_text_view_new();
             gtk_text_view_set_editable(GTK_TEXT_VIEW(tv), FALSE);
             gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(tv), GTK_WRAP_CHAR);
@@ -4855,7 +5075,9 @@ static void fetch_page(AppState* st, TabState* tab, std::string url, int gen) {
             g_object_unref(css);
             gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(tv)),
                 raw.c_str(), (gint)raw.size());
-            gtk_box_pack_start(GTK_BOX(tab->content_box), tv, TRUE, TRUE, 0);
+            gtk_widget_set_hexpand(tv, TRUE);
+            gtk_widget_set_vexpand(tv, TRUE);
+            gtk_container_add(GTK_CONTAINER(tab->viewport), tv);
             gtk_widget_show(tv);
         });
         return;
@@ -4906,9 +5128,9 @@ static void fetch_page(AppState* st, TabState* tab, std::string url, int gen) {
             else tab->title = url;
         }
 
-        // Clear old widget map before re-rendering (prevents dangling widget pointers)
+        // Clear old state before re-rendering
         tab->node_widget_map.clear();
-        render_dom_to_gtk(st, tab, doc.get(), gen);
+        layout_and_paint(tab);
 
         // Destroy previous JS engine
         if (tab->js_engine) {
@@ -5219,22 +5441,40 @@ static void load_url(AppState* st, const std::string& url) {
     }
     g_canvas_map.clear();
 
-    // clean up previous body styles from content_box
-    if (tab->body_draw_signal) {
-        g_signal_handler_disconnect(tab->content_box, tab->body_draw_signal);
-        tab->body_draw_signal = 0;
-        gtk_widget_set_app_paintable(tab->content_box, FALSE);
-        g_object_set_data(G_OBJECT(tab->content_box), "bg_pb", nullptr);
-        g_object_set_data(G_OBJECT(tab->content_box), "bg_color_str", nullptr);
-    }
-    gtk_widget_set_margin_top(tab->content_box, 0);
-    gtk_widget_set_margin_end(tab->content_box, 0);
-    gtk_widget_set_margin_bottom(tab->content_box, 0);
-    gtk_widget_set_margin_start(tab->content_box, 0);
+    // Clear layout engine state
+    tab->layout_root.reset();
+    tab->display_list.clear();
+    tab->content_height = 0;
+    tab->scroll_x = 0;
+    tab->scroll_y = 0;
+    tab->body_draw_signal = 0;
 
-    GList* ch = gtk_container_get_children(GTK_CONTAINER(tab->content_box));
-    for (GList* l=ch; l; l=l->next) gtk_widget_destroy(GTK_WIDGET(l->data));
-    g_list_free(ch);
+    // Ensure drawing area exists (may have been replaced by error/view-source page)
+    if (!tab->drawing_area && tab->viewport) {
+        // Remove whatever is in the viewport
+        GList* ch = gtk_container_get_children(GTK_CONTAINER(tab->viewport));
+        for (GList* l = ch; l; l = l->next) gtk_widget_destroy(GTK_WIDGET(l->data));
+        g_list_free(ch);
+
+        // Recreate drawing area
+        tab->drawing_area = gtk_drawing_area_new();
+        tab->content_box = tab->drawing_area;
+        gtk_widget_set_hexpand(tab->drawing_area, TRUE);
+        gtk_widget_set_vexpand(tab->drawing_area, TRUE);
+        gtk_container_add(GTK_CONTAINER(tab->viewport), tab->drawing_area);
+        g_signal_connect(tab->drawing_area, "draw", G_CALLBACK(on_draw_content), tab);
+        gtk_widget_add_events(tab->drawing_area,
+            GDK_BUTTON_PRESS_MASK | GDK_BUTTON_RELEASE_MASK |
+            GDK_POINTER_MOTION_MASK | GDK_SCROLL_MASK);
+        g_signal_connect(tab->drawing_area, "button-press-event",
+                         G_CALLBACK(on_draw_area_click), st);
+        g_signal_connect(tab->drawing_area, "motion-notify-event",
+                         G_CALLBACK(on_draw_area_motion), st);
+        gtk_widget_show(tab->drawing_area);
+    } else if (tab->drawing_area) {
+        // Just redraw to clear
+        gtk_widget_queue_draw(tab->drawing_area);
+    }
 
     gtk_window_set_title(GTK_WINDOW(st->window), ("Loading "+url+"...").c_str());
     tab->title = "Loading...";
