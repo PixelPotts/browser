@@ -1145,6 +1145,10 @@ Element.prototype.convertQuadFromNode = function() { return {}; };
 Element.prototype.convertRectFromNode = function() { return {}; };
 Element.prototype.convertPointFromNode = function() { return {}; };
 Element.prototype.pseudo = function(t) { return new (globalThis.CSSPseudoElement || function(){this.type='';this.element=null;this.parent=null;this.pseudo=function(){return null;}})(); };
+Element.prototype.clientTop = 0;
+Element.prototype.clientLeft = 0;
+Element.prototype.clientWidth = 0;
+Element.prototype.clientHeight = 0;
 Element.prototype.regionOverset = '';
 Element.prototype.getRegionFlowRanges = function() { return []; };
 Element.prototype.part = { length: 0, add: function(){}, remove: function(){}, toggle: function(){}, contains: function(){return false;} };
@@ -2452,6 +2456,7 @@ globalThis.FontFacePalette = function FontFacePalette() {
 globalThis.FontFaceFeatures = function FontFaceFeatures() {
     this.length = 0; this.item = function(){return null;};
 };
+FontFaceFeatures.prototype.FontFaceFeatures = FontFaceFeatures;
 
 // DOMMatrix (for transforms)
 globalThis.DOMMatrix = globalThis.DOMMatrix || function DOMMatrix() {
