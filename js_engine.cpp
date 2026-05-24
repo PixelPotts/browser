@@ -370,6 +370,9 @@ void JSEngine::shutdown() {
     }
     timers.clear();
 
+    // Run GC to collect any lingering objects before freeing
+    if (rt) JS_RunGC(rt);
+
     if (ctx) { JS_FreeContext(ctx); ctx = nullptr; }
     if (rt) { JS_FreeRuntime(rt); rt = nullptr; }
 

@@ -69,6 +69,10 @@ struct ClassListOpaque {
 static std::unordered_map<uint32_t, JSValue> g_node_cache;
 
 void clear_node_cache() {
+    if (g_js_engine && g_js_engine->ctx) {
+        for (auto& [id, val] : g_node_cache)
+            JS_FreeValue(g_js_engine->ctx, val);
+    }
     g_node_cache.clear();
 }
 

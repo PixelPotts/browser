@@ -47,8 +47,13 @@ static bool fetch(const std::string& url, Buf& out) {
     curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(c, CURLOPT_USERAGENT,      "Mozilla/5.0");
     curl_easy_setopt(c, CURLOPT_TIMEOUT,        15L);
+    curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 5L);
     curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, 0L);
+    curl_easy_setopt(c, CURLOPT_NOSIGNAL,       1L);
     CURLcode rc = curl_easy_perform(c); curl_easy_cleanup(c);
+    if (rc != CURLE_OK) {
+        fprintf(stderr, "[fetch] FAILED url=%s err=%s\n", url.c_str(), curl_easy_strerror(rc));
+    }
     return rc == CURLE_OK;
 }
 
@@ -4178,8 +4183,23 @@ static void fetch_page(AppState* st, TabState* tab, std::string url, int gen) {
 
     Buf buf;
     if (!fetch(fetch_url, buf)) {
-        idle_add([st, url]() {
+        idle_add([st, tab, gen, url]() {
+            if (gen != tab->generation) return;
             gtk_window_set_title(GTK_WINDOW(st->window), ("Failed: "+url).c_str());
+            tab->title = "Failed";
+            if (st->tab_bar_area) gtk_widget_queue_draw(st->tab_bar_area);
+            // Show error message in the page
+            GtkWidget* lbl = gtk_label_new(nullptr);
+            std::string msg = "<span size='x-large' weight='bold'>Unable to connect</span>\n\n"
+                              "Could not load <b>" + url + "</b>\n\n"
+                              "Check the URL and your network connection.";
+            gtk_label_set_markup(GTK_LABEL(lbl), msg.c_str());
+            gtk_label_set_justify(GTK_LABEL(lbl), GTK_JUSTIFY_CENTER);
+            gtk_widget_set_halign(lbl, GTK_ALIGN_CENTER);
+            gtk_widget_set_valign(lbl, GTK_ALIGN_CENTER);
+            gtk_widget_set_vexpand(lbl, TRUE);
+            gtk_box_pack_start(GTK_BOX(tab->content_box), lbl, TRUE, TRUE, 40);
+            gtk_widget_show(lbl);
         });
         return;
     }
@@ -4414,6 +4434,10 @@ static void load_url(AppState* st, const std::string& url) {
     int gen;
     { std::lock_guard<std::mutex> lk(tab->mu); gen = ++tab->generation; }
 
+    // Clear node wrapper cache BEFORE destroying JS engine (frees JSValues)
+    extern void clear_node_cache();
+    clear_node_cache();
+
     // destroy JS engine from previous page
     if (tab->js_engine) {
         delete tab->js_engine;
@@ -4426,10 +4450,6 @@ static void load_url(AppState* st, const std::string& url) {
         if (cs.surface) cairo_surface_destroy(cs.surface);
     }
     g_canvas_map.clear();
-
-    // Clear node wrapper cache (defined in js_bindings.cpp)
-    extern void clear_node_cache();
-    clear_node_cache();
 
     // clean up previous body styles from content_box
     if (tab->body_draw_signal) {
@@ -4457,7 +4477,12 @@ static void load_url(AppState* st, const std::string& url) {
 static void navigate(AppState* st, const std::string& raw) {
     auto* tab = st->ct;
     if (!tab) return;
-    std::string url = normalize_url(raw);
+    // Skip empty/whitespace-only input
+    std::string trimmed = raw;
+    while (!trimmed.empty() && (trimmed.front()==' '||trimmed.front()=='\t')) trimmed.erase(trimmed.begin());
+    while (!trimmed.empty() && (trimmed.back()==' '||trimmed.back()=='\t')) trimmed.pop_back();
+    if (trimmed.empty()) return;
+    std::string url = normalize_url(trimmed);
     if (!tab->current_url.empty()) tab->back_stack.push_back(tab->current_url);
     tab->fwd_stack.clear();
     tab->current_url = url;
