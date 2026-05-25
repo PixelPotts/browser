@@ -3296,9 +3296,14 @@ static void layout_and_paint(TabState* tab) {
             fprintf(stderr, " rect=(%.0f,%.0f,%.0f,%.0f) rgba=(%.2f,%.2f,%.2f,%.2f)",
                     cmd.rect.x, cmd.rect.y, cmd.rect.w, cmd.rect.h,
                     cmd.color.r, cmd.color.g, cmd.color.b, cmd.color.a);
-        else if (cmd.type == PaintCmdType::DrawText)
+        else if (cmd.type == PaintCmdType::DrawText) {
             fprintf(stderr, " pos=(%.0f,%.0f) color=(%.2f,%.2f,%.2f)",
                     cmd.text_x, cmd.text_y, cmd.text_color.r, cmd.text_color.g, cmd.text_color.b);
+            if (cmd.pango_layout) {
+                const char* txt = pango_layout_get_text(cmd.pango_layout);
+                fprintf(stderr, " text='%.80s%s'", txt ? txt : "(null)", txt && strlen(txt) > 80 ? "..." : "");
+            }
+        }
         else if (cmd.type == PaintCmdType::DrawBorder)
             fprintf(stderr, " rect=(%.0f,%.0f,%.0f,%.0f) widths=(%.0f,%.0f,%.0f,%.0f)",
                     cmd.border_rect.x, cmd.border_rect.y, cmd.border_rect.w, cmd.border_rect.h,
@@ -3318,7 +3323,7 @@ static void layout_and_paint(TabState* tab) {
                 b->bg_color.c_str());
         if (b->pango_layout) fprintf(stderr, " [has text]");
         fprintf(stderr, "\n");
-        if (depth < 4) for (auto& c : b->children) dump_layout(c.get(), depth+1);
+        if (depth < 8) for (auto& c : b->children) dump_layout(c.get(), depth+1);
     };
     dump_layout(tab->layout_root.get(), 0);
 

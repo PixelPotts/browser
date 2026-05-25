@@ -66,6 +66,9 @@ static LayoutBoxType display_type_for(DOMNode* node) {
         tag == "iframe" || tag == "object" || tag == "embed")
         return LayoutBoxType::Replaced;
 
+    // Table elements: td/th are inline-like (for table cell wrapping)
+    // but we handle them specially in layout_block for <tr> parents
+
     return LayoutBoxType::Block;
 }
 
@@ -562,9 +565,65 @@ static void layout_box(LayoutBox* box, float containing_width, float containing_
 
 // ---- Layout a block container ----
 
+// Layout table row: lay out td/th children horizontally
+static void layout_table_row(LayoutBox* box, float containing_width, float containing_height,
+                              PangoContext* pango_ctx) {
+    // Count visible cells (skip empty td with no content)
+    int num_cells = 0;
+    for (auto& child : box->children) {
+        if (child->dom_node && (child->dom_node->tag_name == "td" || child->dom_node->tag_name == "th"))
+            num_cells++;
+        else
+            num_cells++; // count non-td children too
+    }
+    if (num_cells <= 0) num_cells = 1;
+
+    float cell_width = containing_width / num_cells;
+    float x_cursor = 0;
+    float max_height = 0;
+
+    for (auto& child : box->children) {
+        // Check for colspan
+        int colspan = 1;
+        if (child->dom_node) {
+            auto cit = child->dom_node->attributes.find("colspan");
+            if (cit != child->dom_node->attributes.end()) {
+                try { colspan = std::stoi(cit->second); } catch (...) {}
+                if (colspan < 1) colspan = 1;
+            }
+        }
+
+        float this_cell_width = cell_width * colspan;
+        // Override child's width for table cell layout
+        child->content_rect.w = this_cell_width - child->padding.horizontal() - child->border.horizontal();
+        if (child->content_rect.w < 0) child->content_rect.w = 0;
+
+        layout_box(child.get(), this_cell_width, containing_height, pango_ctx);
+
+        child->content_rect.x = x_cursor + child->margin.left + child->border.left + child->padding.left;
+        child->content_rect.y = child->margin.top + child->border.top + child->padding.top;
+
+        float child_h = child->content_rect.h + child->padding.vertical() +
+                         child->border.vertical() + child->margin.vertical();
+        if (child_h > max_height) max_height = child_h;
+
+        x_cursor += this_cell_width;
+    }
+
+    box->content_rect.w = containing_width;
+    box->content_rect.h = max_height;
+}
+
 static void layout_block(LayoutBox* box, float containing_width, float containing_height,
                           PangoContext* pango_ctx) {
     DOMNode* node = box->dom_node;
+
+    // Table row: lay out cells horizontally
+    if (node && node->tag_name == "tr") {
+        copy_style(box, node); // ensure margins/padding are set
+        layout_table_row(box, containing_width, containing_height, pango_ctx);
+        return;
+    }
 
     // Resolve content width
     float content_width = -1;
