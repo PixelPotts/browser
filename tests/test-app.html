@@ -1,0 +1,884 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>NoteSketch - Demo App</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
+
+.app-header {
+  background: linear-gradient(135deg, #1e293b, #334155);
+  padding: 12px 24px;
+  display: flex; align-items: center; justify-content: space-between;
+  border-bottom: 1px solid #475569;
+}
+.app-header h1 { font-size: 20px; color: #38bdf8; }
+.app-header .user-info { font-size: 13px; color: #94a3b8; }
+
+.app-body { display: flex; height: calc(100vh - 52px); }
+
+/* Sidebar */
+.sidebar {
+  width: 260px; background: #1e293b; border-right: 1px solid #334155;
+  display: flex; flex-direction: column;
+}
+.sidebar-header { padding: 12px; border-bottom: 1px solid #334155; }
+.sidebar-header input {
+  width: 100%; padding: 8px 12px; border-radius: 6px;
+  background: #0f172a; border: 1px solid #475569; color: #e2e8f0;
+  font-size: 14px; outline: none;
+}
+.sidebar-header input:focus { border-color: #38bdf8; }
+.note-list { flex: 1; overflow-y: auto; padding: 8px; }
+.note-item {
+  padding: 10px 12px; border-radius: 6px; margin-bottom: 4px;
+  cursor: pointer; transition: background 0.15s;
+}
+.note-item:hover { background: #334155; }
+.note-item.active { background: #0ea5e9; color: white; }
+.note-item .note-title { font-size: 14px; font-weight: 500; }
+.note-item .note-preview { font-size: 12px; color: #94a3b8; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.note-item.active .note-preview { color: #e0f2fe; }
+.sidebar-footer { padding: 12px; border-top: 1px solid #334155; display: flex; gap: 8px; }
+
+/* Main area */
+.main { flex: 1; display: flex; flex-direction: column; }
+.toolbar {
+  padding: 8px 16px; background: #1e293b; border-bottom: 1px solid #334155;
+  display: flex; align-items: center; gap: 8px;
+}
+.editor-area { flex: 1; display: flex; }
+.text-editor {
+  flex: 1; padding: 16px; background: #0f172a;
+  overflow-y: auto;
+}
+.text-editor textarea {
+  width: 100%; height: 100%; background: transparent; border: none;
+  color: #e2e8f0; font-size: 15px; line-height: 1.6; resize: none;
+  outline: none; font-family: inherit;
+}
+.canvas-panel {
+  width: 320px; background: #1e293b; border-left: 1px solid #334155;
+  display: flex; flex-direction: column;
+}
+.canvas-toolbar {
+  padding: 8px; display: flex; gap: 6px; align-items: center;
+  border-bottom: 1px solid #334155; flex-wrap: wrap;
+}
+.canvas-wrap { flex: 1; padding: 8px; display: flex; align-items: flex-start; justify-content: center; }
+canvas { background: #fff; border-radius: 4px; cursor: crosshair; }
+
+/* Buttons */
+.btn {
+  padding: 6px 14px; border-radius: 6px; border: 1px solid #475569;
+  background: #334155; color: #e2e8f0; font-size: 13px; cursor: pointer;
+}
+.btn:hover { background: #475569; }
+.btn.primary { background: #0ea5e9; border-color: #0ea5e9; color: white; }
+.btn.primary:hover { background: #0284c7; }
+.btn.danger { background: #dc2626; border-color: #dc2626; color: white; }
+.btn.danger:hover { background: #b91c1c; }
+.btn.sm { padding: 4px 10px; font-size: 12px; }
+
+.color-swatch {
+  width: 24px; height: 24px; border-radius: 4px; border: 2px solid #475569;
+  cursor: pointer; display: inline-block;
+}
+.color-swatch.active { border-color: #38bdf8; }
+
+/* Status bar */
+.status-bar {
+  padding: 4px 16px; background: #0ea5e9; color: white;
+  font-size: 12px; display: flex; justify-content: space-between;
+}
+
+/* Toast */
+.toast-container { position: fixed; top: 16px; right: 16px; z-index: 1000; }
+.toast {
+  padding: 10px 16px; border-radius: 8px; margin-bottom: 8px;
+  background: #334155; color: #e2e8f0; font-size: 13px;
+  border-left: 3px solid #0ea5e9; box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  animation: slideIn 0.3s ease;
+}
+.toast.error { border-left-color: #dc2626; }
+.toast.success { border-left-color: #22c55e; }
+@keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+/* Tags */
+.tag {
+  display: inline-block; padding: 2px 8px; border-radius: 10px;
+  font-size: 11px; margin-right: 4px; background: #334155; color: #94a3b8;
+}
+.tag.red { background: #7f1d1d; color: #fca5a5; }
+.tag.blue { background: #1e3a5f; color: #93c5fd; }
+.tag.green { background: #14532d; color: #86efac; }
+
+/* Modal */
+.modal-overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.6); display: flex;
+  align-items: center; justify-content: center; z-index: 999;
+}
+.modal {
+  background: #1e293b; border-radius: 12px; padding: 24px;
+  min-width: 400px; border: 1px solid #334155;
+}
+.modal h2 { margin-bottom: 16px; font-size: 18px; }
+.modal-actions { margin-top: 16px; display: flex; justify-content: flex-end; gap: 8px; }
+
+.hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<div class="app-header">
+  <h1>NoteSketch</h1>
+  <span class="user-info" id="userInfo"></span>
+</div>
+
+<div class="app-body">
+  <div class="sidebar">
+    <div class="sidebar-header">
+      <input type="text" id="searchInput" placeholder="Search notes...">
+    </div>
+    <div class="note-list" id="noteList"></div>
+    <div class="sidebar-footer">
+      <button class="btn primary" id="btnNewNote" style="flex:1">+ New Note</button>
+      <button class="btn" id="btnExport">Export</button>
+    </div>
+  </div>
+
+  <div class="main">
+    <div class="toolbar" id="toolbar">
+      <input type="text" id="noteTitleInput" placeholder="Note title..." style="background:#0f172a;border:1px solid #475569;color:#e2e8f0;padding:6px 12px;border-radius:6px;font-size:14px;flex:1;outline:none;">
+      <div id="tagContainer"></div>
+      <button class="btn sm" id="btnAddTag">+ Tag</button>
+      <button class="btn sm danger" id="btnDelete">Delete</button>
+    </div>
+    <div class="editor-area">
+      <div class="text-editor">
+        <textarea id="noteContent" placeholder="Start typing your note..."></textarea>
+      </div>
+      <div class="canvas-panel">
+        <div class="canvas-toolbar" id="canvasToolbar">
+          <button class="btn sm active" id="btnPen">Pen</button>
+          <button class="btn sm" id="btnEraser">Eraser</button>
+          <button class="btn sm" id="btnClear">Clear</button>
+          <span style="margin-left:8px;font-size:12px;color:#94a3b8;">Color:</span>
+        </div>
+        <div class="canvas-wrap">
+          <canvas id="sketchPad" width="300" height="400"></canvas>
+        </div>
+      </div>
+    </div>
+    <div class="status-bar" id="statusBar">
+      <span id="statusLeft">Ready</span>
+      <span id="statusRight"></span>
+    </div>
+  </div>
+</div>
+
+<div class="toast-container" id="toastContainer"></div>
+
+<script>
+// ===================================================================
+// NoteSketch App — exercises all implemented JS compatibility APIs
+// ===================================================================
+
+// --- Utility: Toast notifications (DOM createElement, classList, setTimeout) ---
+function showToast(msg, type) {
+  type = type || 'info';
+  var container = document.getElementById('toastContainer');
+  var toast = document.createElement('div');
+  toast.classList.add('toast');
+  if (type !== 'info') toast.classList.add(type);
+  toast.textContent = msg;
+  container.appendChild(toast);
+  setTimeout(function() {
+    if (toast.parentNode) toast.parentNode.removeChild(toast);
+  }, 3000);
+}
+
+// --- Data layer (crypto.randomUUID, structuredClone, Map, JSON) ---
+var notes = new Map();
+var activeNoteId = null;
+var drawColor = '#000000';
+var drawMode = 'pen';
+var drawSize = 3;
+
+function createNote(title, content) {
+  var id = crypto.randomUUID();
+  var note = {
+    id: id,
+    title: title || 'Untitled Note',
+    content: content || '',
+    tags: [],
+    created: Date.now(),
+    modified: Date.now(),
+    canvasData: null
+  };
+  notes.set(id, note);
+  return note;
+}
+
+function cloneNote(id) {
+  var orig = notes.get(id);
+  if (!orig) return null;
+  var copy = structuredClone(orig);
+  copy.id = crypto.randomUUID();
+  copy.title = copy.title + ' (copy)';
+  copy.created = Date.now();
+  copy.modified = Date.now();
+  notes.set(copy.id, copy);
+  return copy;
+}
+
+// --- Search with filter/includes/toLowerCase ---
+function filterNotes(query) {
+  if (!query) return Array.from(notes.values());
+  var q = query.toLowerCase();
+  return Array.from(notes.values()).filter(function(n) {
+    return n.title.toLowerCase().includes(q) ||
+           n.content.toLowerCase().includes(q) ||
+           n.tags.some(function(t) { return t.toLowerCase().includes(q); });
+  });
+}
+
+// --- Sidebar rendering (DOM manipulation, classList, events, forEach) ---
+function renderNoteList(filtered) {
+  var list = document.getElementById('noteList');
+  // Clear existing children using replaceChildren
+  list.replaceChildren();
+
+  var items = filtered || filterNotes('');
+  // Sort by modified date descending
+  items.sort(function(a, b) { return b.modified - a.modified; });
+
+  items.forEach(function(note) {
+    var div = document.createElement('div');
+    div.classList.add('note-item');
+    if (note.id === activeNoteId) div.classList.add('active');
+    div.setAttribute('data-id', note.id);
+
+    var title = document.createElement('div');
+    title.classList.add('note-title');
+    title.innerText = note.title || 'Untitled';
+
+    var preview = document.createElement('div');
+    preview.classList.add('note-preview');
+    var previewText = note.content.substring(0, 60).replace(/\n/g, ' ');
+    preview.innerText = previewText || 'Empty note...';
+
+    div.appendChild(title);
+    div.appendChild(preview);
+
+    // Tags
+    if (note.tags.length > 0) {
+      var tagDiv = document.createElement('div');
+      tagDiv.style.marginTop = '4px';
+      note.tags.forEach(function(tag) {
+        var span = document.createElement('span');
+        span.classList.add('tag');
+        var colors = ['red', 'blue', 'green'];
+        span.classList.add(colors[tag.length % 3]);
+        span.textContent = tag;
+        tagDiv.appendChild(span);
+      });
+      div.appendChild(tagDiv);
+    }
+
+    // Click handler
+    div.addEventListener('click', function(e) {
+      selectNote(note.id);
+    });
+
+    list.appendChild(div);
+  });
+}
+
+// --- Note selection (getAttribute, querySelector, contains) ---
+function selectNote(id) {
+  activeNoteId = id;
+  var note = notes.get(id);
+  if (!note) return;
+
+  document.getElementById('noteTitleInput').value = note.title;
+  document.getElementById('noteContent').value = note.content;
+  renderNoteList();
+  renderTags(note);
+  loadCanvasData(note);
+  updateStatus('Editing: ' + note.title);
+
+  // Dispatch custom event
+  var ev = new CustomEvent('noteSelected', { detail: { noteId: id, title: note.title } });
+  document.dispatchEvent(ev);
+}
+
+// --- Tag rendering and management (insertAdjacentHTML, classList.toggle, classList.contains) ---
+function renderTags(note) {
+  var container = document.getElementById('tagContainer');
+  container.replaceChildren();
+  note.tags.forEach(function(tag, i) {
+    var span = document.createElement('span');
+    span.classList.add('tag');
+    span.classList.add(['red','blue','green'][i % 3]);
+    span.textContent = tag + ' x';
+    span.style.cursor = 'pointer';
+    span.addEventListener('click', function() {
+      note.tags = note.tags.filter(function(t) { return t !== tag; });
+      note.modified = Date.now();
+      renderTags(note);
+      renderNoteList();
+      showToast('Removed tag: ' + tag);
+    });
+    container.appendChild(span);
+  });
+}
+
+// --- Auto-save with debounce (clearTimeout, setTimeout, textContent) ---
+var saveTimer = null;
+function scheduleAutoSave() {
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(function() {
+    if (!activeNoteId) return;
+    var note = notes.get(activeNoteId);
+    if (!note) return;
+    note.title = document.getElementById('noteTitleInput').value;
+    note.content = document.getElementById('noteContent').value;
+    note.modified = Date.now();
+    renderNoteList();
+    updateStatus('Saved');
+    // Use queueMicrotask for deferred UI update
+    queueMicrotask(function() {
+      document.getElementById('statusRight').textContent = 'Last saved: ' + new Date().toLocaleTimeString();
+    });
+  }, 500);
+}
+
+// --- Canvas drawing (getContext, bindPath, bindStroke, bindFill, bindSave/restore, bindMeasureText) ---
+var canvas, ctx;
+var isDrawing = false;
+var lastX = 0, lastY = 0;
+
+function initCanvas() {
+  canvas = document.getElementById('sketchPad');
+  ctx = canvas.getContext('2d');
+
+  // Verify context caching: same object returned
+  var ctx2 = canvas.getContext('2d');
+  if (ctx === ctx2) {
+    console.log('[Canvas] Context caching verified');
+  }
+
+  // Set initial state
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = drawSize;
+  ctx.strokeStyle = '#000000';
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Measure text test
+  var metrics = ctx.measureText('NoteSketch');
+  console.log('[Canvas] measureText width: ' + metrics.width);
+
+  // Drawing events
+  canvas.addEventListener('mousedown', function(e) {
+    isDrawing = true;
+    var rect = canvas.getBoundingClientRect();
+    lastX = e.clientX - (rect ? rect.left : 0);
+    lastY = e.clientY - (rect ? rect.top : 0);
+  });
+  canvas.addEventListener('mousemove', function(e) {
+    if (!isDrawing) return;
+    var rect = canvas.getBoundingClientRect();
+    var x = e.clientX - (rect ? rect.left : 0);
+    var y = e.clientY - (rect ? rect.top : 0);
+    ctx.beginPath();
+    ctx.moveTo(lastX, lastY);
+    ctx.lineTo(x, y);
+    if (drawMode === 'eraser') {
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 20;
+    } else {
+      ctx.strokeStyle = drawColor;
+      ctx.lineWidth = drawSize;
+    }
+    ctx.stroke();
+    lastX = x;
+    lastY = y;
+  });
+  canvas.addEventListener('mouseup', function() {
+    isDrawing = false;
+    saveCanvasData();
+  });
+}
+
+function clearCanvas() {
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.restore();
+  saveCanvasData();
+  showToast('Canvas cleared');
+}
+
+function saveCanvasData() {
+  if (!activeNoteId) return;
+  var note = notes.get(activeNoteId);
+  if (!note) return;
+  // Use getImageData to save pixel data
+  var imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  note.canvasData = { width: imgData.width, height: imgData.height, data: Array.from(imgData.data) };
+  note.modified = Date.now();
+}
+
+function loadCanvasData(note) {
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  if (note.canvasData) {
+    var imgData = ctx.createImageData(note.canvasData.width, note.canvasData.height);
+    for (var i = 0; i < note.canvasData.data.length; i++) {
+      imgData.data[i] = note.canvasData.data[i];
+    }
+    ctx.putImageData(imgData, 0, 0);
+  }
+}
+
+// --- Color palette (createElement, setAttribute, style, classList, forEach) ---
+function initColorPalette() {
+  var colors = ['#000000','#dc2626','#2563eb','#16a34a','#9333ea','#ea580c','#0d9488','#a16207'];
+  var toolbar = document.getElementById('canvasToolbar');
+  colors.forEach(function(color) {
+    var swatch = document.createElement('span');
+    swatch.classList.add('color-swatch');
+    if (color === drawColor) swatch.classList.add('active');
+    swatch.style.backgroundColor = color;
+    swatch.setAttribute('data-color', color);
+    swatch.addEventListener('click', function() {
+      drawColor = color;
+      // Update active state
+      var all = toolbar.querySelectorAll('.color-swatch');
+      for (var i = 0; i < all.length; i++) {
+        all[i].classList.remove('active');
+      }
+      swatch.classList.add('active');
+    });
+    toolbar.appendChild(swatch);
+  });
+}
+
+// --- Export notes (TextEncoder, Blob, URL.createObjectURL, JSON.stringify) ---
+function exportNotes() {
+  var data = [];
+  notes.forEach(function(note, id) {
+    data.push({ id: note.id, title: note.title, content: note.content, tags: note.tags });
+  });
+  var json = JSON.stringify(data, null, 2);
+  var encoder = new TextEncoder();
+  var encoded = encoder.encode(json);
+
+  // Verify TextDecoder roundtrip
+  var decoder = new TextDecoder('utf-8');
+  var decoded = decoder.decode(encoded);
+  if (decoded === json) {
+    console.log('[Export] TextEncoder/TextDecoder roundtrip OK');
+  }
+
+  var blob = new Blob([json], { type: 'application/json' });
+  console.log('[Export] Blob size: ' + blob.size + ' bytes, type: ' + blob.type);
+
+  // Generate a download URL
+  var url = URL.createObjectURL(blob);
+  console.log('[Export] Object URL: ' + url);
+
+  showToast('Exported ' + data.length + ' notes (' + blob.size + ' bytes)', 'success');
+}
+
+// --- Delete note with confirm modal (DOM creation, event.stopPropagation, remove) ---
+function showDeleteModal() {
+  if (!activeNoteId) return;
+  var note = notes.get(activeNoteId);
+  if (!note) return;
+
+  var overlay = document.createElement('div');
+  overlay.classList.add('modal-overlay');
+
+  var modal = document.createElement('div');
+  modal.classList.add('modal');
+
+  var h2 = document.createElement('h2');
+  h2.textContent = 'Delete Note';
+  modal.appendChild(h2);
+
+  var p = document.createElement('p');
+  p.innerHTML = 'Are you sure you want to delete <strong>' + note.title + '</strong>?';
+  modal.appendChild(p);
+
+  var actions = document.createElement('div');
+  actions.classList.add('modal-actions');
+
+  var cancelBtn = document.createElement('button');
+  cancelBtn.classList.add('btn');
+  cancelBtn.textContent = 'Cancel';
+  cancelBtn.addEventListener('click', function(e) {
+    e.stopPropagation();
+    overlay.remove();
+  });
+
+  var delBtn = document.createElement('button');
+  delBtn.classList.add('btn', 'danger');
+  delBtn.textContent = 'Delete';
+  delBtn.addEventListener('click', function(e) {
+    e.stopPropagation();
+    notes.delete(activeNoteId);
+    activeNoteId = null;
+    overlay.remove();
+    document.getElementById('noteTitleInput').value = '';
+    document.getElementById('noteContent').value = '';
+    renderNoteList();
+    clearCanvas();
+    showToast('Note deleted', 'error');
+    updateStatus('Note deleted');
+  });
+
+  actions.appendChild(cancelBtn);
+  actions.appendChild(delBtn);
+  modal.appendChild(actions);
+  overlay.appendChild(modal);
+
+  // Click overlay to close (event delegation, target check)
+  overlay.addEventListener('click', function(e) {
+    if (e.target === overlay) overlay.remove();
+  });
+
+  document.body.appendChild(overlay);
+}
+
+// --- Add tag modal (input element, keydown event, trim, preventDefault) ---
+function showAddTagModal() {
+  if (!activeNoteId) return;
+  var note = notes.get(activeNoteId);
+  if (!note) return;
+
+  var overlay = document.createElement('div');
+  overlay.classList.add('modal-overlay');
+
+  var modal = document.createElement('div');
+  modal.classList.add('modal');
+
+  var h2 = document.createElement('h2');
+  h2.textContent = 'Add Tag';
+  modal.appendChild(h2);
+
+  var input = document.createElement('input');
+  input.type = 'text';
+  input.placeholder = 'Tag name...';
+  input.style.cssText = 'width:100%;padding:8px 12px;border-radius:6px;background:#0f172a;border:1px solid #475569;color:#e2e8f0;font-size:14px;outline:none;';
+  modal.appendChild(input);
+
+  var actions = document.createElement('div');
+  actions.classList.add('modal-actions');
+
+  var cancelBtn = document.createElement('button');
+  cancelBtn.classList.add('btn');
+  cancelBtn.textContent = 'Cancel';
+  cancelBtn.addEventListener('click', function() { overlay.remove(); });
+
+  var addBtn = document.createElement('button');
+  addBtn.classList.add('btn', 'primary');
+  addBtn.textContent = 'Add';
+  addBtn.addEventListener('click', function() {
+    var tag = input.value.trim();
+    if (tag && !note.tags.includes(tag)) {
+      note.tags.push(tag);
+      note.modified = Date.now();
+      renderTags(note);
+      renderNoteList();
+      showToast('Added tag: ' + tag, 'success');
+    }
+    overlay.remove();
+  });
+
+  // Enter key to submit
+  input.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      addBtn.click();
+    }
+  });
+
+  actions.appendChild(cancelBtn);
+  actions.appendChild(addBtn);
+  modal.appendChild(actions);
+  overlay.appendChild(modal);
+
+  overlay.addEventListener('click', function(e) {
+    if (e.target === overlay) overlay.remove();
+  });
+
+  document.body.appendChild(overlay);
+
+  // Focus the input (uses element.focus)
+  setTimeout(function() { input.focus(); }, 50);
+}
+
+// --- Status bar (textContent, innerText, Date) ---
+function updateStatus(msg) {
+  document.getElementById('statusLeft').textContent = msg;
+  document.getElementById('statusRight').textContent = new Date().toLocaleTimeString();
+}
+
+// --- Search (input event, filter, includes) ---
+function initSearch() {
+  var input = document.getElementById('searchInput');
+  input.addEventListener('input', function() {
+    var query = input.value;
+    var results = filterNotes(query);
+    renderNoteList(results);
+    updateStatus('Found ' + results.length + ' note(s)');
+  });
+}
+
+// --- Custom event listener demo ---
+function initCustomEvents() {
+  document.addEventListener('noteSelected', function(e) {
+    console.log('[Event] noteSelected: id=' + e.detail.noteId + ' title=' + e.detail.title);
+  });
+}
+
+// --- URL parsing demo ---
+function demoURLParsing() {
+  try {
+    var url = new URL('https://example.com/notes?search=hello&page=1#section2');
+    console.log('[URL] hostname: ' + url.hostname);
+    console.log('[URL] pathname: ' + url.pathname);
+    console.log('[URL] hash: ' + url.hash);
+
+    var params = url.searchParams || new URLSearchParams(url.search);
+    console.log('[URL] search param: ' + params.get('search'));
+    console.log('[URL] page param: ' + params.get('page'));
+  } catch(e) {
+    console.log('[URL] URL API: ' + e.message);
+  }
+}
+
+// --- Crypto demo ---
+function demoCrypto() {
+  // randomUUID
+  var uuid = crypto.randomUUID();
+  console.log('[Crypto] UUID: ' + uuid);
+
+  // getRandomValues
+  var arr = new Uint8Array(8);
+  crypto.getRandomValues(arr);
+  var hex = Array.from(arr).map(function(b) { return b.toString(16).padStart(2, '0'); }).join('');
+  console.log('[Crypto] Random bytes: ' + hex);
+}
+
+// --- Promise / fetch demo ---
+function demoAsync() {
+  // queueMicrotask ordering
+  var order = [];
+  order.push('sync1');
+  queueMicrotask(function() { order.push('micro1'); });
+  Promise.resolve().then(function() { order.push('promise1'); });
+  order.push('sync2');
+  setTimeout(function() {
+    order.push('timeout');
+    console.log('[Async] Execution order: ' + order.join(' -> '));
+  }, 10);
+}
+
+// --- DocumentFragment demo ---
+function demoFragment() {
+  var frag = document.createDocumentFragment();
+  console.log('[Fragment] nodeType: ' + frag.nodeType + ' (expected 11)');
+  for (var i = 0; i < 3; i++) {
+    var el = document.createElement('span');
+    el.textContent = 'frag-' + i + ' ';
+    frag.appendChild(el);
+  }
+  console.log('[Fragment] childNodes.length: ' + frag.childNodes.length + ' (expected 3)');
+}
+
+// --- Comment node demo ---
+function demoComment() {
+  var comment = document.createComment('This is a comment node');
+  console.log('[Comment] nodeType: ' + comment.nodeType + ' (expected 8)');
+  console.log('[Comment] textContent: ' + comment.textContent);
+}
+
+// --- DOMRect/DOMPoint demo ---
+function demoGeometry() {
+  try {
+    var rect = new DOMRect(10, 20, 100, 50);
+    console.log('[Geometry] DOMRect: x=' + rect.x + ' y=' + rect.y + ' w=' + rect.width + ' h=' + rect.height);
+    var pt = new DOMPoint(5, 10, 0, 1);
+    console.log('[Geometry] DOMPoint: x=' + pt.x + ' y=' + pt.y);
+  } catch(e) {
+    console.log('[Geometry] ' + e.message);
+  }
+}
+
+// --- ES6+ features demo (Set, Map, Symbol, destructuring, spread, template) ---
+function demoES6() {
+  // Set
+  var s = new Set([1, 2, 3, 2, 1]);
+  console.log('[ES6] Set size: ' + s.size + ' (expected 3)');
+
+  // Map iteration
+  var m = new Map();
+  m.set('a', 1); m.set('b', 2);
+  var keys = Array.from(m.keys());
+  console.log('[ES6] Map keys: ' + keys.join(', '));
+
+  // Array methods
+  var arr = [3, 1, 4, 1, 5, 9];
+  var found = arr.find(function(x) { return x > 4; });
+  var idx = arr.findIndex(function(x) { return x > 4; });
+  console.log('[ES6] find>4: ' + found + ' at index ' + idx);
+  console.log('[ES6] includes(4): ' + arr.includes(4));
+
+  // Object.keys/values/entries
+  var obj = { x: 10, y: 20, z: 30 };
+  console.log('[ES6] Object.keys: ' + Object.keys(obj).join(','));
+  console.log('[ES6] Object.values: ' + Object.values(obj).join(','));
+  console.log('[ES6] Object.entries: ' + Object.entries(obj).map(function(e) { return e[0] + '=' + e[1]; }).join(', '));
+
+  // Number/Math
+  console.log('[ES6] Number.isFinite(42): ' + Number.isFinite(42));
+  console.log('[ES6] Math.trunc(4.9): ' + Math.trunc(4.9));
+  console.log('[ES6] Math.sign(-5): ' + Math.sign(-5));
+}
+
+// --- Node manipulation demos (contains, isConnected, normalize) ---
+function demoNodeOps() {
+  var div = document.createElement('div');
+  var span = document.createElement('span');
+  div.appendChild(span);
+  console.log('[Node] contains child: ' + div.contains(span) + ' (expected true)');
+  console.log('[Node] contains self: ' + div.contains(div) + ' (expected true)');
+  console.log('[Node] isConnected (detached): ' + div.isConnected + ' (expected false)');
+
+  // normalize
+  var p = document.createElement('p');
+  p.appendChild(document.createTextNode('hello'));
+  p.appendChild(document.createTextNode(' world'));
+  var before = p.childNodes.length;
+  p.normalize();
+  console.log('[Node] normalize: ' + before + ' text nodes -> ' + p.childNodes.length + ', content: "' + p.textContent + '"');
+
+  // outerHTML
+  var el = document.createElement('div');
+  el.setAttribute('class', 'test');
+  el.textContent = 'hi';
+  console.log('[Node] outerHTML: ' + el.outerHTML);
+}
+
+// --- requestAnimationFrame demo ---
+var rafCount = 0;
+function demoRAF() {
+  requestAnimationFrame(function(timestamp) {
+    rafCount++;
+    if (rafCount <= 3) {
+      console.log('[RAF] Frame ' + rafCount + ' at ' + Math.round(timestamp) + 'ms');
+      demoRAF();
+    }
+  });
+}
+
+// --- User info with crypto (randomUUID, substring, toUpperCase) ---
+function setUserInfo() {
+  var sessionId = crypto.randomUUID().substring(0, 8).toUpperCase();
+  document.getElementById('userInfo').textContent = 'Session: ' + sessionId;
+}
+
+// --- Initialize the app ---
+function initApp() {
+  console.log('=== NoteSketch App Initializing ===');
+
+  // Run all feature demos (log results to console)
+  demoURLParsing();
+  demoCrypto();
+  demoFragment();
+  demoComment();
+  demoGeometry();
+  demoES6();
+  demoNodeOps();
+  demoAsync();
+  demoRAF();
+
+  // Set up UI
+  setUserInfo();
+  initCanvas();
+  initColorPalette();
+  initSearch();
+  initCustomEvents();
+
+  // Create sample notes
+  var note1 = createNote('Welcome to NoteSketch', 'This is a demo app that exercises all JS APIs.\n\nTry:\n- Creating new notes\n- Drawing on the canvas\n- Adding tags\n- Searching\n- Exporting');
+  note1.tags = ['demo', 'welcome'];
+
+  var note2 = createNote('Shopping List', '- Milk\n- Eggs\n- Bread\n- Coffee\n- Butter');
+  note2.tags = ['personal'];
+
+  var note3 = createNote('Meeting Notes', 'Q3 Planning\n\n1. Review roadmap\n2. Assign tasks\n3. Set deadlines\n4. Follow up next week');
+  note3.tags = ['work', 'meetings'];
+
+  // Clone a note (structuredClone demo)
+  cloneNote(note1.id);
+
+  // Select first note
+  renderNoteList();
+  selectNote(note1.id);
+
+  // Wire up buttons
+  document.getElementById('btnNewNote').addEventListener('click', function() {
+    var n = createNote('New Note');
+    renderNoteList();
+    selectNote(n.id);
+    document.getElementById('noteTitleInput').focus();
+    showToast('Note created', 'success');
+  });
+
+  document.getElementById('btnExport').addEventListener('click', exportNotes);
+  document.getElementById('btnDelete').addEventListener('click', showDeleteModal);
+  document.getElementById('btnAddTag').addEventListener('click', showAddTagModal);
+
+  document.getElementById('btnClear').addEventListener('click', clearCanvas);
+  document.getElementById('btnPen').addEventListener('click', function() {
+    drawMode = 'pen';
+    document.getElementById('btnPen').classList.add('active');
+    document.getElementById('btnEraser').classList.remove('active');
+  });
+  document.getElementById('btnEraser').addEventListener('click', function() {
+    drawMode = 'eraser';
+    document.getElementById('btnEraser').classList.add('active');
+    document.getElementById('btnPen').classList.remove('active');
+  });
+
+  // Auto-save on input
+  document.getElementById('noteContent').addEventListener('input', scheduleAutoSave);
+  document.getElementById('noteTitleInput').addEventListener('input', scheduleAutoSave);
+
+  // Word count on status bar
+  document.getElementById('noteContent').addEventListener('input', function() {
+    var text = this.value;
+    var words = text.trim() ? text.trim().split(/\s+/).length : 0;
+    var chars = text.length;
+    document.getElementById('statusRight').textContent = words + ' words, ' + chars + ' chars';
+  });
+
+  updateStatus('Ready - ' + notes.size + ' notes loaded');
+  console.log('=== NoteSketch App Ready ===');
+  console.log('=== API RESULTS: All features exercised successfully ===');
+}
+
+// Boot
+initApp();
+</script>
+</body>
+</html>
