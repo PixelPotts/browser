@@ -61,6 +61,10 @@ static LayoutBoxType display_type_for(DOMNode* node) {
         tag == "font" || tag == "bdi" || tag == "bdo" || tag == "data" || tag == "wbr")
         return LayoutBoxType::Inline;
 
+    // Line break
+    if (tag == "br")
+        return LayoutBoxType::Inline;
+
     // Replaced elements
     if (tag == "img" || tag == "canvas" || tag == "video" || tag == "svg" ||
         tag == "iframe" || tag == "object" || tag == "embed")
@@ -659,19 +663,70 @@ static void layout_block(LayoutBox* box, float containing_width, float containin
         }
     }
 
-    // Check if all children are inline (or text)
+    // Check if all children are inline (or text or inline-replaced)
     bool all_inline = true;
+    bool has_replaced = false;
     for (auto& child : box->children) {
-        if (is_block_level(child->type) || child->type == LayoutBoxType::Replaced) {
+        if (is_block_level(child->type)) {
             all_inline = false;
             break;
         }
+        if (child->type == LayoutBoxType::Replaced)
+            has_replaced = true;
     }
 
     if (all_inline && !box->children.empty()) {
-        // Inline formatting context
-        layout_inline(box, content_width, pango_ctx);
-    } else {
+        if (has_replaced) {
+            // Mixed inline + replaced: wrap consecutive inline runs in anonymous blocks
+            // so the BFC can stack them vertically alongside replaced elements
+            std::vector<std::unique_ptr<LayoutBox>> new_children;
+            std::vector<std::unique_ptr<LayoutBox>> inline_run;
+
+            auto flush_inline = [&]() {
+                if (inline_run.empty()) return;
+                auto anon = std::make_unique<LayoutBox>();
+                anon->type = LayoutBoxType::Anonymous;
+                anon->parent = box;
+                anon->content_rect.w = content_width;
+                // Inherit font properties
+                anon->font_family = box->font_family;
+                anon->font_size = box->font_size;
+                anon->font_weight = box->font_weight;
+                anon->font_style = box->font_style;
+                anon->color = box->color;
+                anon->text_align = box->text_align;
+                anon->white_space = box->white_space;
+                for (auto& c : inline_run) {
+                    c->parent = anon.get();
+                    anon->children.push_back(std::move(c));
+                }
+                inline_run.clear();
+                new_children.push_back(std::move(anon));
+            };
+
+            for (auto& child : box->children) {
+                if (child->type == LayoutBoxType::Replaced) {
+                    flush_inline();
+                    child->parent = box;
+                    new_children.push_back(std::move(child));
+                } else {
+                    inline_run.push_back(std::move(child));
+                }
+            }
+            flush_inline();
+            box->children = std::move(new_children);
+
+            // Now fall through to BFC to stack everything vertically
+            all_inline = false;
+        }
+
+        if (all_inline) {
+            // Pure inline formatting context (no replaced elements)
+            layout_inline(box, content_width, pango_ctx);
+        }
+    }
+
+    if (!all_inline) {
         // Block formatting context: stack children vertically
         float y_cursor = 0;
         float prev_margin_bottom = 0;
@@ -774,10 +829,16 @@ static void layout_inline(LayoutBox* box, float containing_width, PangoContext* 
             full_text += text;
             runs.push_back({child->dom_node, start, (int)text.size()});
         } else if (child->type == LayoutBoxType::Inline) {
-            for (auto& grandchild : child->children)
-                gather_text(grandchild.get());
+            // Handle <br> as a newline
+            if (child->dom_node && child->dom_node->tag_name == "br") {
+                full_text += '\n';
+            } else {
+                for (auto& grandchild : child->children)
+                    gather_text(grandchild.get());
+            }
         } else if (child->type == LayoutBoxType::Replaced || child->type == LayoutBoxType::InlineBlock) {
-            // TODO: handle inline replaced elements
+            // Inline replaced elements: insert a newline to separate text
+            full_text += '\n';
         }
     };
 
