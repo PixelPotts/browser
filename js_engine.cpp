@@ -519,6 +519,10 @@ void JSEngine::init(AppState* as, TabState* ts, Document* doc) {
     js_event_init(this);
     setupDocPolyfills(); // must run after js_bindings_init creates document
 
+    // Initialize compatibility layer (DOM methods, Web APIs, etc.)
+    extern void js_compat_init(JSEngine* engine);
+    js_compat_init(this);
+
     // Wire mutation observer hook
     if (document) {
         document->on_mutation = [this](uint32_t node_id, const std::string& type) {
