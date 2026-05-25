@@ -89,6 +89,9 @@ struct DOMNode {
     int min_height = -1;
     int max_height = -1;
     int box_sizing = 0;    // 0=content-box, 1=border-box
+    // Intrinsic sizing keywords: 0=none, 1=min-content, 2=max-content, 3=fit-content
+    int width_sizing = 0;
+    int height_sizing = 0;
     int overflow_x = -1;   // -1=inherit, 0=visible, 1=hidden, 2=scroll, 3=auto
     int overflow_y = -1;
     int width_pct  = -1;   // percentage width (0-100), -1=not percentage

@@ -426,7 +426,11 @@ static int resolve_text_align(LayoutBox* box) {
 
 // ---- Intrinsic width measurement ----
 
+// max-content: minimum width for no overflow (natural/preferred width)
 static float measure_intrinsic_width(LayoutBox* box, PangoContext* pango_ctx);
+
+// min-content: narrowest possible width without breaking words
+static float measure_min_content_width(LayoutBox* box, PangoContext* pango_ctx);
 
 // ---- Block Formatting Context layout ----
 
@@ -519,6 +523,79 @@ static float measure_intrinsic_width(LayoutBox* box, PangoContext* pango_ctx) {
     }
 
     return max_child_w + box->padding.horizontal() + box->border.horizontal();
+}
+
+// min-content width: narrowest width by wrapping text at every opportunity
+static float measure_min_content_width(LayoutBox* box, PangoContext* pango_ctx) {
+    if (!box) return 0;
+
+    // Explicit CSS width wins
+    if (box->dom_node) {
+        float w = resolve_width(box->dom_node, 0);
+        if (w >= 0) {
+            if (box->dom_node->box_sizing == 1) return w;
+            return w + box->padding.horizontal() + box->border.horizontal();
+        }
+    }
+
+    float max_word_w = 0;
+
+    bool all_inline = true;
+    for (auto& child : box->children) {
+        if (is_block_level(child->type) || child->type == LayoutBoxType::Replaced) {
+            all_inline = false;
+            break;
+        }
+    }
+
+    if (all_inline && !box->children.empty()) {
+        // Find the widest single word
+        std::string full_text;
+        std::function<void(LayoutBox*)> gather = [&](LayoutBox* child) {
+            if (child->type == LayoutBoxType::Text) {
+                std::string text = child->text;
+                std::string collapsed;
+                bool in_ws = false;
+                for (char c : text) {
+                    if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
+                        if (!in_ws) { collapsed += ' '; in_ws = true; }
+                    } else { collapsed += c; in_ws = false; }
+                }
+                full_text += collapsed;
+            } else if (child->type == LayoutBoxType::Inline) {
+                for (auto& gc : child->children) gather(gc.get());
+            }
+        };
+        for (auto& child : box->children) gather(child.get());
+
+        // Measure with WRAP_WORD at width=1 (forces wrapping at every word)
+        if (!full_text.empty()) {
+            PangoLayout* pl = pango_layout_new(pango_ctx);
+            PangoFontDescription* fd = pango_font_description_new();
+            std::string family = box->font_family.empty() ? "sans-serif" : box->font_family;
+            pango_font_description_set_family(fd, family.c_str());
+            int fs = box->font_size > 0 ? box->font_size : 16;
+            pango_font_description_set_size(fd, fs * PANGO_SCALE);
+            int fw = box->font_weight > 0 ? box->font_weight : 400;
+            pango_font_description_set_weight(fd, (PangoWeight)fw);
+            pango_layout_set_font_description(pl, fd);
+            pango_font_description_free(fd);
+            pango_layout_set_text(pl, full_text.c_str(), -1);
+            pango_layout_set_width(pl, 1); // force maximum wrapping
+            pango_layout_set_wrap(pl, PANGO_WRAP_WORD);
+            int pw, ph;
+            pango_layout_get_pixel_size(pl, &pw, &ph);
+            max_word_w = (float)pw;
+            g_object_unref(pl);
+        }
+    } else {
+        for (auto& child : box->children) {
+            float cw = measure_min_content_width(child.get(), pango_ctx);
+            if (cw > max_word_w) max_word_w = cw;
+        }
+    }
+
+    return max_word_w + box->padding.horizontal() + box->border.horizontal();
 }
 
 static void layout_box(LayoutBox* box, float containing_width, float containing_height,
@@ -632,14 +709,37 @@ static void layout_block(LayoutBox* box, float containing_width, float containin
     // Resolve content width
     float content_width = -1;
     if (node) {
-        content_width = resolve_width(node, containing_width);
-        if (content_width >= 0) {
-            // box-sizing: border-box
-            if (node->box_sizing == 1) {
-                content_width -= box->padding.horizontal() + box->border.horizontal();
-                if (content_width < 0) content_width = 0;
+        // Check for intrinsic sizing keywords first
+        if (node->width_sizing == 1) {
+            // min-content
+            float mc = measure_min_content_width(box, pango_ctx);
+            content_width = mc - box->padding.horizontal() - box->border.horizontal();
+            if (content_width < 0) content_width = 0;
+        } else if (node->width_sizing == 2) {
+            // max-content
+            float mc = measure_intrinsic_width(box, pango_ctx);
+            content_width = mc - box->padding.horizontal() - box->border.horizontal();
+            if (content_width < 0) content_width = 0;
+        } else if (node->width_sizing == 3) {
+            // fit-content: clamp between min-content and max-content, shrink-to-fit
+            float avail = containing_width - box->margin.horizontal()
+                          - box->padding.horizontal() - box->border.horizontal();
+            float max_c = measure_intrinsic_width(box, pango_ctx)
+                          - box->padding.horizontal() - box->border.horizontal();
+            float min_c = measure_min_content_width(box, pango_ctx)
+                          - box->padding.horizontal() - box->border.horizontal();
+            content_width = std::max(min_c, std::min(avail, max_c));
+            if (content_width < 0) content_width = 0;
+        } else {
+            content_width = resolve_width(node, containing_width);
+            if (content_width >= 0) {
+                // box-sizing: border-box
+                if (node->box_sizing == 1) {
+                    content_width -= box->padding.horizontal() + box->border.horizontal();
+                    if (content_width < 0) content_width = 0;
+                }
+                content_width = clamp_size(content_width, node, true);
             }
-            content_width = clamp_size(content_width, node, true);
         }
     }
 

@@ -756,6 +756,8 @@ struct BoxModel {
     int min_height = -1;
     int max_height = -1;
     int box_sizing = 0;    // 0=content-box, 1=border-box
+    int width_sizing = 0;  // 0=none, 1=min-content, 2=max-content, 3=fit-content
+    int height_sizing = 0;
     int overflow_x = -1;   // -1=inherit, 0=visible, 1=hidden, 2=scroll, 3=auto
     int overflow_y = -1;
     int width_pct  = -1;   // percentage width (0-100), -1=not percentage
@@ -805,15 +807,25 @@ static void apply_box(const std::string& decls, BoxModel& bm, int fs_ctx = 16) {
     { auto s=prop_val(decls,"padding-left");   if(!s.empty()) bm.padding[3]=parse_px_val(s, fs_ctx); }
     { auto s=prop_val(decls,"width");     auto sl=tolower_s(s);
       if(!s.empty()&&sl!="auto") {
-          size_t pct_pos = s.find('%');
-          if (pct_pos != std::string::npos) {
-              try { bm.width_pct = std::stoi(s.substr(0, pct_pos)); } catch(...){}
-          } else {
-              bm.width=parse_px_val(s, fs_ctx);
+          if (sl == "min-content") { bm.width_sizing = 1; }
+          else if (sl == "max-content") { bm.width_sizing = 2; }
+          else if (sl.substr(0,11) == "fit-content") { bm.width_sizing = 3; }
+          else {
+              size_t pct_pos = s.find('%');
+              if (pct_pos != std::string::npos) {
+                  try { bm.width_pct = std::stoi(s.substr(0, pct_pos)); } catch(...){}
+              } else {
+                  bm.width=parse_px_val(s, fs_ctx);
+              }
           }
       } }
     { auto s=prop_val(decls,"max-width"); if(!s.empty()&&tolower_s(s)!="none") bm.max_width=parse_px_val(s, fs_ctx); }
-    { auto s=prop_val(decls,"min-width"); if(!s.empty()) bm.min_width=parse_px_val(s, fs_ctx); }
+    { auto s=prop_val(decls,"min-width"); if(!s.empty()) {
+          auto sl=tolower_s(s);
+          if (sl == "min-content" || sl == "max-content" || sl.substr(0,11) == "fit-content")
+              {} // ignore for min-width for now (complex)
+          else bm.min_width=parse_px_val(s, fs_ctx);
+    } }
     { auto s=prop_val(decls,"height");    auto sl=tolower_s(s);
       if(!s.empty()&&sl!="auto") {
           size_t pct_pos = s.find('%');
@@ -1719,6 +1731,8 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
             if (bm.min_height >= 0) elem->min_height = bm.min_height;
             if (bm.max_height >= 0) elem->max_height = bm.max_height;
             if (bm.box_sizing > 0) elem->box_sizing = bm.box_sizing;
+            if (bm.width_sizing > 0) elem->width_sizing = bm.width_sizing;
+            if (bm.height_sizing > 0) elem->height_sizing = bm.height_sizing;
             if (bm.overflow_x >= 0) elem->overflow_x = bm.overflow_x;
             if (bm.overflow_y >= 0) elem->overflow_y = bm.overflow_y;
             if (bm.width_pct >= 0) elem->width_pct = bm.width_pct;
