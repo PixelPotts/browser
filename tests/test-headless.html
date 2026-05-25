@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html>
+<head><title>JS Compat Tests - Headless</title></head>
+<body>
+<div id="output"></div>
+<script>
+var passed = 0, failed = 0, total = 0;
+var output = [];
+
+function test(name, fn) {
+    total++;
+    try {
+        var result = fn();
+        if (result === true || result === undefined) {
+            passed++;
+            output.push('PASS: ' + name);
+        } else {
+            failed++;
+            output.push('FAIL: ' + name + ' (got: ' + JSON.stringify(result) + ')');
+        }
+    } catch(e) {
+        failed++;
+        output.push('FAIL: ' + name + ' (error: ' + e.message + ')');
+    }
+}
+
+// === GROUP 1: DOM Manipulation ===
+test('element.contains(self)', function() { var d = document.createElement('div'); return d.contains(d) === true; });
+test('element.contains(child)', function() { var p = document.createElement('div'); var c = document.createElement('span'); p.appendChild(c); return p.contains(c) === true; });
+test('element.contains(non-child)', function() { var a = document.createElement('div'); var b = document.createElement('div'); return a.contains(b) === false; });
+test('element.hasAttribute', function() { var d = document.createElement('div'); d.setAttribute('data-x', '1'); return d.hasAttribute('data-x') === true && d.hasAttribute('nope') === false; });
+test('element.hasChildNodes', function() { var d = document.createElement('div'); if (d.hasChildNodes()) return false; d.appendChild(document.createElement('span')); return d.hasChildNodes() === true; });
+test('element.toggleAttribute add', function() { var d = document.createElement('div'); return d.toggleAttribute('hidden') === true && d.hasAttribute('hidden'); });
+test('element.toggleAttribute remove', function() { var d = document.createElement('div'); d.setAttribute('hidden', ''); return d.toggleAttribute('hidden') === false && !d.hasAttribute('hidden'); });
+test('element.getAttributeNames', function() { var d = document.createElement('div'); d.setAttribute('data-a', '1'); d.setAttribute('data-b', '2'); var n = d.getAttributeNames(); return Array.isArray(n) && n.indexOf('data-a') >= 0; });
+
+// === GROUP 2: insertAdjacent ===
+test('insertAdjacentHTML beforeend', function() { var d = document.createElement('div'); d.innerHTML = '<p>first</p>'; document.body.appendChild(d); d.insertAdjacentHTML('beforeend', '<span>added</span>'); return d.children.length === 2; });
+test('insertAdjacentHTML afterbegin', function() { var d = document.createElement('div'); d.innerHTML = '<p>last</p>'; document.body.appendChild(d); d.insertAdjacentHTML('afterbegin', '<span>first</span>'); return d.children[0].tagName === 'SPAN'; });
+test('insertAdjacentElement', function() { var d = document.createElement('div'); document.body.appendChild(d); var s = document.createElement('span'); d.insertAdjacentElement('beforeend', s); return d.children[0] === s; });
+test('insertAdjacentText', function() { var d = document.createElement('div'); document.body.appendChild(d); d.insertAdjacentText('beforeend', 'hello'); return d.textContent === 'hello'; });
+
+// === GROUP 3: append/prepend/before/after/replaceWith ===
+test('element.append(node)', function() { var d = document.createElement('div'); var s = document.createElement('span'); d.append(s); return d.children[0] === s; });
+test('element.append(string)', function() { var d = document.createElement('div'); d.append('hello'); return d.textContent === 'hello'; });
+test('element.prepend(node)', function() { var d = document.createElement('div'); d.innerHTML = '<p>old</p>'; var s = document.createElement('span'); d.prepend(s); return d.children[0] === s; });
+test('element.before(node)', function() { var c = document.createElement('div'); var r = document.createElement('p'); c.appendChild(r); document.body.appendChild(c); var s = document.createElement('span'); r.before(s); return c.children[0] === s; });
+test('element.after(node)', function() { var c = document.createElement('div'); var r = document.createElement('p'); c.appendChild(r); document.body.appendChild(c); var s = document.createElement('span'); r.after(s); return c.children[1] === s; });
+test('element.replaceWith(node)', function() { var c = document.createElement('div'); var o = document.createElement('p'); c.appendChild(o); document.body.appendChild(c); var n = document.createElement('span'); o.replaceWith(n); return c.children[0] === n; });
+test('element.replaceChildren', function() { var d = document.createElement('div'); d.innerHTML = '<p>a</p><p>b</p>'; var s = document.createElement('span'); d.replaceChildren(s); return d.children.length === 1 && d.children[0] === s; });
+
+// === GROUP 4: Element Properties ===
+test('element.outerHTML', function() { var d = document.createElement('div'); d.innerHTML = '<span>hi</span>'; return d.outerHTML.indexOf('<div>') >= 0; });
+test('element.isConnected false', function() { return document.createElement('div').isConnected === false; });
+test('element.isConnected true', function() { var d = document.createElement('div'); document.body.appendChild(d); return d.isConnected === true; });
+test('element.childElementCount', function() { var d = document.createElement('div'); d.innerHTML = '<p>1</p><p>2</p><p>3</p>'; return d.childElementCount === 3; });
+test('element.firstElementChild', function() { var d = document.createElement('div'); d.innerHTML = '<span>f</span><p>s</p>'; return d.firstElementChild.tagName === 'SPAN'; });
+test('element.lastElementChild', function() { var d = document.createElement('div'); d.innerHTML = '<span>f</span><p>s</p>'; return d.lastElementChild.tagName === 'P'; });
+test('element.innerText getter', function() { var d = document.createElement('div'); d.innerHTML = '<span>hello</span>'; return d.innerText.indexOf('hello') >= 0; });
+test('element.innerText setter', function() { var d = document.createElement('div'); d.innerText = 'new'; return d.textContent === 'new'; });
+
+// === GROUP 5: Document ===
+test('document.createDocumentFragment', function() { return document.createDocumentFragment() !== null; });
+test('document.createComment', function() { var c = document.createComment('test'); return c !== null && c.nodeType === 8; });
+test('document.title', function() { return typeof document.title === 'string'; });
+test('document.readyState', function() { return document.readyState === 'complete'; });
+test('document.URL', function() { return typeof document.URL === 'string'; });
+test('document.compatMode', function() { return document.compatMode === 'CSS1Compat'; });
+test('document.characterSet', function() { return document.characterSet === 'UTF-8'; });
+test('document.contentType', function() { return document.contentType === 'text/html'; });
+test('document.nodeType', function() { return document.nodeType === 9; });
+test('document.nodeName', function() { return document.nodeName === '#document'; });
+
+// === GROUP 6: structuredClone ===
+test('structuredClone exists', function() { return typeof structuredClone === 'function'; });
+test('clone primitive', function() { return structuredClone(42) === 42; });
+test('clone object deep', function() { var o = {a:{b:1}}; var c = structuredClone(o); c.a.b = 2; return o.a.b === 1; });
+test('clone array', function() { var a = [1,[2,3]]; var c = structuredClone(a); c[1][0] = 99; return a[1][0] === 2; });
+
+// === GROUP 7: queueMicrotask ===
+test('queueMicrotask exists', function() { return typeof queueMicrotask === 'function'; });
+
+// === GROUP 8: crypto ===
+test('crypto exists', function() { return typeof crypto === 'object'; });
+test('crypto.randomUUID', function() { var u = crypto.randomUUID(); return u.length === 36 && u[14] === '4'; });
+test('crypto.randomUUID unique', function() { return crypto.randomUUID() !== crypto.randomUUID(); });
+test('crypto.getRandomValues', function() { return typeof crypto.getRandomValues === 'function'; });
+
+// === GROUP 9: TextEncoder/TextDecoder ===
+test('TextEncoder exists', function() { return typeof TextEncoder === 'function'; });
+test('TextEncoder encode', function() { var e = new TextEncoder(); var r = e.encode('hello'); return r.length === 5 && r[0] === 104; });
+test('TextDecoder exists', function() { return typeof TextDecoder === 'function'; });
+test('TextDecoder decode', function() { var e = new TextEncoder(); var d = new TextDecoder(); return d.decode(e.encode('world')) === 'world'; });
+
+// === GROUP 10: requestIdleCallback ===
+test('requestIdleCallback', function() { return typeof requestIdleCallback === 'function'; });
+test('cancelIdleCallback', function() { return typeof cancelIdleCallback === 'function'; });
+
+// === GROUP 11: DOMRect/DOMPoint ===
+test('DOMRect constructor', function() { var r = new DOMRect(10,20,100,50); return r.x === 10 && r.width === 100; });
+test('DOMRect computed', function() { var r = new DOMRect(10,20,100,50); return r.top === 20 && r.right === 110; });
+test('DOMPoint constructor', function() { var p = new DOMPoint(1,2,3,4); return p.x === 1 && p.w === 4; });
+
+// === GROUP 12: ES2020+ ===
+test('Optional chaining', function() { var o = {a:{b:1}}; return o?.a?.b === 1 && o?.c?.d === undefined; });
+test('Nullish coalescing', function() { return (null ?? 'def') === 'def' && (0 ?? 'def') === 0; });
+test('globalThis', function() { return typeof globalThis === 'object'; });
+test('Promise.allSettled', function() { return typeof Promise.allSettled === 'function'; });
+test('String.replaceAll', function() { return 'aabb'.replaceAll('b','x') === 'aaxx'; });
+test('Array.at', function() { return [1,2,3].at(-1) === 3; });
+test('String.at', function() { return 'hello'.at(-1) === 'o'; });
+test('Object.hasOwn', function() { return Object.hasOwn({a:1}, 'a') && !Object.hasOwn({a:1}, 'b'); });
+test('Array.findLast', function() { return [1,2,3].findLast(function(x){return x<3;}) === 2; });
+test('Array.findLastIndex', function() { return [1,2,3].findLastIndex(function(x){return x<3;}) === 1; });
+test('Array.toSorted', function() { var a = [3,1,2]; var s = a.toSorted(); return s[0] === 1 && a[0] === 3; });
+test('Array.toReversed', function() { var a = [1,2,3]; var r = a.toReversed(); return r[0] === 3 && a[0] === 1; });
+test('Array.with', function() { return [1,2,3].with(1,99)[1] === 99; });
+test('WeakRef', function() { var o = {}; return new WeakRef(o).deref() === o; });
+test('Object.fromEntries', function() { return Object.fromEntries([['a',1]]).a === 1; });
+
+// === GROUP 13: Symbols/Iterators ===
+test('Symbol', function() { return typeof Symbol === 'function'; });
+test('Symbol.iterator', function() { return typeof Symbol.iterator === 'symbol'; });
+test('for...of array', function() { var s = 0; for (var x of [1,2,3]) s += x; return s === 6; });
+test('Map iteration', function() { var m = new Map([['a',1]]); var k = []; for (var [a] of m) k.push(a); return k[0] === 'a'; });
+test('Set iteration', function() { var s = new Set([1,2]); var v = []; for (var x of s) v.push(x); return v.length === 2; });
+
+// === GROUP 14: Map/Set ===
+test('Map basic', function() { var m = new Map(); m.set('k','v'); return m.get('k') === 'v'; });
+test('Set basic', function() { var s = new Set([1,2,2,3]); return s.size === 3; });
+test('WeakMap', function() { var wm = new WeakMap(); var k = {}; wm.set(k, 42); return wm.get(k) === 42; });
+
+// === GROUP 15: Promises ===
+test('Promise constructor', function() { return new Promise(function(r){r(1);}) instanceof Promise; });
+test('Promise.resolve', function() { return typeof Promise.resolve(1).then === 'function'; });
+test('async/await', function() { try { var f = new Function('return (async function(){return 42;})()'); return typeof f().then === 'function'; } catch(e) { return false; }});
+
+// === GROUP 16: Array methods ===
+test('Array.from', function() { return Array.from('abc').join('') === 'abc'; });
+test('Array.isArray', function() { return Array.isArray([]) && !Array.isArray({}); });
+test('flat', function() { return [1,[2,[3]]].flat().join(',') === '1,2,3'; });
+test('flatMap', function() { return [1,2].flatMap(function(x){return [x,x*2];}).length === 4; });
+test('includes', function() { return [1,2,3].includes(2); });
+test('find', function() { return [1,2,3].find(function(x){return x>1;}) === 2; });
+test('findIndex', function() { return [1,2,3].findIndex(function(x){return x>1;}) === 1; });
+
+// === GROUP 17: String methods ===
+test('String.includes', function() { return 'hello'.includes('ell'); });
+test('startsWith', function() { return 'hello'.startsWith('hel'); });
+test('endsWith', function() { return 'hello'.endsWith('llo'); });
+test('repeat', function() { return 'ab'.repeat(3) === 'ababab'; });
+test('padStart', function() { return '5'.padStart(3,'0') === '005'; });
+test('padEnd', function() { return '5'.padEnd(3,'0') === '500'; });
+test('trimStart', function() { return '  hi  '.trimStart() === 'hi  '; });
+test('trimEnd', function() { return '  hi  '.trimEnd() === '  hi'; });
+
+// === GROUP 18: Object methods ===
+test('Object.keys', function() { return Object.keys({a:1,b:2}).length === 2; });
+test('Object.values', function() { return Object.values({a:1,b:2}).join(',') === '1,2'; });
+test('Object.entries', function() { return Object.entries({a:1})[0][0] === 'a'; });
+test('Object.assign', function() { return Object.assign({},{a:1}).a === 1; });
+test('Object.freeze', function() { var o = Object.freeze({a:1}); o.a = 2; return o.a === 1; });
+test('Spread', function() { var a = {x:1}; return ({...a, y:2}).y === 2; });
+test('Destructuring', function() { var {a} = {a:1}; return a === 1; });
+
+// === GROUP 19: Events ===
+test('addEventListener/dispatchEvent', function() { var d = document.createElement('div'); var f = false; d.addEventListener('click', function(){f=true;}); d.dispatchEvent(new Event('click')); return f; });
+test('CustomEvent detail', function() { var d = document.createElement('div'); var v = null; d.addEventListener('x', function(e){v=e.detail;}); d.dispatchEvent(new CustomEvent('x',{detail:42})); return v === 42; });
+test('Event constructor', function() { var e = new Event('test',{bubbles:true}); return e.type === 'test' && e.bubbles === true; });
+test('removeEventListener', function() { var d = document.createElement('div'); var c = 0; var h = function(){c++;}; d.addEventListener('click',h); d.dispatchEvent(new Event('click')); d.removeEventListener('click',h); d.dispatchEvent(new Event('click')); return c === 1; });
+test('event.preventDefault', function() { var e = new Event('t',{cancelable:true}); e.preventDefault(); return e.defaultPrevented === true; });
+
+// === GROUP 20: classList ===
+test('classList.add', function() { var d = document.createElement('div'); d.classList.add('foo'); return d.className.indexOf('foo') >= 0; });
+test('classList.remove', function() { var d = document.createElement('div'); d.classList.add('foo'); d.classList.remove('foo'); return d.className.indexOf('foo') < 0; });
+test('classList.toggle', function() { var d = document.createElement('div'); d.classList.toggle('x'); return d.classList.contains('x'); });
+test('classList.contains', function() { var d = document.createElement('div'); d.classList.add('bar'); return d.classList.contains('bar'); });
+test('classList.replace', function() { var d = document.createElement('div'); d.classList.add('old'); return d.classList.replace('old','new') === true && d.classList.contains('new'); });
+
+// === GROUP 21-25: Fetch, URL, JSON, Error, RegExp, Date, Number ===
+test('fetch exists', function() { return typeof fetch === 'function'; });
+test('URL constructor', function() { var u = new URL('https://example.com/path'); return u.hostname === 'example.com'; });
+test('URLSearchParams', function() { var sp = new URLSearchParams('a=1&b=2'); return sp.get('a') === '1'; });
+test('JSON.parse', function() { return JSON.parse('{"a":1}').a === 1; });
+test('JSON.stringify', function() { return JSON.stringify({a:1}) === '{"a":1}'; });
+test('Error types', function() { return new TypeError() instanceof Error; });
+test('RegExp test', function() { return /hello/.test('hello world'); });
+test('Named groups', function() { return /(?<y>\d{4})/.exec('2024').groups.y === '2024'; });
+test('Date.now', function() { return typeof Date.now() === 'number'; });
+test('Number.isFinite', function() { return Number.isFinite(42) && !Number.isFinite(Infinity); });
+test('Number.isNaN', function() { return Number.isNaN(NaN) && !Number.isNaN(42); });
+test('Math.trunc', function() { return Math.trunc(4.7) === 4; });
+test('Math.sign', function() { return Math.sign(-5) === -1; });
+
+// === GROUP 26: Proxy/Reflect ===
+test('Proxy', function() { var p = new Proxy({},{get:function(t,k){return k==='x'?42:undefined;}}); return p.x === 42; });
+test('Reflect.ownKeys', function() { return Reflect.ownKeys({a:1}).length === 1; });
+
+// === GROUP 27: Generators ===
+test('Generator', function() { function* g(){yield 1;yield 2;} return [...g()].join(',') === '1,2'; });
+test('async function', function() { async function f(){return 1;} return f() instanceof Promise; });
+
+// === GROUP 28: Template literals ===
+test('Template literal', function() { var x = 42; return `v:${x}` === 'v:42'; });
+
+// === GROUP 29: Classes ===
+test('Class', function() { class F{constructor(x){this.x=x;}} return new F(5).x === 5; });
+test('Class extends', function() { class B{hi(){return 'b';}} class C extends B{} return new C() instanceof B; });
+
+// === GROUP 30: Timers ===
+test('setTimeout', function() { return typeof setTimeout === 'function'; });
+test('setInterval', function() { return typeof setInterval === 'function'; });
+test('requestAnimationFrame', function() { return typeof requestAnimationFrame === 'function'; });
+
+// === GROUP 31: Console ===
+test('console.log', function() { return typeof console.log === 'function'; });
+test('console.warn', function() { return typeof console.warn === 'function'; });
+test('console.error', function() { return typeof console.error === 'function'; });
+
+// === GROUP 32: Performance ===
+test('performance.now', function() { return typeof performance.now() === 'number'; });
+
+// === GROUP 33: Navigator/Location/History ===
+test('navigator.userAgent', function() { return typeof navigator.userAgent === 'string'; });
+test('location.href', function() { return typeof location.href === 'string'; });
+test('history.pushState', function() { return typeof history.pushState === 'function'; });
+
+// === GROUP 34: Storage ===
+test('localStorage', function() { localStorage.setItem('t','v'); return localStorage.getItem('t') === 'v'; });
+test('sessionStorage', function() { return typeof sessionStorage === 'object'; });
+
+// === GROUP 35: FormData/Blob ===
+test('FormData', function() { var fd = new FormData(); fd.append('k','v'); return fd.get('k') === 'v'; });
+test('Blob', function() { var b = new Blob(['hello'],{type:'text/plain'}); return b.size === 5; });
+
+// === GROUP 36: TreeWalker/Range ===
+test('createTreeWalker', function() { return typeof document.createTreeWalker === 'function'; });
+test('createRange', function() { return typeof document.createRange === 'function'; });
+test('NodeFilter', function() { return NodeFilter.SHOW_ELEMENT === 1; });
+
+// === GROUP 37: getSelection ===
+test('getSelection', function() { return typeof window.getSelection === 'function'; });
+
+// === GROUP 38: focus/blur/click ===
+test('element.focus', function() { document.createElement('input').focus(); return true; });
+test('element.click dispatch', function() { var d = document.createElement('div'); document.body.appendChild(d); var c = false; d.addEventListener('click', function(){c=true;}); d.click(); return c; });
+
+// === GROUP 39: Misc DOM ===
+test('isSameNode', function() { var d = document.createElement('div'); return d.isSameNode(d); });
+test('isEqualNode', function() { return document.createElement('div').isEqualNode(document.createElement('div')); });
+test('getRootNode', function() { var d = document.createElement('div'); document.body.appendChild(d); return d.getRootNode() !== null; });
+test('compareDocumentPosition', function() { var d = document.createElement('div'); return typeof d.compareDocumentPosition(document.body) === 'number'; });
+
+// === GROUP 40: getComputedStyle/matchMedia ===
+test('getComputedStyle', function() { return typeof getComputedStyle === 'function'; });
+test('matchMedia', function() { return typeof matchMedia === 'function'; });
+
+// === GROUP 41: Canvas ===
+test('canvas getContext', function() { var c = document.createElement('canvas'); document.body.appendChild(c); return c.getContext('2d') !== null; });
+test('ctx.fillRect', function() { var c = document.createElement('canvas'); document.body.appendChild(c); return typeof c.getContext('2d').fillRect === 'function'; });
+test('ctx.beginPath', function() { var c = document.createElement('canvas'); document.body.appendChild(c); return typeof c.getContext('2d').beginPath === 'function'; });
+test('ctx.save/restore', function() { var c = document.createElement('canvas'); document.body.appendChild(c); var ctx = c.getContext('2d'); return typeof ctx.save === 'function' && typeof ctx.restore === 'function'; });
+test('ctx.measureText', function() { var c = document.createElement('canvas'); document.body.appendChild(c); return typeof c.getContext('2d').measureText('x').width === 'number'; });
+
+// === GROUP 42: Encoding ===
+test('btoa/atob', function() { return atob(btoa('hello')) === 'hello'; });
+test('encodeURIComponent', function() { return decodeURIComponent(encodeURIComponent('a b')) === 'a b'; });
+
+// === GROUP 43: Observers ===
+test('MutationObserver', function() { return typeof MutationObserver === 'function'; });
+test('ResizeObserver', function() { return typeof ResizeObserver === 'function'; });
+test('IntersectionObserver', function() { return typeof IntersectionObserver === 'function'; });
+
+// Print results summary
+var summary = '\n=== RESULTS: ' + passed + '/' + total + ' passed, ' + failed + ' failed ===\n';
+console.log(summary);
+
+// Print failures
+var failLines = output.filter(function(l) { return l.indexOf('FAIL') === 0; });
+failLines.forEach(function(l) { console.log(l); });
+
+// Write to visible output
+document.getElementById('output').textContent = summary + '\n' + output.join('\n');
+</script>
+</body>
+</html>

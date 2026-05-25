@@ -67,13 +67,18 @@ struct ClassListOpaque {
 
 // Node wrapper cache for identity comparison (node_id -> JSValue)
 static std::unordered_map<uint32_t, JSValue> g_node_cache;
+// Canvas context cache (node_id -> JSValue) - forward declared, defined near canvas code
+static std::unordered_map<uint32_t, JSValue> g_ctx2d_cache;
 
 void clear_node_cache() {
     if (g_js_engine && g_js_engine->ctx) {
         for (auto& [id, val] : g_node_cache)
             JS_FreeValue(g_js_engine->ctx, val);
+        for (auto& [id, val] : g_ctx2d_cache)
+            JS_FreeValue(g_js_engine->ctx, val);
     }
     g_node_cache.clear();
+    g_ctx2d_cache.clear();
 }
 
 // ---- Helpers ----
@@ -329,6 +334,10 @@ static JSValue js_element_set_textContent(JSContext* ctx, JSValueConst this_val,
     const char* s = JS_ToCString(ctx, argv[0]);
     if (s) {
         node->setTextContent(s, g_js_engine->document->next_id);
+        // Register new text child in node_map so JS can resolve it
+        for (auto& child : node->children) {
+            g_js_engine->document->node_map[child->node_id] = child.get();
+        }
         JS_FreeCString(ctx, s);
         g_js_engine->scheduleRerender();
         if (g_js_engine->document->on_mutation)
@@ -1937,7 +1946,69 @@ static JSValue js_element_dispatchEvent(JSContext* ctx, JSValueConst this_val,
     if (!type_str) return JS_TRUE;
     std::string type(type_str);
     JS_FreeCString(ctx, type_str);
-    js_dispatch_event(g_js_engine, node->node_id, type, 0, 0);
+
+    // Check if this is a JS-constructed event (has properties like detail)
+    // Pass the original event object directly to handlers to preserve custom props
+    JSValue event_obj = argv[0];
+
+    // Collect bubble path
+    std::vector<DOMNode*> path;
+    DOMNode* cur = node;
+    while (cur) {
+        path.push_back(cur);
+        cur = cur->parent;
+    }
+
+    // Set target on the event object
+    JSValue target_wrapped = js_wrap_node(ctx, node);
+    JS_SetPropertyStr(ctx, JS_DupValue(ctx, event_obj), "target", target_wrapped);
+
+    // Dispatch to each node in bubble path
+    JSValue global = JS_GetGlobalObject(ctx);
+    bool stopped = false;
+    for (size_t pi = 0; pi < path.size() && !stopped; pi++) {
+        DOMNode* dispatch_node = path[pi];
+
+        // Set currentTarget
+        JSValue ct = js_wrap_node(ctx, dispatch_node);
+        JS_SetPropertyStr(ctx, JS_DupValue(ctx, event_obj), "currentTarget", ct);
+
+        for (const auto& listener : dispatch_node->listeners) {
+            if (listener.type != type) continue;
+            std::string key = "__handler_" + std::to_string(listener.handler_id);
+            JSValue handler = JS_GetPropertyStr(ctx, global, key.c_str());
+            if (JS_IsFunction(ctx, handler)) {
+                JSValue this_obj = js_wrap_node(ctx, dispatch_node);
+                JSValue args[1] = {event_obj};
+                JSValue ret = JS_Call(ctx, handler, this_obj, 1, args);
+                if (JS_IsException(ret)) {
+                    JSValue exc = JS_GetException(ctx);
+                    const char* s = JS_ToCString(ctx, exc);
+                    if (s) {
+                        fprintf(stderr, "[JS Event Error] %s\n", s);
+                        g_js_engine->addConsoleEntry(ConsoleLevel::ERROR, std::string(s), "event:" + type);
+                        JS_FreeCString(ctx, s);
+                    }
+                    JS_FreeValue(ctx, exc);
+                }
+                JS_FreeValue(ctx, ret);
+                JS_FreeValue(ctx, this_obj);
+            }
+            JS_FreeValue(ctx, handler);
+        }
+
+        // Check if event has bubbles=false or stopPropagation was called
+        JSValue bubbles = JS_GetPropertyStr(ctx, event_obj, "bubbles");
+        if (!JS_ToBool(ctx, bubbles) && pi == 0) stopped = true;
+        JS_FreeValue(ctx, bubbles);
+
+        // Check for stopPropagation (if using JS Event, check _stopped flag)
+        JSValue dp = JS_GetPropertyStr(ctx, event_obj, "_propagationStopped");
+        if (JS_ToBool(ctx, dp)) stopped = true;
+        JS_FreeValue(ctx, dp);
+    }
+    JS_FreeValue(ctx, global);
+    g_js_engine->executePendingJobs();
     return JS_TRUE;
 }
 
@@ -2183,10 +2254,20 @@ std::unordered_map<uint32_t, CanvasState> g_canvas_map;
 
 struct CanvasCtxOpaque {
     uint32_t node_id;
+    cairo_t* cr = nullptr; // persistent cairo context for path operations
+
+    cairo_t* get_cr() {
+        if (cr) return cr;
+        auto it = g_canvas_map.find(node_id);
+        if (it == g_canvas_map.end() || !it->second.surface) return nullptr;
+        cr = cairo_create(it->second.surface);
+        return cr;
+    }
 };
 
 static void js_canvas_ctx_finalizer(JSRuntime* rt, JSValue val) {
     auto* op = (CanvasCtxOpaque*)JS_GetOpaque(val, js_canvas_ctx_class_id);
+    if (op && op->cr) cairo_destroy(op->cr);
     delete op;
 }
 
@@ -2397,6 +2478,12 @@ static JSValue js_element_getContext(JSContext* ctx, JSValueConst this_val,
     JS_FreeCString(ctx, type);
     if (!is_2d) return JS_NULL;
 
+    // Return cached context if we already created one for this canvas
+    auto cache_it = g_ctx2d_cache.find(eop->node_id);
+    if (cache_it != g_ctx2d_cache.end()) {
+        return JS_DupValue(ctx, cache_it->second);
+    }
+
     // Create context object
     JSValue obj = JS_NewObjectClass(ctx, js_canvas_ctx_class_id);
     auto* cop = new CanvasCtxOpaque{eop->node_id};
@@ -2434,40 +2521,284 @@ static JSValue js_element_getContext(JSContext* ctx, JSValueConst this_val,
         JS_NewCFunction(ctx, (JSCFunction*)js_ctx_get_canvas, "get canvas", 0),
         JS_UNDEFINED, JS_PROP_CONFIGURABLE);
 
-    // Stub methods needed for html5test canvas tests
-    auto noop = [](JSContext* c, JSValueConst, int, JSValueConst*) -> JSValue { return JS_UNDEFINED; };
-    JS_SetPropertyStr(ctx, obj, "fillText", JS_NewCFunction(ctx, noop, "fillText", 4));
-    JS_SetPropertyStr(ctx, obj, "strokeText", JS_NewCFunction(ctx, noop, "strokeText", 4));
-    JS_SetPropertyStr(ctx, obj, "measureText", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst, int, JSValueConst*) -> JSValue {
+    // --- Real Canvas 2D methods using persistent cairo_t ---
+    // Helper lambda macros (inline static functions would be better but lambdas work for this pattern)
+    #define CTX_OP auto* _op = (CanvasCtxOpaque*)JS_GetOpaque(this_val, js_canvas_ctx_class_id); \
+                   if (!_op) return JS_UNDEFINED; cairo_t* _cr = _op->get_cr(); if (!_cr) return JS_UNDEFINED;
+    #define CTX_QUEUE canvas_queue_draw(_op->node_id);
+
+    // Path methods
+    JS_SetPropertyStr(ctx, obj, "beginPath", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst this_val, int, JSValueConst*) -> JSValue {
+        CTX_OP; cairo_new_path(_cr); return JS_UNDEFINED;
+    }, "beginPath", 0));
+
+    JS_SetPropertyStr(ctx, obj, "closePath", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst this_val, int, JSValueConst*) -> JSValue {
+        CTX_OP; cairo_close_path(_cr); return JS_UNDEFINED;
+    }, "closePath", 0));
+
+    JS_SetPropertyStr(ctx, obj, "moveTo", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+        CTX_OP; if (argc < 2) return JS_UNDEFINED;
+        double x, y; JS_ToFloat64(c, &x, argv[0]); JS_ToFloat64(c, &y, argv[1]);
+        cairo_move_to(_cr, x, y); return JS_UNDEFINED;
+    }, "moveTo", 2));
+
+    JS_SetPropertyStr(ctx, obj, "lineTo", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+        CTX_OP; if (argc < 2) return JS_UNDEFINED;
+        double x, y; JS_ToFloat64(c, &x, argv[0]); JS_ToFloat64(c, &y, argv[1]);
+        cairo_line_to(_cr, x, y); return JS_UNDEFINED;
+    }, "lineTo", 2));
+
+    JS_SetPropertyStr(ctx, obj, "arc", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+        CTX_OP; if (argc < 5) return JS_UNDEFINED;
+        double cx2, cy2, r, sa, ea;
+        JS_ToFloat64(c, &cx2, argv[0]); JS_ToFloat64(c, &cy2, argv[1]);
+        JS_ToFloat64(c, &r, argv[2]); JS_ToFloat64(c, &sa, argv[3]); JS_ToFloat64(c, &ea, argv[4]);
+        bool ccw = (argc >= 6) ? JS_ToBool(c, argv[5]) : false;
+        if (ccw) cairo_arc_negative(_cr, cx2, cy2, r, sa, ea);
+        else cairo_arc(_cr, cx2, cy2, r, sa, ea);
+        return JS_UNDEFINED;
+    }, "arc", 6));
+
+    JS_SetPropertyStr(ctx, obj, "arcTo", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+        CTX_OP; if (argc < 5) return JS_UNDEFINED;
+        double x1, y1, x2, y2, r;
+        JS_ToFloat64(c, &x1, argv[0]); JS_ToFloat64(c, &y1, argv[1]);
+        JS_ToFloat64(c, &x2, argv[2]); JS_ToFloat64(c, &y2, argv[3]);
+        JS_ToFloat64(c, &r, argv[4]);
+        // Cairo doesn't have arcTo directly - approximate with line+arc
+        double cx3, cy3; cairo_get_current_point(_cr, &cx3, &cy3);
+        cairo_line_to(_cr, x1, y1); // simplified - real arcTo is more complex
+        return JS_UNDEFINED;
+    }, "arcTo", 5));
+
+    JS_SetPropertyStr(ctx, obj, "bezierCurveTo", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+        CTX_OP; if (argc < 6) return JS_UNDEFINED;
+        double cp1x, cp1y, cp2x, cp2y, x, y;
+        JS_ToFloat64(c, &cp1x, argv[0]); JS_ToFloat64(c, &cp1y, argv[1]);
+        JS_ToFloat64(c, &cp2x, argv[2]); JS_ToFloat64(c, &cp2y, argv[3]);
+        JS_ToFloat64(c, &x, argv[4]); JS_ToFloat64(c, &y, argv[5]);
+        cairo_curve_to(_cr, cp1x, cp1y, cp2x, cp2y, x, y);
+        return JS_UNDEFINED;
+    }, "bezierCurveTo", 6));
+
+    JS_SetPropertyStr(ctx, obj, "quadraticCurveTo", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+        CTX_OP; if (argc < 4) return JS_UNDEFINED;
+        double cpx, cpy, x, y;
+        JS_ToFloat64(c, &cpx, argv[0]); JS_ToFloat64(c, &cpy, argv[1]);
+        JS_ToFloat64(c, &x, argv[2]); JS_ToFloat64(c, &y, argv[3]);
+        // Convert quadratic to cubic bezier
+        double cx3, cy3; cairo_get_current_point(_cr, &cx3, &cy3);
+        double cp1x = cx3 + 2.0/3.0 * (cpx - cx3), cp1y = cy3 + 2.0/3.0 * (cpy - cy3);
+        double cp2x = x + 2.0/3.0 * (cpx - x), cp2y = y + 2.0/3.0 * (cpy - y);
+        cairo_curve_to(_cr, cp1x, cp1y, cp2x, cp2y, x, y);
+        return JS_UNDEFINED;
+    }, "quadraticCurveTo", 4));
+
+    JS_SetPropertyStr(ctx, obj, "rect", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+        CTX_OP; if (argc < 4) return JS_UNDEFINED;
+        double x, y, w, h;
+        JS_ToFloat64(c, &x, argv[0]); JS_ToFloat64(c, &y, argv[1]);
+        JS_ToFloat64(c, &w, argv[2]); JS_ToFloat64(c, &h, argv[3]);
+        cairo_rectangle(_cr, x, y, w, h);
+        return JS_UNDEFINED;
+    }, "rect", 4));
+
+    JS_SetPropertyStr(ctx, obj, "ellipse", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+        CTX_OP; if (argc < 5) return JS_UNDEFINED;
+        double cx2, cy2, rx, ry, rot;
+        JS_ToFloat64(c, &cx2, argv[0]); JS_ToFloat64(c, &cy2, argv[1]);
+        JS_ToFloat64(c, &rx, argv[2]); JS_ToFloat64(c, &ry, argv[3]);
+        JS_ToFloat64(c, &rot, argv[4]);
+        double sa = 0, ea = 2 * M_PI;
+        if (argc >= 6) JS_ToFloat64(c, &sa, argv[5]);
+        if (argc >= 7) JS_ToFloat64(c, &ea, argv[6]);
+        cairo_save(_cr);
+        cairo_translate(_cr, cx2, cy2);
+        cairo_rotate(_cr, rot);
+        cairo_scale(_cr, rx, ry);
+        cairo_arc(_cr, 0, 0, 1.0, sa, ea);
+        cairo_restore(_cr);
+        return JS_UNDEFINED;
+    }, "ellipse", 8));
+
+    // Fill and stroke
+    JS_SetPropertyStr(ctx, obj, "fill", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst this_val, int, JSValueConst*) -> JSValue {
+        CTX_OP;
+        JSValue fs = JS_GetPropertyStr(c, this_val, "_fillStyle");
+        const char* fill_str = JS_ToCString(c, fs);
+        double r2 = 0, g2 = 0, b2 = 0, a2 = 1;
+        if (fill_str) { parse_css_color(fill_str, r2, g2, b2, a2); JS_FreeCString(c, fill_str); }
+        JS_FreeValue(c, fs);
+        cairo_set_source_rgba(_cr, r2, g2, b2, a2);
+        cairo_fill_preserve(_cr);
+        CTX_QUEUE; return JS_UNDEFINED;
+    }, "fill", 0));
+
+    JS_SetPropertyStr(ctx, obj, "stroke", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst this_val, int, JSValueConst*) -> JSValue {
+        CTX_OP;
+        JSValue ss = JS_GetPropertyStr(c, this_val, "_strokeStyle");
+        const char* stroke_str = JS_ToCString(c, ss);
+        double r2 = 0, g2 = 0, b2 = 0, a2 = 1;
+        if (stroke_str) { parse_css_color(stroke_str, r2, g2, b2, a2); JS_FreeCString(c, stroke_str); }
+        JS_FreeValue(c, ss);
+        JSValue lw = JS_GetPropertyStr(c, this_val, "lineWidth");
+        double lwv = 1.0; JS_ToFloat64(c, &lwv, lw); JS_FreeValue(c, lw);
+        cairo_set_source_rgba(_cr, r2, g2, b2, a2);
+        cairo_set_line_width(_cr, lwv);
+        cairo_stroke_preserve(_cr);
+        CTX_QUEUE; return JS_UNDEFINED;
+    }, "stroke", 0));
+
+    JS_SetPropertyStr(ctx, obj, "clip", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst this_val, int, JSValueConst*) -> JSValue {
+        CTX_OP; cairo_clip(_cr); return JS_UNDEFINED;
+    }, "clip", 0));
+
+    // State save/restore
+    JS_SetPropertyStr(ctx, obj, "save", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst this_val, int, JSValueConst*) -> JSValue {
+        CTX_OP; cairo_save(_cr); return JS_UNDEFINED;
+    }, "save", 0));
+
+    JS_SetPropertyStr(ctx, obj, "restore", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst this_val, int, JSValueConst*) -> JSValue {
+        CTX_OP; cairo_restore(_cr); return JS_UNDEFINED;
+    }, "restore", 0));
+
+    // Transforms
+    JS_SetPropertyStr(ctx, obj, "translate", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+        CTX_OP; if (argc < 2) return JS_UNDEFINED;
+        double tx, ty; JS_ToFloat64(c, &tx, argv[0]); JS_ToFloat64(c, &ty, argv[1]);
+        cairo_translate(_cr, tx, ty); return JS_UNDEFINED;
+    }, "translate", 2));
+
+    JS_SetPropertyStr(ctx, obj, "rotate", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+        CTX_OP; if (argc < 1) return JS_UNDEFINED;
+        double angle; JS_ToFloat64(c, &angle, argv[0]);
+        cairo_rotate(_cr, angle); return JS_UNDEFINED;
+    }, "rotate", 1));
+
+    JS_SetPropertyStr(ctx, obj, "scale", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+        CTX_OP; if (argc < 2) return JS_UNDEFINED;
+        double sx, sy; JS_ToFloat64(c, &sx, argv[0]); JS_ToFloat64(c, &sy, argv[1]);
+        cairo_scale(_cr, sx, sy); return JS_UNDEFINED;
+    }, "scale", 2));
+
+    JS_SetPropertyStr(ctx, obj, "transform", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+        CTX_OP; if (argc < 6) return JS_UNDEFINED;
+        double a3,b3,c3,d,e,f;
+        JS_ToFloat64(c, &a3, argv[0]); JS_ToFloat64(c, &b3, argv[1]);
+        JS_ToFloat64(c, &c3, argv[2]); JS_ToFloat64(c, &d, argv[3]);
+        JS_ToFloat64(c, &e, argv[4]); JS_ToFloat64(c, &f, argv[5]);
+        cairo_matrix_t m = {a3, b3, c3, d, e, f};
+        cairo_transform(_cr, &m);
+        return JS_UNDEFINED;
+    }, "transform", 6));
+
+    JS_SetPropertyStr(ctx, obj, "setTransform", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+        CTX_OP;
+        cairo_identity_matrix(_cr);
+        if (argc >= 6) {
+            double a3,b3,c3,d,e,f;
+            JS_ToFloat64(c, &a3, argv[0]); JS_ToFloat64(c, &b3, argv[1]);
+            JS_ToFloat64(c, &c3, argv[2]); JS_ToFloat64(c, &d, argv[3]);
+            JS_ToFloat64(c, &e, argv[4]); JS_ToFloat64(c, &f, argv[5]);
+            cairo_matrix_t m = {a3, b3, c3, d, e, f};
+            cairo_transform(_cr, &m);
+        }
+        return JS_UNDEFINED;
+    }, "setTransform", 6));
+
+    // Text methods
+    JS_SetPropertyStr(ctx, obj, "fillText", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+        CTX_OP; if (argc < 3) return JS_UNDEFINED;
+        const char* text = JS_ToCString(c, argv[0]);
+        double x, y; JS_ToFloat64(c, &x, argv[1]); JS_ToFloat64(c, &y, argv[2]);
+        if (!text) return JS_UNDEFINED;
+        // Set fill color
+        JSValue fs = JS_GetPropertyStr(c, this_val, "_fillStyle");
+        const char* fill_str = JS_ToCString(c, fs);
+        double r2=0,g2=0,b2=0,a2=1;
+        if (fill_str) { parse_css_color(fill_str, r2, g2, b2, a2); JS_FreeCString(c, fill_str); }
+        JS_FreeValue(c, fs);
+        cairo_set_source_rgba(_cr, r2, g2, b2, a2);
+        // Use Cairo toy text API for simplicity
+        cairo_move_to(_cr, x, y);
+        cairo_show_text(_cr, text);
+        JS_FreeCString(c, text);
+        CTX_QUEUE; return JS_UNDEFINED;
+    }, "fillText", 4));
+
+    JS_SetPropertyStr(ctx, obj, "strokeText", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+        CTX_OP; if (argc < 3) return JS_UNDEFINED;
+        const char* text = JS_ToCString(c, argv[0]);
+        double x, y; JS_ToFloat64(c, &x, argv[1]); JS_ToFloat64(c, &y, argv[2]);
+        if (!text) return JS_UNDEFINED;
+        JSValue ss = JS_GetPropertyStr(c, this_val, "_strokeStyle");
+        const char* stroke_str = JS_ToCString(c, ss);
+        double r2=0,g2=0,b2=0,a2=1;
+        if (stroke_str) { parse_css_color(stroke_str, r2, g2, b2, a2); JS_FreeCString(c, stroke_str); }
+        JS_FreeValue(c, ss);
+        cairo_set_source_rgba(_cr, r2, g2, b2, a2);
+        cairo_move_to(_cr, x, y);
+        cairo_text_path(_cr, text);
+        cairo_stroke(_cr);
+        JS_FreeCString(c, text);
+        CTX_QUEUE; return JS_UNDEFINED;
+    }, "strokeText", 4));
+
+    JS_SetPropertyStr(ctx, obj, "measureText", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+        auto* _op = (CanvasCtxOpaque*)JS_GetOpaque(this_val, js_canvas_ctx_class_id);
+        if (!_op) return JS_UNDEFINED;
+        cairo_t* _cr = _op->get_cr();
+        // If no surface yet (canvas not in DOM), create a temp image surface for measuring
+        cairo_surface_t* tmp_surf = nullptr;
+        if (!_cr) {
+            tmp_surf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 1, 1);
+            _cr = cairo_create(tmp_surf);
+        }
+        const char* text = (argc >= 1) ? JS_ToCString(c, argv[0]) : nullptr;
+        cairo_text_extents_t extents;
+        cairo_text_extents(_cr, text ? text : "", &extents);
+        if (text) JS_FreeCString(c, text);
         JSValue r = JS_NewObject(c);
-        JS_SetPropertyStr(c, r, "width", JS_NewFloat64(c, 0));
+        JS_SetPropertyStr(c, r, "width", JS_NewFloat64(c, extents.x_advance));
+        JS_SetPropertyStr(c, r, "actualBoundingBoxLeft", JS_NewFloat64(c, -extents.x_bearing));
+        JS_SetPropertyStr(c, r, "actualBoundingBoxRight", JS_NewFloat64(c, extents.width + extents.x_bearing));
+        JS_SetPropertyStr(c, r, "fontBoundingBoxAscent", JS_NewFloat64(c, -extents.y_bearing));
+        JS_SetPropertyStr(c, r, "fontBoundingBoxDescent", JS_NewFloat64(c, extents.height + extents.y_bearing));
+        if (tmp_surf) { cairo_destroy(_cr); cairo_surface_destroy(tmp_surf); }
         return r;
     }, "measureText", 1));
-    JS_SetPropertyStr(ctx, obj, "ellipse", JS_NewCFunction(ctx, noop, "ellipse", 8));
-    JS_SetPropertyStr(ctx, obj, "setLineDash", JS_NewCFunction(ctx, noop, "setLineDash", 1));
-    JS_SetPropertyStr(ctx, obj, "getLineDash", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst, int, JSValueConst*) -> JSValue {
-        return JS_NewArray(c);
+
+    // Line dash
+    JS_SetPropertyStr(ctx, obj, "setLineDash", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+        CTX_OP; if (argc < 1) return JS_UNDEFINED;
+        JSValue len_v = JS_GetPropertyStr(c, argv[0], "length");
+        int32_t len = 0; JS_ToInt32(c, &len, len_v); JS_FreeValue(c, len_v);
+        if (len <= 0) { cairo_set_dash(_cr, nullptr, 0, 0); return JS_UNDEFINED; }
+        std::vector<double> dashes(len);
+        for (int i = 0; i < len; i++) {
+            JSValue v = JS_GetPropertyUint32(c, argv[0], i);
+            JS_ToFloat64(c, &dashes[i], v); JS_FreeValue(c, v);
+        }
+        cairo_set_dash(_cr, dashes.data(), len, 0);
+        return JS_UNDEFINED;
+    }, "setLineDash", 1));
+
+    JS_SetPropertyStr(ctx, obj, "getLineDash", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst this_val, int, JSValueConst*) -> JSValue {
+        CTX_OP;
+        int count = cairo_get_dash_count(_cr);
+        JSValue arr = JS_NewArray(c);
+        if (count > 0) {
+            std::vector<double> dashes(count);
+            double offset;
+            cairo_get_dash(_cr, dashes.data(), &offset);
+            for (int i = 0; i < count; i++)
+                JS_SetPropertyUint32(c, arr, i, JS_NewFloat64(c, dashes[i]));
+        }
+        return arr;
     }, "getLineDash", 0));
-    JS_SetPropertyStr(ctx, obj, "beginPath", JS_NewCFunction(ctx, noop, "beginPath", 0));
-    JS_SetPropertyStr(ctx, obj, "closePath", JS_NewCFunction(ctx, noop, "closePath", 0));
-    JS_SetPropertyStr(ctx, obj, "moveTo", JS_NewCFunction(ctx, noop, "moveTo", 2));
-    JS_SetPropertyStr(ctx, obj, "lineTo", JS_NewCFunction(ctx, noop, "lineTo", 2));
-    JS_SetPropertyStr(ctx, obj, "arc", JS_NewCFunction(ctx, noop, "arc", 6));
-    JS_SetPropertyStr(ctx, obj, "arcTo", JS_NewCFunction(ctx, noop, "arcTo", 5));
-    JS_SetPropertyStr(ctx, obj, "bezierCurveTo", JS_NewCFunction(ctx, noop, "bezierCurveTo", 6));
-    JS_SetPropertyStr(ctx, obj, "quadraticCurveTo", JS_NewCFunction(ctx, noop, "quadraticCurveTo", 4));
-    JS_SetPropertyStr(ctx, obj, "rect", JS_NewCFunction(ctx, noop, "rect", 4));
-    JS_SetPropertyStr(ctx, obj, "fill", JS_NewCFunction(ctx, noop, "fill", 0));
-    JS_SetPropertyStr(ctx, obj, "stroke", JS_NewCFunction(ctx, noop, "stroke", 0));
-    JS_SetPropertyStr(ctx, obj, "clip", JS_NewCFunction(ctx, noop, "clip", 0));
-    JS_SetPropertyStr(ctx, obj, "save", JS_NewCFunction(ctx, noop, "save", 0));
-    JS_SetPropertyStr(ctx, obj, "restore", JS_NewCFunction(ctx, noop, "restore", 0));
-    JS_SetPropertyStr(ctx, obj, "translate", JS_NewCFunction(ctx, noop, "translate", 2));
-    JS_SetPropertyStr(ctx, obj, "rotate", JS_NewCFunction(ctx, noop, "rotate", 1));
-    JS_SetPropertyStr(ctx, obj, "scale", JS_NewCFunction(ctx, noop, "scale", 2));
-    JS_SetPropertyStr(ctx, obj, "transform", JS_NewCFunction(ctx, noop, "transform", 6));
-    JS_SetPropertyStr(ctx, obj, "setTransform", JS_NewCFunction(ctx, noop, "setTransform", 6));
-    JS_SetPropertyStr(ctx, obj, "createLinearGradient", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst, int, JSValueConst*) -> JSValue {
+
+    // Gradients
+    JS_SetPropertyStr(ctx, obj, "createLinearGradient", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst, int argc, JSValueConst* argv) -> JSValue {
         JSValue g = JS_NewObject(c);
         JS_SetPropertyStr(c, g, "addColorStop", JS_NewCFunction(c, [](JSContext* cc, JSValueConst, int, JSValueConst*) -> JSValue { return JS_UNDEFINED; }, "addColorStop", 2));
         return g;
@@ -2480,20 +2811,110 @@ static JSValue js_element_getContext(JSContext* ctx, JSValueConst this_val,
     JS_SetPropertyStr(ctx, obj, "createPattern", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst, int, JSValueConst*) -> JSValue {
         return JS_NewObject(c);
     }, "createPattern", 2));
-    JS_SetPropertyStr(ctx, obj, "getImageData", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst, int argc, JSValueConst* argv) -> JSValue {
-        int w = 1, h = 1;
-        if (argc >= 4) { JS_ToInt32(c, &w, argv[2]); JS_ToInt32(c, &h, argv[3]); }
-        if (w < 1) w = 1; if (h < 1) h = 1;
+
+    // Image data (real implementation reading from surface)
+    JS_SetPropertyStr(ctx, obj, "getImageData", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+        auto* _op2 = (CanvasCtxOpaque*)JS_GetOpaque(this_val, js_canvas_ctx_class_id);
+        int sx=0, sy=0, sw=1, sh=1;
+        if (argc >= 4) { JS_ToInt32(c, &sx, argv[0]); JS_ToInt32(c, &sy, argv[1]); JS_ToInt32(c, &sw, argv[2]); JS_ToInt32(c, &sh, argv[3]); }
+        if (sw < 1) sw = 1; if (sh < 1) sh = 1;
+
         JSValue imgData = JS_NewObject(c);
-        JS_SetPropertyStr(c, imgData, "width", JS_NewInt32(c, w));
-        JS_SetPropertyStr(c, imgData, "height", JS_NewInt32(c, h));
-        int len = w * h * 4;
-        JSValue data = JS_NewArray(c);
-        for (int i = 0; i < len; i++) JS_SetPropertyUint32(c, data, i, JS_NewInt32(c, 255));
-        JS_SetPropertyStr(c, imgData, "data", data);
+        JS_SetPropertyStr(c, imgData, "width", JS_NewInt32(c, sw));
+        JS_SetPropertyStr(c, imgData, "height", JS_NewInt32(c, sh));
+        int len = sw * sh * 4;
+
+        // Try to read actual pixel data from surface
+        auto it = g_canvas_map.find(_op2 ? _op2->node_id : 0);
+        if (it != g_canvas_map.end() && it->second.surface) {
+            cairo_surface_flush(it->second.surface);
+            unsigned char* data = cairo_image_surface_get_data(it->second.surface);
+            int stride = cairo_image_surface_get_stride(it->second.surface);
+            int surf_w = it->second.width, surf_h = it->second.height;
+
+            JSValue ab = JS_NewArrayBufferCopy(c, nullptr, len);
+            size_t ab_size;
+            uint8_t* ab_data = JS_GetArrayBuffer(c, &ab_size, ab);
+            if (ab_data && data) {
+                for (int y = 0; y < sh; y++) {
+                    for (int x = 0; x < sw; x++) {
+                        int py = sy + y, px = sx + x;
+                        int dst = (y * sw + x) * 4;
+                        if (px >= 0 && px < surf_w && py >= 0 && py < surf_h) {
+                            int src = py * stride + px * 4;
+                            // Cairo ARGB32 -> RGBA
+                            ab_data[dst+0] = data[src+2]; // R
+                            ab_data[dst+1] = data[src+1]; // G
+                            ab_data[dst+2] = data[src+0]; // B
+                            ab_data[dst+3] = data[src+3]; // A
+                        }
+                    }
+                }
+            }
+            JSValue global = JS_GetGlobalObject(c);
+            JSValue u8c = JS_GetPropertyStr(c, global, "Uint8ClampedArray");
+            if (JS_IsUndefined(u8c)) u8c = JS_GetPropertyStr(c, global, "Uint8Array");
+            JSValue ta = JS_CallConstructor(c, u8c, 1, &ab);
+            JS_FreeValue(c, u8c);
+            JS_FreeValue(c, global);
+            JS_FreeValue(c, ab);
+            JS_SetPropertyStr(c, imgData, "data", ta);
+        } else {
+            // Fallback: return zeros
+            JSValue data2 = JS_NewArray(c);
+            for (int i = 0; i < len; i++) JS_SetPropertyUint32(c, data2, i, JS_NewInt32(c, 0));
+            JS_SetPropertyStr(c, imgData, "data", data2);
+        }
         return imgData;
     }, "getImageData", 4));
-    JS_SetPropertyStr(ctx, obj, "putImageData", JS_NewCFunction(ctx, noop, "putImageData", 3));
+
+    JS_SetPropertyStr(ctx, obj, "putImageData", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+        auto* _op2 = (CanvasCtxOpaque*)JS_GetOpaque(this_val, js_canvas_ctx_class_id);
+        if (!_op2 || argc < 3) return JS_UNDEFINED;
+        int dx=0, dy=0;
+        JS_ToInt32(c, &dx, argv[1]); JS_ToInt32(c, &dy, argv[2]);
+
+        auto it = g_canvas_map.find(_op2->node_id);
+        if (it == g_canvas_map.end() || !it->second.surface) return JS_UNDEFINED;
+
+        JSValue w_v = JS_GetPropertyStr(c, argv[0], "width");
+        JSValue h_v = JS_GetPropertyStr(c, argv[0], "height");
+        JSValue data_v = JS_GetPropertyStr(c, argv[0], "data");
+        int32_t w=0, h=0;
+        JS_ToInt32(c, &w, w_v); JS_ToInt32(c, &h, h_v);
+        JS_FreeValue(c, w_v); JS_FreeValue(c, h_v);
+
+        cairo_surface_flush(it->second.surface);
+        unsigned char* surf_data = cairo_image_surface_get_data(it->second.surface);
+        int stride = cairo_image_surface_get_stride(it->second.surface);
+        int surf_w = it->second.width, surf_h = it->second.height;
+
+        for (int y2 = 0; y2 < h; y2++) {
+            for (int x2 = 0; x2 < w; x2++) {
+                int px = dx + x2, py = dy + y2;
+                if (px < 0 || px >= surf_w || py < 0 || py >= surf_h) continue;
+                int src_idx = (y2 * w + x2) * 4;
+                JSValue rv = JS_GetPropertyUint32(c, data_v, src_idx);
+                JSValue gv = JS_GetPropertyUint32(c, data_v, src_idx+1);
+                JSValue bv = JS_GetPropertyUint32(c, data_v, src_idx+2);
+                JSValue av = JS_GetPropertyUint32(c, data_v, src_idx+3);
+                int32_t r3=0,g3=0,b3=0,a3=255;
+                JS_ToInt32(c, &r3, rv); JS_ToInt32(c, &g3, gv);
+                JS_ToInt32(c, &b3, bv); JS_ToInt32(c, &a3, av);
+                JS_FreeValue(c, rv); JS_FreeValue(c, gv); JS_FreeValue(c, bv); JS_FreeValue(c, av);
+                int dst_idx = py * stride + px * 4;
+                surf_data[dst_idx+0] = b3;
+                surf_data[dst_idx+1] = g3;
+                surf_data[dst_idx+2] = r3;
+                surf_data[dst_idx+3] = a3;
+            }
+        }
+        JS_FreeValue(c, data_v);
+        cairo_surface_mark_dirty(it->second.surface);
+        canvas_queue_draw(_op2->node_id);
+        return JS_UNDEFINED;
+    }, "putImageData", 3));
+
     JS_SetPropertyStr(ctx, obj, "createImageData", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst, int argc, JSValueConst* argv) -> JSValue {
         int w = 1, h = 1;
         if (argc >= 2) { JS_ToInt32(c, &w, argv[0]); JS_ToInt32(c, &h, argv[1]); }
@@ -2501,12 +2922,31 @@ static JSValue js_element_getContext(JSContext* ctx, JSValueConst this_val,
         JS_SetPropertyStr(c, imgData, "width", JS_NewInt32(c, w));
         JS_SetPropertyStr(c, imgData, "height", JS_NewInt32(c, h));
         int len = w * h * 4;
-        JSValue data = JS_NewArray(c);
-        for (int i = 0; i < len; i++) JS_SetPropertyUint32(c, data, i, JS_NewInt32(c, 0));
-        JS_SetPropertyStr(c, imgData, "data", data);
+        JSValue ab = JS_NewArrayBufferCopy(c, nullptr, len);
+        size_t ab_size; uint8_t* buf = JS_GetArrayBuffer(c, &ab_size, ab);
+        if (buf) memset(buf, 0, len);
+        JSValue global = JS_GetGlobalObject(c);
+        JSValue u8c = JS_GetPropertyStr(c, global, "Uint8ClampedArray");
+        if (JS_IsUndefined(u8c)) u8c = JS_GetPropertyStr(c, global, "Uint8Array");
+        JSValue ta = JS_CallConstructor(c, u8c, 1, &ab);
+        JS_FreeValue(c, u8c); JS_FreeValue(c, global); JS_FreeValue(c, ab);
+        JS_SetPropertyStr(c, imgData, "data", ta);
         return imgData;
     }, "createImageData", 2));
-    // globalCompositeOperation
+
+    JS_SetPropertyStr(ctx, obj, "isPointInPath", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+        CTX_OP; if (argc < 2) return JS_FALSE;
+        double x, y; JS_ToFloat64(c, &x, argv[0]); JS_ToFloat64(c, &y, argv[1]);
+        return JS_NewBool(c, cairo_in_fill(_cr, x, y));
+    }, "isPointInPath", 2));
+
+    JS_SetPropertyStr(ctx, obj, "isPointInStroke", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+        CTX_OP; if (argc < 2) return JS_FALSE;
+        double x, y; JS_ToFloat64(c, &x, argv[0]); JS_ToFloat64(c, &y, argv[1]);
+        return JS_NewBool(c, cairo_in_stroke(_cr, x, y));
+    }, "isPointInStroke", 2));
+
+    // Properties (simple get/set via JS properties)
     JS_SetPropertyStr(ctx, obj, "globalCompositeOperation", JS_NewString(ctx, "source-over"));
     JS_SetPropertyStr(ctx, obj, "globalAlpha", JS_NewFloat64(ctx, 1.0));
     JS_SetPropertyStr(ctx, obj, "lineWidth", JS_NewFloat64(ctx, 1.0));
@@ -2522,16 +2962,21 @@ static JSValue js_element_getContext(JSContext* ctx, JSValueConst this_val,
     JS_SetPropertyStr(ctx, obj, "textBaseline", JS_NewString(ctx, "alphabetic"));
     JS_SetPropertyStr(ctx, obj, "lineDashOffset", JS_NewFloat64(ctx, 0));
     JS_SetPropertyStr(ctx, obj, "imageSmoothingEnabled", JS_TRUE);
-    JS_SetPropertyStr(ctx, obj, "drawFocusIfNeeded", JS_NewCFunction(ctx, noop, "drawFocusIfNeeded", 1));
-    JS_SetPropertyStr(ctx, obj, "addHitRegion", JS_NewCFunction(ctx, noop, "addHitRegion", 1));
-    JS_SetPropertyStr(ctx, obj, "removeHitRegion", JS_NewCFunction(ctx, noop, "removeHitRegion", 1));
-    JS_SetPropertyStr(ctx, obj, "clearHitRegions", JS_NewCFunction(ctx, noop, "clearHitRegions", 0));
-    JS_SetPropertyStr(ctx, obj, "isPointInPath", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst, int, JSValueConst*) -> JSValue {
+    auto ctx_noop = [](JSContext* c, JSValueConst, int, JSValueConst*) -> JSValue { return JS_UNDEFINED; };
+    JS_SetPropertyStr(ctx, obj, "drawFocusIfNeeded", JS_NewCFunction(ctx, ctx_noop, "drawFocusIfNeeded", 1));
+    JS_SetPropertyStr(ctx, obj, "addHitRegion", JS_NewCFunction(ctx, ctx_noop, "addHitRegion", 1));
+    JS_SetPropertyStr(ctx, obj, "removeHitRegion", JS_NewCFunction(ctx, ctx_noop, "removeHitRegion", 1));
+    JS_SetPropertyStr(ctx, obj, "clearHitRegions", JS_NewCFunction(ctx, ctx_noop, "clearHitRegions", 0));
+    // NOTE: isPointInPath/isPointInStroke already added above with real implementation
+    JS_SetPropertyStr(ctx, obj, "_dummy_isPointInPath", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst, int, JSValueConst*) -> JSValue {
         return JS_FALSE;
-    }, "isPointInPath", 3));
-    JS_SetPropertyStr(ctx, obj, "isPointInStroke", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst, int, JSValueConst*) -> JSValue {
+    }, "_dummy_isPointInPath", 3));
+    JS_SetPropertyStr(ctx, obj, "_dummy_isPointInStroke", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst, int, JSValueConst*) -> JSValue {
         return JS_FALSE;
     }, "isPointInStroke", 3));
+
+    // Cache the context so subsequent getContext('2d') calls return the same object
+    g_ctx2d_cache[eop->node_id] = JS_DupValue(ctx, obj);
 
     return obj;
 }

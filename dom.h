@@ -16,7 +16,7 @@ struct BoxModel;
 
 struct DOMNode {
     uint32_t node_id = 0;
-    enum NodeType { ELEMENT = 1, TEXT = 3, COMMENT = 8 } node_type = ELEMENT;
+    enum NodeType { ELEMENT = 1, TEXT = 3, COMMENT = 8, DOCUMENT_FRAGMENT = 11 } node_type = ELEMENT;
 
     std::string tag_name;       // lowercase, empty for text nodes
     std::string id;             // id attribute

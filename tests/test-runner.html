@@ -1,0 +1,1475 @@
+<!DOCTYPE html>
+<html>
+<head><title>JS Compatibility Test Suite</title>
+<style>
+body { font-family: monospace; margin: 10px; background: #1a1a2e; color: #eee; }
+h1 { color: #0ff; }
+.pass { color: #0f0; }
+.fail { color: #f44; }
+.group { margin: 10px 0; padding: 8px; background: #16213e; border-radius: 4px; }
+.group h2 { margin: 0 0 5px; color: #0af; font-size: 14px; }
+#summary { position: sticky; top: 0; background: #0d1b2a; padding: 10px; z-index: 100; border-bottom: 2px solid #0ff; }
+</style>
+</head>
+<body>
+<div id="summary">
+  <h1>JS Compatibility Tests</h1>
+  <span id="score">Running...</span>
+</div>
+<div id="results"></div>
+<script>
+var passed = 0, failed = 0, total = 0;
+var results = document.getElementById('results');
+
+function group(name) {
+    var div = document.createElement('div');
+    div.className = 'group';
+    var h2 = document.createElement('h2');
+    h2.textContent = name;
+    div.appendChild(h2);
+    results.appendChild(div);
+    return div;
+}
+
+function test(container, name, fn) {
+    total++;
+    var p = document.createElement('div');
+    try {
+        var result = fn();
+        if (result === true || result === undefined) {
+            passed++;
+            p.className = 'pass';
+            p.textContent = '  PASS: ' + name;
+        } else {
+            failed++;
+            p.className = 'fail';
+            p.textContent = '  FAIL: ' + name + ' (got: ' + JSON.stringify(result) + ')';
+        }
+    } catch(e) {
+        failed++;
+        p.className = 'fail';
+        p.textContent = '  FAIL: ' + name + ' (error: ' + e.message + ')';
+    }
+    container.appendChild(p);
+}
+
+function updateScore() {
+    document.getElementById('score').textContent =
+        passed + '/' + total + ' passed, ' + failed + ' failed';
+    document.getElementById('score').style.color = failed === 0 ? '#0f0' : '#f44';
+}
+
+// ====== GROUP 1: DOM Manipulation ======
+var g1 = group('1. DOM Manipulation Methods');
+
+test(g1, 'element.contains(self)', function() {
+    var div = document.createElement('div');
+    return div.contains(div) === true;
+});
+test(g1, 'element.contains(child)', function() {
+    var parent = document.createElement('div');
+    var child = document.createElement('span');
+    parent.appendChild(child);
+    return parent.contains(child) === true;
+});
+test(g1, 'element.contains(non-child)', function() {
+    var a = document.createElement('div');
+    var b = document.createElement('div');
+    return a.contains(b) === false;
+});
+test(g1, 'element.hasAttribute', function() {
+    var div = document.createElement('div');
+    div.setAttribute('data-x', '1');
+    return div.hasAttribute('data-x') === true && div.hasAttribute('nope') === false;
+});
+test(g1, 'element.hasChildNodes()', function() {
+    var div = document.createElement('div');
+    if (div.hasChildNodes()) return false;
+    div.appendChild(document.createElement('span'));
+    return div.hasChildNodes() === true;
+});
+test(g1, 'element.toggleAttribute (add)', function() {
+    var div = document.createElement('div');
+    var result = div.toggleAttribute('hidden');
+    return result === true && div.hasAttribute('hidden') === true;
+});
+test(g1, 'element.toggleAttribute (remove)', function() {
+    var div = document.createElement('div');
+    div.setAttribute('hidden', '');
+    var result = div.toggleAttribute('hidden');
+    return result === false && div.hasAttribute('hidden') === false;
+});
+test(g1, 'element.toggleAttribute (force true)', function() {
+    var div = document.createElement('div');
+    return div.toggleAttribute('x', true) === true && div.hasAttribute('x');
+});
+test(g1, 'element.toggleAttribute (force false)', function() {
+    var div = document.createElement('div');
+    div.setAttribute('x', '');
+    return div.toggleAttribute('x', false) === false && !div.hasAttribute('x');
+});
+test(g1, 'element.getAttributeNames', function() {
+    var div = document.createElement('div');
+    div.setAttribute('data-a', '1');
+    div.setAttribute('data-b', '2');
+    var names = div.getAttributeNames();
+    return Array.isArray(names) && names.indexOf('data-a') >= 0 && names.indexOf('data-b') >= 0;
+});
+
+// ====== GROUP 2: insertAdjacent* ======
+var g2 = group('2. insertAdjacent* Methods');
+
+test(g2, 'insertAdjacentHTML beforeend', function() {
+    var div = document.createElement('div');
+    div.innerHTML = '<p>first</p>';
+    document.body.appendChild(div);
+    div.insertAdjacentHTML('beforeend', '<span>added</span>');
+    return div.children.length === 2 && div.children[1].tagName === 'SPAN';
+});
+test(g2, 'insertAdjacentHTML afterbegin', function() {
+    var div = document.createElement('div');
+    div.innerHTML = '<p>last</p>';
+    document.body.appendChild(div);
+    div.insertAdjacentHTML('afterbegin', '<span>first</span>');
+    return div.children[0].tagName === 'SPAN';
+});
+test(g2, 'insertAdjacentElement', function() {
+    var div = document.createElement('div');
+    document.body.appendChild(div);
+    var span = document.createElement('span');
+    var result = div.insertAdjacentElement('beforeend', span);
+    return div.children[0] === span && result === span;
+});
+test(g2, 'insertAdjacentText', function() {
+    var div = document.createElement('div');
+    document.body.appendChild(div);
+    div.insertAdjacentText('beforeend', 'hello');
+    return div.textContent === 'hello';
+});
+
+// ====== GROUP 3: append/prepend/before/after/replaceWith ======
+var g3 = group('3. Modern DOM Insertion');
+
+test(g3, 'element.append(node)', function() {
+    var div = document.createElement('div');
+    var span = document.createElement('span');
+    div.append(span);
+    return div.children[0] === span;
+});
+test(g3, 'element.append(string)', function() {
+    var div = document.createElement('div');
+    div.append('hello');
+    return div.textContent === 'hello';
+});
+test(g3, 'element.append(multiple)', function() {
+    var div = document.createElement('div');
+    var a = document.createElement('a');
+    div.append(a, 'text');
+    return div.children[0] === a && div.textContent.indexOf('text') >= 0;
+});
+test(g3, 'element.prepend(node)', function() {
+    var div = document.createElement('div');
+    div.innerHTML = '<p>existing</p>';
+    var span = document.createElement('span');
+    div.prepend(span);
+    return div.children[0] === span;
+});
+test(g3, 'element.before(node)', function() {
+    var container = document.createElement('div');
+    var ref = document.createElement('p');
+    container.appendChild(ref);
+    document.body.appendChild(container);
+    var span = document.createElement('span');
+    ref.before(span);
+    return container.children[0] === span && container.children[1] === ref;
+});
+test(g3, 'element.after(node)', function() {
+    var container = document.createElement('div');
+    var ref = document.createElement('p');
+    container.appendChild(ref);
+    document.body.appendChild(container);
+    var span = document.createElement('span');
+    ref.after(span);
+    return container.children[0] === ref && container.children[1] === span;
+});
+test(g3, 'element.replaceWith(node)', function() {
+    var container = document.createElement('div');
+    var old = document.createElement('p');
+    container.appendChild(old);
+    document.body.appendChild(container);
+    var replacement = document.createElement('span');
+    old.replaceWith(replacement);
+    return container.children[0] === replacement && container.children.length === 1;
+});
+test(g3, 'element.replaceChildren()', function() {
+    var div = document.createElement('div');
+    div.innerHTML = '<p>a</p><p>b</p>';
+    var newChild = document.createElement('span');
+    div.replaceChildren(newChild);
+    return div.children.length === 1 && div.children[0] === newChild;
+});
+
+// ====== GROUP 4: Element Properties ======
+var g4 = group('4. Element Properties');
+
+test(g4, 'element.outerHTML getter', function() {
+    var div = document.createElement('div');
+    div.innerHTML = '<span>hi</span>';
+    var html = div.outerHTML;
+    return html.indexOf('<div>') >= 0 && html.indexOf('<span>') >= 0;
+});
+test(g4, 'element.isConnected (false)', function() {
+    var div = document.createElement('div');
+    return div.isConnected === false;
+});
+test(g4, 'element.isConnected (true)', function() {
+    var div = document.createElement('div');
+    document.body.appendChild(div);
+    return div.isConnected === true;
+});
+test(g4, 'element.childElementCount', function() {
+    var div = document.createElement('div');
+    div.innerHTML = '<p>1</p><p>2</p><p>3</p>';
+    return div.childElementCount === 3;
+});
+test(g4, 'element.firstElementChild', function() {
+    var div = document.createElement('div');
+    div.innerHTML = '<span>first</span><p>second</p>';
+    return div.firstElementChild.tagName === 'SPAN';
+});
+test(g4, 'element.lastElementChild', function() {
+    var div = document.createElement('div');
+    div.innerHTML = '<span>first</span><p>second</p>';
+    return div.lastElementChild.tagName === 'P';
+});
+test(g4, 'element.innerText getter', function() {
+    var div = document.createElement('div');
+    div.innerHTML = '<span>hello</span> <b>world</b>';
+    return div.innerText.indexOf('hello') >= 0 && div.innerText.indexOf('world') >= 0;
+});
+test(g4, 'element.innerText setter', function() {
+    var div = document.createElement('div');
+    div.innerHTML = '<span>old</span>';
+    div.innerText = 'new text';
+    return div.textContent === 'new text';
+});
+
+// ====== GROUP 5: Document Methods ======
+var g5 = group('5. Document Methods');
+
+test(g5, 'document.createDocumentFragment()', function() {
+    var frag = document.createDocumentFragment();
+    return frag !== null && frag !== undefined;
+});
+test(g5, 'document.createComment()', function() {
+    var comment = document.createComment('test comment');
+    return comment !== null && comment.nodeType === 8;
+});
+test(g5, 'document.title', function() {
+    return typeof document.title === 'string';
+});
+test(g5, 'document.readyState', function() {
+    return document.readyState === 'complete';
+});
+test(g5, 'document.URL', function() {
+    return typeof document.URL === 'string';
+});
+test(g5, 'document.compatMode', function() {
+    return document.compatMode === 'CSS1Compat';
+});
+test(g5, 'document.characterSet', function() {
+    return document.characterSet === 'UTF-8';
+});
+test(g5, 'document.contentType', function() {
+    return document.contentType === 'text/html';
+});
+test(g5, 'document.nodeType', function() {
+    return document.nodeType === 9;
+});
+test(g5, 'document.nodeName', function() {
+    return document.nodeName === '#document';
+});
+
+// ====== GROUP 6: Web APIs - structuredClone ======
+var g6 = group('6. structuredClone');
+
+test(g6, 'structuredClone exists', function() {
+    return typeof structuredClone === 'function';
+});
+test(g6, 'clone primitive', function() {
+    return structuredClone(42) === 42;
+});
+test(g6, 'clone string', function() {
+    return structuredClone('hello') === 'hello';
+});
+test(g6, 'clone object (deep)', function() {
+    var obj = {a: {b: 1}};
+    var clone = structuredClone(obj);
+    clone.a.b = 2;
+    return obj.a.b === 1 && clone.a.b === 2;
+});
+test(g6, 'clone array', function() {
+    var arr = [1, [2, 3]];
+    var clone = structuredClone(arr);
+    clone[1][0] = 99;
+    return arr[1][0] === 2;
+});
+test(g6, 'clone null', function() {
+    return structuredClone(null) === null;
+});
+
+// ====== GROUP 7: queueMicrotask ======
+var g7 = group('7. queueMicrotask');
+
+test(g7, 'queueMicrotask exists', function() {
+    return typeof queueMicrotask === 'function';
+});
+test(g7, 'queueMicrotask accepts function', function() {
+    var called = false;
+    queueMicrotask(function() { called = true; });
+    // Won't be called synchronously, but shouldn't throw
+    return true;
+});
+
+// ====== GROUP 8: crypto ======
+var g8 = group('8. crypto API');
+
+test(g8, 'crypto exists', function() {
+    return typeof crypto === 'object';
+});
+test(g8, 'crypto.randomUUID()', function() {
+    var uuid = crypto.randomUUID();
+    return typeof uuid === 'string' && uuid.length === 36 && uuid[14] === '4';
+});
+test(g8, 'crypto.randomUUID() uniqueness', function() {
+    var a = crypto.randomUUID();
+    var b = crypto.randomUUID();
+    return a !== b;
+});
+test(g8, 'crypto.getRandomValues exists', function() {
+    return typeof crypto.getRandomValues === 'function';
+});
+test(g8, 'crypto.getRandomValues(Uint8Array)', function() {
+    var arr = new Uint8Array(16);
+    var result = crypto.getRandomValues(arr);
+    // Check at least some bytes are non-zero
+    var hasNonZero = false;
+    for (var i = 0; i < 16; i++) if (arr[i] !== 0) hasNonZero = true;
+    return hasNonZero && result === arr;
+});
+
+// ====== GROUP 9: TextEncoder/TextDecoder ======
+var g9 = group('9. TextEncoder / TextDecoder');
+
+test(g9, 'TextEncoder exists', function() {
+    return typeof TextEncoder === 'function';
+});
+test(g9, 'TextEncoder.encode()', function() {
+    var enc = new TextEncoder();
+    var result = enc.encode('hello');
+    return result.length === 5 && result[0] === 104; // 'h' = 104
+});
+test(g9, 'TextEncoder.encoding', function() {
+    var enc = new TextEncoder();
+    return enc.encoding === 'utf-8';
+});
+test(g9, 'TextDecoder exists', function() {
+    return typeof TextDecoder === 'function';
+});
+test(g9, 'TextDecoder.decode()', function() {
+    var enc = new TextEncoder();
+    var dec = new TextDecoder();
+    var encoded = enc.encode('world');
+    var decoded = dec.decode(encoded);
+    return decoded === 'world';
+});
+test(g9, 'TextDecoder.encoding', function() {
+    var dec = new TextDecoder('utf-8');
+    return dec.encoding === 'utf-8';
+});
+
+// ====== GROUP 10: requestIdleCallback ======
+var g10 = group('10. requestIdleCallback');
+
+test(g10, 'requestIdleCallback exists', function() {
+    return typeof requestIdleCallback === 'function';
+});
+test(g10, 'cancelIdleCallback exists', function() {
+    return typeof cancelIdleCallback === 'function';
+});
+test(g10, 'requestIdleCallback returns id', function() {
+    var id = requestIdleCallback(function() {});
+    cancelIdleCallback(id);
+    return typeof id === 'number' && id > 0;
+});
+
+// ====== GROUP 11: DOMRect / DOMPoint ======
+var g11 = group('11. DOMRect / DOMPoint');
+
+test(g11, 'DOMRect constructor', function() {
+    var r = new DOMRect(10, 20, 100, 50);
+    return r.x === 10 && r.y === 20 && r.width === 100 && r.height === 50;
+});
+test(g11, 'DOMRect computed properties', function() {
+    var r = new DOMRect(10, 20, 100, 50);
+    return r.top === 20 && r.left === 10 && r.right === 110 && r.bottom === 70;
+});
+test(g11, 'DOMRectReadOnly constructor', function() {
+    var r = new DOMRectReadOnly(5, 5, 50, 50);
+    return r.x === 5 && r.width === 50;
+});
+test(g11, 'DOMPoint constructor', function() {
+    var p = new DOMPoint(1, 2, 3, 4);
+    return p.x === 1 && p.y === 2 && p.z === 3 && p.w === 4;
+});
+test(g11, 'DOMPoint defaults', function() {
+    var p = new DOMPoint();
+    return p.x === 0 && p.y === 0 && p.z === 0 && p.w === 1;
+});
+
+// ====== GROUP 12: ES2020+ Features (QuickJS) ======
+var g12 = group('12. ES2020+ Language Features');
+
+test(g12, 'Optional chaining (?.)', function() {
+    var obj = {a: {b: 1}};
+    return obj?.a?.b === 1 && obj?.c?.d === undefined;
+});
+test(g12, 'Nullish coalescing (??)', function() {
+    return (null ?? 'default') === 'default' && (0 ?? 'default') === 0;
+});
+test(g12, 'globalThis', function() {
+    return typeof globalThis === 'object' && globalThis === window;
+});
+test(g12, 'Promise.allSettled', function() {
+    return typeof Promise.allSettled === 'function';
+});
+test(g12, 'Promise.any', function() {
+    return typeof Promise.any === 'function';
+});
+test(g12, 'String.prototype.replaceAll', function() {
+    return 'aabbcc'.replaceAll('b', 'x') === 'aaxxcc';
+});
+test(g12, 'Array.prototype.at()', function() {
+    return [1,2,3].at(-1) === 3;
+});
+test(g12, 'String.prototype.at()', function() {
+    return 'hello'.at(-1) === 'o';
+});
+test(g12, 'Object.hasOwn()', function() {
+    return Object.hasOwn({a:1}, 'a') === true && Object.hasOwn({a:1}, 'b') === false;
+});
+test(g12, 'Array.prototype.findLast()', function() {
+    return [1,2,3,4].findLast(function(x) { return x < 3; }) === 2;
+});
+test(g12, 'Array.prototype.findLastIndex()', function() {
+    return [1,2,3,4].findLastIndex(function(x) { return x < 3; }) === 1;
+});
+test(g12, 'Array.prototype.toSorted()', function() {
+    var arr = [3,1,2];
+    var sorted = arr.toSorted();
+    return sorted[0] === 1 && arr[0] === 3;
+});
+test(g12, 'Array.prototype.toReversed()', function() {
+    var arr = [1,2,3];
+    var rev = arr.toReversed();
+    return rev[0] === 3 && arr[0] === 1;
+});
+test(g12, 'Array.prototype.with()', function() {
+    var arr = [1,2,3];
+    var newArr = arr.with(1, 99);
+    return newArr[1] === 99 && arr[1] === 2;
+});
+test(g12, 'WeakRef', function() {
+    var obj = {};
+    var ref = new WeakRef(obj);
+    return ref.deref() === obj;
+});
+test(g12, 'Object.fromEntries()', function() {
+    var obj = Object.fromEntries([['a', 1], ['b', 2]]);
+    return obj.a === 1 && obj.b === 2;
+});
+
+// ====== GROUP 13: Symbols & Iterators ======
+var g13 = group('13. Symbols & Iterators');
+
+test(g13, 'Symbol exists', function() {
+    return typeof Symbol === 'function';
+});
+test(g13, 'Symbol.iterator', function() {
+    return typeof Symbol.iterator === 'symbol';
+});
+test(g13, 'for...of array', function() {
+    var sum = 0;
+    for (var x of [1,2,3]) sum += x;
+    return sum === 6;
+});
+test(g13, 'for...of string', function() {
+    var chars = [];
+    for (var c of 'abc') chars.push(c);
+    return chars.join('') === 'abc';
+});
+test(g13, 'Map iteration', function() {
+    var m = new Map([['a',1],['b',2]]);
+    var keys = [];
+    for (var [k,v] of m) keys.push(k);
+    return keys.join(',') === 'a,b';
+});
+test(g13, 'Set iteration', function() {
+    var s = new Set([1,2,3]);
+    var vals = [];
+    for (var v of s) vals.push(v);
+    return vals.join(',') === '1,2,3';
+});
+test(g13, 'Custom iterator', function() {
+    var obj = {};
+    obj[Symbol.iterator] = function() {
+        var i = 0;
+        return { next: function() { return i < 3 ? {value: i++, done: false} : {done: true}; }};
+    };
+    var arr = Array.from(obj);
+    return arr.join(',') === '0,1,2';
+});
+
+// ====== GROUP 14: Map & Set ======
+var g14 = group('14. Map & Set');
+
+test(g14, 'Map basic', function() {
+    var m = new Map();
+    m.set('key', 'val');
+    return m.get('key') === 'val' && m.size === 1;
+});
+test(g14, 'Map.has/delete', function() {
+    var m = new Map([['a',1]]);
+    return m.has('a') && (m.delete('a'), !m.has('a'));
+});
+test(g14, 'Map.forEach', function() {
+    var m = new Map([['a',1],['b',2]]);
+    var sum = 0;
+    m.forEach(function(v) { sum += v; });
+    return sum === 3;
+});
+test(g14, 'Set basic', function() {
+    var s = new Set([1,2,2,3]);
+    return s.size === 3 && s.has(2);
+});
+test(g14, 'Set.add/delete', function() {
+    var s = new Set();
+    s.add(5);
+    return s.has(5) && (s.delete(5), !s.has(5));
+});
+test(g14, 'WeakMap', function() {
+    var wm = new WeakMap();
+    var key = {};
+    wm.set(key, 42);
+    return wm.get(key) === 42;
+});
+test(g14, 'WeakSet', function() {
+    var ws = new WeakSet();
+    var obj = {};
+    ws.add(obj);
+    return ws.has(obj);
+});
+
+// ====== GROUP 15: Promises ======
+var g15 = group('15. Promises');
+
+test(g15, 'Promise constructor', function() {
+    var p = new Promise(function(res) { res(1); });
+    return p instanceof Promise;
+});
+test(g15, 'Promise.resolve', function() {
+    return typeof Promise.resolve(1).then === 'function';
+});
+test(g15, 'Promise.reject', function() {
+    return typeof Promise.reject(1).catch === 'function';
+});
+test(g15, 'async/await (syntax)', function() {
+    try {
+        var fn = new Function('return (async function() { return 42; })()');
+        return typeof fn().then === 'function';
+    } catch(e) { return false; }
+});
+
+// ====== GROUP 16: Array Methods ======
+var g16 = group('16. Array Methods');
+
+test(g16, 'Array.from', function() {
+    return Array.from('abc').join('') === 'abc';
+});
+test(g16, 'Array.isArray', function() {
+    return Array.isArray([]) && !Array.isArray({});
+});
+test(g16, 'Array.of', function() {
+    return Array.of(1,2,3).length === 3;
+});
+test(g16, 'flat()', function() {
+    return [1,[2,[3]]].flat().join(',') === '1,2,3';
+});
+test(g16, 'flatMap()', function() {
+    return [1,2,3].flatMap(function(x) { return [x, x*2]; }).length === 6;
+});
+test(g16, 'includes()', function() {
+    return [1,2,3].includes(2) && ![1,2,3].includes(4);
+});
+test(g16, 'find()', function() {
+    return [1,2,3].find(function(x) { return x > 1; }) === 2;
+});
+test(g16, 'findIndex()', function() {
+    return [1,2,3].findIndex(function(x) { return x > 1; }) === 1;
+});
+test(g16, 'fill()', function() {
+    return [1,2,3].fill(0).join(',') === '0,0,0';
+});
+test(g16, 'copyWithin()', function() {
+    return [1,2,3,4,5].copyWithin(0,3).join(',') === '4,5,3,4,5';
+});
+
+// ====== GROUP 17: String Methods ======
+var g17 = group('17. String Methods');
+
+test(g17, 'includes()', function() {
+    return 'hello world'.includes('world');
+});
+test(g17, 'startsWith()', function() {
+    return 'hello'.startsWith('hel') && !'hello'.startsWith('llo');
+});
+test(g17, 'endsWith()', function() {
+    return 'hello'.endsWith('llo') && !'hello'.endsWith('hel');
+});
+test(g17, 'repeat()', function() {
+    return 'ab'.repeat(3) === 'ababab';
+});
+test(g17, 'padStart()', function() {
+    return '5'.padStart(3, '0') === '005';
+});
+test(g17, 'padEnd()', function() {
+    return '5'.padEnd(3, '0') === '500';
+});
+test(g17, 'trimStart()', function() {
+    return '  hi  '.trimStart() === 'hi  ';
+});
+test(g17, 'trimEnd()', function() {
+    return '  hi  '.trimEnd() === '  hi';
+});
+test(g17, 'matchAll()', function() {
+    var matches = [...'test1 test2'.matchAll(/test(\d)/g)];
+    return matches.length === 2 && matches[0][1] === '1';
+});
+
+// ====== GROUP 18: Object Methods ======
+var g18 = group('18. Object Methods');
+
+test(g18, 'Object.keys', function() {
+    return Object.keys({a:1,b:2}).length === 2;
+});
+test(g18, 'Object.values', function() {
+    return Object.values({a:1,b:2}).join(',') === '1,2';
+});
+test(g18, 'Object.entries', function() {
+    var e = Object.entries({a:1});
+    return e[0][0] === 'a' && e[0][1] === 1;
+});
+test(g18, 'Object.assign', function() {
+    var obj = Object.assign({}, {a:1}, {b:2});
+    return obj.a === 1 && obj.b === 2;
+});
+test(g18, 'Object.freeze', function() {
+    var obj = Object.freeze({a:1});
+    obj.a = 2;
+    return obj.a === 1;
+});
+test(g18, 'Object.keys on frozen', function() {
+    return Object.keys(Object.freeze({a:1})).length === 1;
+});
+test(g18, 'Spread syntax', function() {
+    var a = {x:1};
+    var b = {...a, y:2};
+    return b.x === 1 && b.y === 2;
+});
+test(g18, 'Destructuring', function() {
+    var {a, b} = {a: 1, b: 2};
+    return a === 1 && b === 2;
+});
+
+// ====== GROUP 19: Events ======
+var g19 = group('19. Events');
+
+test(g19, 'addEventListener/dispatchEvent', function() {
+    var div = document.createElement('div');
+    var fired = false;
+    div.addEventListener('click', function() { fired = true; });
+    div.dispatchEvent(new Event('click'));
+    return fired;
+});
+test(g19, 'CustomEvent with detail', function() {
+    var div = document.createElement('div');
+    var detail = null;
+    div.addEventListener('custom', function(e) { detail = e.detail; });
+    div.dispatchEvent(new CustomEvent('custom', {detail: 42}));
+    return detail === 42;
+});
+test(g19, 'Event constructor', function() {
+    var e = new Event('test', {bubbles: true, cancelable: true});
+    return e.type === 'test' && e.bubbles === true && e.cancelable === true;
+});
+test(g19, 'removeEventListener', function() {
+    var div = document.createElement('div');
+    var count = 0;
+    var handler = function() { count++; };
+    div.addEventListener('click', handler);
+    div.dispatchEvent(new Event('click'));
+    div.removeEventListener('click', handler);
+    div.dispatchEvent(new Event('click'));
+    return count === 1;
+});
+test(g19, 'event.preventDefault()', function() {
+    var e = new Event('test', {cancelable: true});
+    e.preventDefault();
+    return e.defaultPrevented === true;
+});
+test(g19, 'event.stopPropagation()', function() {
+    var parent = document.createElement('div');
+    var child = document.createElement('span');
+    parent.appendChild(child);
+    document.body.appendChild(parent);
+    var parentFired = false;
+    parent.addEventListener('click', function() { parentFired = true; });
+    child.addEventListener('click', function(e) { e.stopPropagation(); });
+    child.dispatchEvent(new Event('click', {bubbles: true}));
+    return parentFired === false;
+});
+
+// ====== GROUP 20: classList ======
+var g20 = group('20. classList');
+
+test(g20, 'classList.add', function() {
+    var div = document.createElement('div');
+    div.classList.add('foo');
+    return div.className.indexOf('foo') >= 0;
+});
+test(g20, 'classList.remove', function() {
+    var div = document.createElement('div');
+    div.classList.add('foo');
+    div.classList.remove('foo');
+    return div.className.indexOf('foo') < 0;
+});
+test(g20, 'classList.toggle', function() {
+    var div = document.createElement('div');
+    div.classList.toggle('x');
+    return div.classList.contains('x');
+});
+test(g20, 'classList.contains', function() {
+    var div = document.createElement('div');
+    div.classList.add('bar');
+    return div.classList.contains('bar') && !div.classList.contains('baz');
+});
+test(g20, 'classList.replace', function() {
+    var div = document.createElement('div');
+    div.classList.add('old');
+    var result = div.classList.replace('old', 'new');
+    return result === true && div.classList.contains('new') && !div.classList.contains('old');
+});
+
+// ====== GROUP 21: NodeList ======
+var g21 = group('21. NodeList');
+
+test(g21, 'querySelectorAll returns NodeList', function() {
+    var nl = document.querySelectorAll('div');
+    return typeof nl.length === 'number';
+});
+test(g21, 'NodeList.forEach', function() {
+    var div = document.createElement('div');
+    div.innerHTML = '<p>a</p><p>b</p>';
+    document.body.appendChild(div);
+    var count = 0;
+    div.querySelectorAll('p').forEach(function() { count++; });
+    return count === 2;
+});
+test(g21, 'NodeList.item', function() {
+    var div = document.createElement('div');
+    div.innerHTML = '<p>a</p><p>b</p>';
+    document.body.appendChild(div);
+    var nl = div.querySelectorAll('p');
+    return nl.item(0).tagName === 'P' && nl.item(99) === null;
+});
+
+// ====== GROUP 22: Fetch ======
+var g22 = group('22. Fetch API');
+
+test(g22, 'fetch exists', function() {
+    return typeof fetch === 'function';
+});
+test(g22, 'Response properties', function() {
+    // Check constructor availability
+    return typeof Response === 'function';
+});
+test(g22, 'Request constructor', function() {
+    return typeof Request === 'function';
+});
+test(g22, 'Headers constructor', function() {
+    return typeof Headers === 'function';
+});
+test(g22, 'AbortController', function() {
+    var ac = new AbortController();
+    return ac.signal && typeof ac.abort === 'function';
+});
+
+// ====== GROUP 23: URL / URLSearchParams ======
+var g23 = group('23. URL / URLSearchParams');
+
+test(g23, 'URL constructor', function() {
+    var u = new URL('https://example.com/path?q=1#hash');
+    return u.hostname === 'example.com' && u.pathname === '/path';
+});
+test(g23, 'URL.searchParams', function() {
+    var u = new URL('https://example.com?a=1&b=2');
+    return u.searchParams.get('a') === '1' && u.searchParams.get('b') === '2';
+});
+test(g23, 'URLSearchParams constructor', function() {
+    var sp = new URLSearchParams('foo=1&bar=2');
+    return sp.get('foo') === '1' && sp.get('bar') === '2';
+});
+test(g23, 'URLSearchParams.set/has/delete', function() {
+    var sp = new URLSearchParams();
+    sp.set('key', 'val');
+    return sp.has('key') && (sp.delete('key'), !sp.has('key'));
+});
+test(g23, 'URLSearchParams.toString()', function() {
+    var sp = new URLSearchParams();
+    sp.set('a', '1');
+    sp.set('b', '2');
+    var str = sp.toString();
+    return str.indexOf('a=1') >= 0 && str.indexOf('b=2') >= 0;
+});
+
+// ====== GROUP 24: JSON ======
+var g24 = group('24. JSON');
+
+test(g24, 'JSON.parse', function() {
+    var obj = JSON.parse('{"a":1,"b":[2,3]}');
+    return obj.a === 1 && obj.b[1] === 3;
+});
+test(g24, 'JSON.stringify', function() {
+    return JSON.stringify({a:1}) === '{"a":1}';
+});
+test(g24, 'JSON.stringify with replacer', function() {
+    var s = JSON.stringify({a:1,b:2}, function(k,v) { return k === 'b' ? undefined : v; });
+    return s === '{"a":1}';
+});
+test(g24, 'JSON.stringify with indent', function() {
+    var s = JSON.stringify({a:1}, null, 2);
+    return s.indexOf('\n') >= 0;
+});
+
+// ====== GROUP 25: Error Handling ======
+var g25 = group('25. Error Handling');
+
+test(g25, 'try/catch/finally', function() {
+    var result = '';
+    try { throw new Error('test'); }
+    catch(e) { result += e.message; }
+    finally { result += '!'; }
+    return result === 'test!';
+});
+test(g25, 'Error types', function() {
+    return new TypeError() instanceof Error &&
+           new RangeError() instanceof Error &&
+           new SyntaxError() instanceof Error;
+});
+test(g25, 'Error.message', function() {
+    return new Error('hello').message === 'hello';
+});
+test(g25, 'Error.name', function() {
+    return new TypeError().name === 'TypeError';
+});
+
+// ====== GROUP 26: RegExp ======
+var g26 = group('26. RegExp');
+
+test(g26, 'RegExp test', function() {
+    return /hello/.test('hello world');
+});
+test(g26, 'RegExp exec', function() {
+    var m = /(\d+)/.exec('abc123');
+    return m[1] === '123';
+});
+test(g26, 'RegExp flags', function() {
+    var r = /test/gi;
+    return r.global && r.ignoreCase;
+});
+test(g26, 'Named capture groups', function() {
+    var m = /(?<year>\d{4})/.exec('2024');
+    return m.groups.year === '2024';
+});
+test(g26, 'String.match', function() {
+    return 'abc123def456'.match(/\d+/g).length === 2;
+});
+
+// ====== GROUP 27: Date ======
+var g27 = group('27. Date');
+
+test(g27, 'Date.now()', function() {
+    return typeof Date.now() === 'number' && Date.now() > 0;
+});
+test(g27, 'new Date()', function() {
+    var d = new Date();
+    return d instanceof Date;
+});
+test(g27, 'Date.toISOString()', function() {
+    var d = new Date(0);
+    return d.toISOString() === '1970-01-01T00:00:00.000Z';
+});
+test(g27, 'Date.getTime()', function() {
+    var d = new Date(1000);
+    return d.getTime() === 1000;
+});
+
+// ====== GROUP 28: Number/Math ======
+var g28 = group('28. Number & Math');
+
+test(g28, 'Number.isFinite', function() {
+    return Number.isFinite(42) && !Number.isFinite(Infinity);
+});
+test(g28, 'Number.isNaN', function() {
+    return Number.isNaN(NaN) && !Number.isNaN(42);
+});
+test(g28, 'Number.isInteger', function() {
+    return Number.isInteger(42) && !Number.isInteger(42.5);
+});
+test(g28, 'Number.parseInt', function() {
+    return Number.parseInt('42px') === 42;
+});
+test(g28, 'Number.parseFloat', function() {
+    return Number.parseFloat('3.14') === 3.14;
+});
+test(g28, 'Math.trunc', function() {
+    return Math.trunc(4.7) === 4 && Math.trunc(-4.7) === -4;
+});
+test(g28, 'Math.sign', function() {
+    return Math.sign(-5) === -1 && Math.sign(5) === 1 && Math.sign(0) === 0;
+});
+test(g28, 'Math.cbrt', function() {
+    return Math.cbrt(27) === 3;
+});
+test(g28, 'Math.log2', function() {
+    return Math.log2(8) === 3;
+});
+test(g28, 'Math.hypot', function() {
+    return Math.hypot(3, 4) === 5;
+});
+
+// ====== GROUP 29: Proxy & Reflect ======
+var g29 = group('29. Proxy & Reflect');
+
+test(g29, 'Proxy exists', function() {
+    return typeof Proxy === 'function';
+});
+test(g29, 'Proxy get trap', function() {
+    var p = new Proxy({}, { get: function(t, k) { return k === 'x' ? 42 : undefined; }});
+    return p.x === 42;
+});
+test(g29, 'Proxy set trap', function() {
+    var store = {};
+    var p = new Proxy(store, { set: function(t, k, v) { t[k] = v * 2; return true; }});
+    p.x = 5;
+    return store.x === 10;
+});
+test(g29, 'Reflect.ownKeys', function() {
+    return Reflect.ownKeys({a:1, b:2}).length === 2;
+});
+
+// ====== GROUP 30: Generators & Async ======
+var g30 = group('30. Generators & Async');
+
+test(g30, 'Generator function', function() {
+    function* gen() { yield 1; yield 2; yield 3; }
+    var arr = [...gen()];
+    return arr.join(',') === '1,2,3';
+});
+test(g30, 'Generator next/done', function() {
+    function* gen() { yield 'a'; }
+    var g = gen();
+    var r1 = g.next();
+    var r2 = g.next();
+    return r1.value === 'a' && !r1.done && r2.done;
+});
+test(g30, 'Async function returns Promise', function() {
+    async function f() { return 1; }
+    return f() instanceof Promise;
+});
+
+// ====== GROUP 31: Template Literals ======
+var g31 = group('31. Template Literals & Tagged Templates');
+
+test(g31, 'Template literal', function() {
+    var x = 42;
+    return `value: ${x}` === 'value: 42';
+});
+test(g31, 'Tagged template', function() {
+    function tag(strings, ...values) { return strings[0] + values[0]; }
+    return tag`hello ${42}` === 'hello 42';
+});
+test(g31, 'Multi-line template', function() {
+    var s = `line1
+line2`;
+    return s.indexOf('\n') > 0;
+});
+
+// ====== GROUP 32: Classes & Inheritance ======
+var g32 = group('32. Classes');
+
+test(g32, 'Class declaration', function() {
+    class Foo { constructor(x) { this.x = x; } }
+    return new Foo(5).x === 5;
+});
+test(g32, 'Class inheritance', function() {
+    class Base { hello() { return 'base'; } }
+    class Child extends Base { hello() { return 'child'; } }
+    return new Child().hello() === 'child' && new Child() instanceof Base;
+});
+test(g32, 'Static methods', function() {
+    class Foo { static bar() { return 42; } }
+    return Foo.bar() === 42;
+});
+test(g32, 'Getters/Setters', function() {
+    class Foo {
+        get val() { return this._v * 2; }
+        set val(v) { this._v = v; }
+    }
+    var f = new Foo();
+    f.val = 5;
+    return f.val === 10;
+});
+
+// ====== GROUP 33: Timers ======
+var g33 = group('33. Timers');
+
+test(g33, 'setTimeout exists', function() {
+    return typeof setTimeout === 'function';
+});
+test(g33, 'clearTimeout exists', function() {
+    return typeof clearTimeout === 'function';
+});
+test(g33, 'setInterval exists', function() {
+    return typeof setInterval === 'function';
+});
+test(g33, 'clearInterval exists', function() {
+    return typeof clearInterval === 'function';
+});
+test(g33, 'requestAnimationFrame exists', function() {
+    return typeof requestAnimationFrame === 'function';
+});
+test(g33, 'cancelAnimationFrame exists', function() {
+    return typeof cancelAnimationFrame === 'function';
+});
+
+// ====== GROUP 34: Console ======
+var g34 = group('34. Console API');
+
+test(g34, 'console.log', function() {
+    return typeof console.log === 'function';
+});
+test(g34, 'console.warn', function() {
+    return typeof console.warn === 'function';
+});
+test(g34, 'console.error', function() {
+    return typeof console.error === 'function';
+});
+test(g34, 'console.info', function() {
+    return typeof console.info === 'function';
+});
+test(g34, 'console.table', function() {
+    return typeof console.table === 'function';
+});
+
+// ====== GROUP 35: Performance ======
+var g35 = group('35. Performance API');
+
+test(g35, 'performance.now()', function() {
+    var t = performance.now();
+    return typeof t === 'number' && t >= 0;
+});
+test(g35, 'performance.now() monotonic', function() {
+    var a = performance.now();
+    var b = performance.now();
+    return b >= a;
+});
+
+// ====== GROUP 36: Navigator ======
+var g36 = group('36. Navigator');
+
+test(g36, 'navigator.userAgent', function() {
+    return typeof navigator.userAgent === 'string' && navigator.userAgent.length > 0;
+});
+test(g36, 'navigator.language', function() {
+    return typeof navigator.language === 'string';
+});
+test(g36, 'navigator.languages', function() {
+    return Array.isArray(navigator.languages);
+});
+test(g36, 'navigator.platform', function() {
+    return typeof navigator.platform === 'string';
+});
+test(g36, 'navigator.onLine', function() {
+    return navigator.onLine === true;
+});
+
+// ====== GROUP 37: Location ======
+var g37 = group('37. Location');
+
+test(g37, 'location.href', function() {
+    return typeof location.href === 'string';
+});
+test(g37, 'location.protocol', function() {
+    return typeof location.protocol === 'string';
+});
+test(g37, 'location.hostname', function() {
+    return typeof location.hostname === 'string';
+});
+test(g37, 'location.pathname', function() {
+    return typeof location.pathname === 'string';
+});
+
+// ====== GROUP 38: History ======
+var g38 = group('38. History');
+
+test(g38, 'history.length', function() {
+    return typeof history.length === 'number';
+});
+test(g38, 'history.pushState', function() {
+    return typeof history.pushState === 'function';
+});
+test(g38, 'history.replaceState', function() {
+    return typeof history.replaceState === 'function';
+});
+
+// ====== GROUP 39: Storage ======
+var g39 = group('39. Storage');
+
+test(g39, 'localStorage exists', function() {
+    return typeof localStorage === 'object';
+});
+test(g39, 'localStorage.setItem/getItem', function() {
+    localStorage.setItem('test_key', 'test_val');
+    return localStorage.getItem('test_key') === 'test_val';
+});
+test(g39, 'localStorage.removeItem', function() {
+    localStorage.setItem('rm_key', '1');
+    localStorage.removeItem('rm_key');
+    return localStorage.getItem('rm_key') === null;
+});
+test(g39, 'sessionStorage exists', function() {
+    return typeof sessionStorage === 'object';
+});
+
+// ====== GROUP 40: FormData / Blob ======
+var g40 = group('40. FormData & Blob');
+
+test(g40, 'FormData constructor', function() {
+    var fd = new FormData();
+    return fd !== null;
+});
+test(g40, 'FormData.append/get', function() {
+    var fd = new FormData();
+    fd.append('key', 'val');
+    return fd.get('key') === 'val';
+});
+test(g40, 'FormData.has/delete', function() {
+    var fd = new FormData();
+    fd.append('x', '1');
+    return fd.has('x') && (fd.delete('x'), !fd.has('x'));
+});
+test(g40, 'Blob constructor', function() {
+    var b = new Blob(['hello'], {type: 'text/plain'});
+    return b.size === 5 && b.type === 'text/plain';
+});
+
+// ====== GROUP 41: TreeWalker ======
+var g41 = group('41. TreeWalker & Range');
+
+test(g41, 'createTreeWalker exists', function() {
+    return typeof document.createTreeWalker === 'function';
+});
+test(g41, 'TreeWalker basic traversal', function() {
+    var div = document.createElement('div');
+    div.innerHTML = '<p>a</p><p>b</p>';
+    document.body.appendChild(div);
+    var tw = document.createTreeWalker(div);
+    var first = tw.nextNode();
+    return first !== null;
+});
+test(g41, 'createRange exists', function() {
+    return typeof document.createRange === 'function';
+});
+test(g41, 'Range basic', function() {
+    var range = document.createRange();
+    return range !== null && typeof range.setStart === 'function';
+});
+
+// ====== GROUP 42: NodeFilter ======
+var g42 = group('42. NodeFilter & Selection');
+
+test(g42, 'NodeFilter constants', function() {
+    return NodeFilter.SHOW_ALL === 0xFFFFFFFF &&
+           NodeFilter.SHOW_ELEMENT === 1 &&
+           NodeFilter.SHOW_TEXT === 4;
+});
+test(g42, 'window.getSelection exists', function() {
+    return typeof window.getSelection === 'function';
+});
+test(g42, 'getSelection returns object', function() {
+    var sel = window.getSelection();
+    return sel !== null && typeof sel.rangeCount === 'number';
+});
+
+// ====== GROUP 43: element.focus/blur/click ======
+var g43 = group('43. Focus / Click');
+
+test(g43, 'element.focus()', function() {
+    var input = document.createElement('input');
+    document.body.appendChild(input);
+    input.focus();
+    return true; // doesn't throw
+});
+test(g43, 'element.blur()', function() {
+    var input = document.createElement('input');
+    document.body.appendChild(input);
+    input.blur();
+    return true;
+});
+test(g43, 'element.click() dispatches event', function() {
+    var div = document.createElement('div');
+    document.body.appendChild(div);
+    var clicked = false;
+    div.addEventListener('click', function() { clicked = true; });
+    div.click();
+    return clicked;
+});
+
+// ====== GROUP 44: misc DOM ======
+var g44 = group('44. Misc DOM');
+
+test(g44, 'element.normalize()', function() {
+    var div = document.createElement('div');
+    div.normalize();
+    return true; // doesn't throw
+});
+test(g44, 'element.isSameNode()', function() {
+    var div = document.createElement('div');
+    return div.isSameNode(div) === true;
+});
+test(g44, 'element.isEqualNode()', function() {
+    var a = document.createElement('div');
+    var b = document.createElement('div');
+    return a.isEqualNode(b) === true;
+});
+test(g44, 'element.getRootNode()', function() {
+    var div = document.createElement('div');
+    document.body.appendChild(div);
+    var root = div.getRootNode();
+    return root !== null;
+});
+test(g44, 'element.compareDocumentPosition()', function() {
+    var parent = document.createElement('div');
+    var child = document.createElement('span');
+    parent.appendChild(child);
+    document.body.appendChild(parent);
+    return typeof parent.compareDocumentPosition(child) === 'number';
+});
+test(g44, 'element.scrollIntoView()', function() {
+    var div = document.createElement('div');
+    document.body.appendChild(div);
+    div.scrollIntoView();
+    return true; // doesn't throw
+});
+
+// ====== GROUP 45: getComputedStyle ======
+var g45 = group('45. getComputedStyle & matchMedia');
+
+test(g45, 'getComputedStyle exists', function() {
+    return typeof getComputedStyle === 'function';
+});
+test(g45, 'getComputedStyle returns object', function() {
+    var div = document.createElement('div');
+    document.body.appendChild(div);
+    var cs = getComputedStyle(div);
+    return cs !== null && typeof cs.getPropertyValue === 'function';
+});
+test(g45, 'matchMedia exists', function() {
+    return typeof matchMedia === 'function';
+});
+test(g45, 'matchMedia returns MediaQueryList', function() {
+    var mql = matchMedia('(max-width: 9999px)');
+    return mql !== null && typeof mql.matches === 'boolean';
+});
+
+// ====== GROUP 46: Canvas basic ======
+var g46 = group('46. Canvas Basics');
+
+test(g46, 'canvas.getContext("2d")', function() {
+    var c = document.createElement('canvas');
+    document.body.appendChild(c);
+    var ctx = c.getContext('2d');
+    return ctx !== null;
+});
+test(g46, 'ctx.fillRect exists', function() {
+    var c = document.createElement('canvas');
+    document.body.appendChild(c);
+    var ctx = c.getContext('2d');
+    return typeof ctx.fillRect === 'function';
+});
+test(g46, 'ctx.strokeRect exists', function() {
+    var c = document.createElement('canvas');
+    document.body.appendChild(c);
+    var ctx = c.getContext('2d');
+    return typeof ctx.strokeRect === 'function';
+});
+test(g46, 'ctx.clearRect exists', function() {
+    var c = document.createElement('canvas');
+    document.body.appendChild(c);
+    var ctx = c.getContext('2d');
+    return typeof ctx.clearRect === 'function';
+});
+test(g46, 'ctx.fillStyle get/set', function() {
+    var c = document.createElement('canvas');
+    document.body.appendChild(c);
+    var ctx = c.getContext('2d');
+    ctx.fillStyle = 'red';
+    return ctx.fillStyle === 'red';
+});
+
+// ====== GROUP 47: Canvas Path ======
+var g47 = group('47. Canvas Path Methods');
+
+test(g47, 'ctx.beginPath', function() {
+    var c = document.createElement('canvas');
+    document.body.appendChild(c);
+    var ctx = c.getContext('2d');
+    return typeof ctx.beginPath === 'function';
+});
+test(g47, 'ctx.moveTo', function() {
+    var c = document.createElement('canvas');
+    document.body.appendChild(c);
+    var ctx = c.getContext('2d');
+    return typeof ctx.moveTo === 'function';
+});
+test(g47, 'ctx.lineTo', function() {
+    var c = document.createElement('canvas');
+    document.body.appendChild(c);
+    var ctx = c.getContext('2d');
+    return typeof ctx.lineTo === 'function';
+});
+test(g47, 'ctx.arc', function() {
+    var c = document.createElement('canvas');
+    document.body.appendChild(c);
+    var ctx = c.getContext('2d');
+    return typeof ctx.arc === 'function';
+});
+test(g47, 'ctx.fill', function() {
+    var c = document.createElement('canvas');
+    document.body.appendChild(c);
+    var ctx = c.getContext('2d');
+    return typeof ctx.fill === 'function';
+});
+test(g47, 'ctx.stroke', function() {
+    var c = document.createElement('canvas');
+    document.body.appendChild(c);
+    var ctx = c.getContext('2d');
+    return typeof ctx.stroke === 'function';
+});
+
+// ====== GROUP 48: Canvas Transform ======
+var g48 = group('48. Canvas Transform & State');
+
+test(g48, 'ctx.save', function() {
+    var c = document.createElement('canvas');
+    document.body.appendChild(c);
+    var ctx = c.getContext('2d');
+    return typeof ctx.save === 'function';
+});
+test(g48, 'ctx.restore', function() {
+    var c = document.createElement('canvas');
+    document.body.appendChild(c);
+    var ctx = c.getContext('2d');
+    return typeof ctx.restore === 'function';
+});
+test(g48, 'ctx.translate', function() {
+    var c = document.createElement('canvas');
+    document.body.appendChild(c);
+    var ctx = c.getContext('2d');
+    return typeof ctx.translate === 'function';
+});
+test(g48, 'ctx.rotate', function() {
+    var c = document.createElement('canvas');
+    document.body.appendChild(c);
+    var ctx = c.getContext('2d');
+    return typeof ctx.rotate === 'function';
+});
+test(g48, 'ctx.scale', function() {
+    var c = document.createElement('canvas');
+    document.body.appendChild(c);
+    var ctx = c.getContext('2d');
+    return typeof ctx.scale === 'function';
+});
+
+// ====== GROUP 49: Canvas Text & Advanced ======
+var g49 = group('49. Canvas Text & Advanced');
+
+test(g49, 'ctx.fillText', function() {
+    var c = document.createElement('canvas');
+    document.body.appendChild(c);
+    var ctx = c.getContext('2d');
+    return typeof ctx.fillText === 'function';
+});
+test(g49, 'ctx.measureText', function() {
+    var c = document.createElement('canvas');
+    document.body.appendChild(c);
+    var ctx = c.getContext('2d');
+    var m = ctx.measureText('hello');
+    return m !== null && typeof m.width === 'number';
+});
+test(g49, 'ctx.createLinearGradient', function() {
+    var c = document.createElement('canvas');
+    document.body.appendChild(c);
+    var ctx = c.getContext('2d');
+    var g = ctx.createLinearGradient(0,0,100,0);
+    return g !== null && typeof g.addColorStop === 'function';
+});
+test(g49, 'ctx.setLineDash', function() {
+    var c = document.createElement('canvas');
+    document.body.appendChild(c);
+    var ctx = c.getContext('2d');
+    return typeof ctx.setLineDash === 'function';
+});
+test(g49, 'ctx.getLineDash', function() {
+    var c = document.createElement('canvas');
+    document.body.appendChild(c);
+    var ctx = c.getContext('2d');
+    return Array.isArray(ctx.getLineDash());
+});
+
+// ====== GROUP 50: Misc Web APIs ======
+var g50 = group('50. Misc Web APIs');
+
+test(g50, 'btoa/atob', function() {
+    return atob(btoa('hello')) === 'hello';
+});
+test(g50, 'encodeURIComponent/decodeURIComponent', function() {
+    var encoded = encodeURIComponent('hello world&');
+    return decodeURIComponent(encoded) === 'hello world&';
+});
+test(g50, 'MutationObserver exists', function() {
+    return typeof MutationObserver === 'function';
+});
+test(g50, 'ResizeObserver exists', function() {
+    return typeof ResizeObserver === 'function';
+});
+test(g50, 'IntersectionObserver exists', function() {
+    return typeof IntersectionObserver === 'function';
+});
+
+// ======= Done =======
+updateScore();
+</script>
+</body>
+</html>

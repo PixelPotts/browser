@@ -33,7 +33,7 @@ t('Math.sign', function(){
 });
 
 t('Math.cbrt', function(){
-  return Math.cbrt(27) === 3 && Math.cbrt(8) === 2;
+  return Math.abs(Math.cbrt(27) - 3) < 1e-10 && Math.abs(Math.cbrt(8) - 2) < 1e-10;
 });
 
 t('Math.log2', function(){

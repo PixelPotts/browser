@@ -33,7 +33,7 @@ bool DOMNode::isBlock() const {
 }
 
 std::string DOMNode::getTextContent() const {
-    if (node_type == TEXT) return text_content;
+    if (node_type == TEXT || node_type == COMMENT) return text_content;
     std::string result;
     for (auto& child : children)
         result += child->getTextContent();

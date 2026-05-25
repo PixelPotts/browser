@@ -659,6 +659,10 @@ static JSValue js_element_set_innerText(JSContext* ctx, JSValueConst this_val,
     if (!text) return JS_UNDEFINED;
     Document* doc = g_js_engine->document;
     node->setTextContent(text, doc->next_id);
+    // Register new text child in node_map so JS can resolve it
+    for (auto& child : node->children) {
+        doc->node_map[child->node_id] = child.get();
+    }
     JS_FreeCString(ctx, text);
     node->markDirty();
     if (g_js_engine) g_js_engine->scheduleRerender();
@@ -737,8 +741,12 @@ static JSValue js_doc_createDocumentFragment(JSContext* ctx, JSValueConst this_v
                                               int argc, JSValueConst* argv) {
     if (!g_js_engine || !g_js_engine->document) return JS_NULL;
     Document* doc = g_js_engine->document;
-    auto frag = doc->createElement("__fragment__");
-    frag->node_type = DOMNode::ELEMENT;
+    auto frag = std::make_shared<DOMNode>();
+    frag->node_id = doc->next_id++;
+    frag->node_type = DOMNode::DOCUMENT_FRAGMENT;
+    frag->tag_name = "#document-fragment";
+    doc->node_map[frag->node_id] = frag.get();
+    doc->orphans.push_back(frag);
     return js_wrap_node(ctx, frag.get());
 }
 

@@ -1272,17 +1272,21 @@ globalThis.Event = function Event(type, opts) {
     this.cancelable = (opts && opts.cancelable) || false;
     this.composed = (opts && opts.composed) || false;
     this.defaultPrevented = false;
+    this._propagationStopped = false;
     this.target = null;
     this.currentTarget = null;
     this.timeStamp = performance.now();
-    this.preventDefault = function() { this.defaultPrevented = true; };
-    this.stopPropagation = function() {};
-    this.stopImmediatePropagation = function() {};
+    this.isTrusted = false;
+    this.eventPhase = 0;
+    this.preventDefault = function() { if (this.cancelable) this.defaultPrevented = true; };
+    this.stopPropagation = function() { this._propagationStopped = true; };
+    this.stopImmediatePropagation = function() { this._propagationStopped = true; };
+    this.composedPath = function() { return []; };
 };
 
 globalThis.CustomEvent = function CustomEvent(type, opts) {
     Event.call(this, type, opts);
-    this.detail = (opts && opts.detail) || null;
+    this.detail = (opts && opts.detail !== undefined) ? opts.detail : null;
 };
 
 // DOM type constructors — must be defined before extending prototypes
@@ -1435,7 +1439,16 @@ globalThis.DOMException = function DOMException(msg, name) {
 if (typeof globalThis.Blob === 'undefined') {
     globalThis.Blob = function Blob(parts, opts) {
         this.size = 0; this.type = (opts && opts.type) || '';
+        if (parts) for (var i = 0; i < parts.length; i++) {
+            var p = parts[i];
+            if (typeof p === 'string') this.size += p.length;
+            else if (p && p.byteLength) this.size += p.byteLength;
+            else if (p && p.size) this.size += p.size;
+        }
     };
+    Blob.prototype.slice = function(s,e,t) { return new Blob([], {type:t||this.type}); };
+    Blob.prototype.text = function() { return Promise.resolve(''); };
+    Blob.prototype.arrayBuffer = function() { return Promise.resolve(new ArrayBuffer(0)); };
 }
 if (typeof globalThis.File === 'undefined') {
     globalThis.File = function File(parts, name, opts) {
