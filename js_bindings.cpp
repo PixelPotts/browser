@@ -2436,8 +2436,9 @@ static JSValue js_ctx_get_fillStyle(JSContext* ctx, JSValueConst this_val) {
     return v;
 }
 
-static JSValue js_ctx_set_fillStyle(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    JS_SetPropertyStr(ctx, JS_DupValue(ctx, this_val), "_fillStyle", JS_DupValue(ctx, val));
+static JSValue js_ctx_set_fillStyle(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_UNDEFINED;
+    JS_SetPropertyStr(ctx, this_val, "_fillStyle", JS_DupValue(ctx, argv[0]));
     return JS_UNDEFINED;
 }
 
@@ -2447,8 +2448,9 @@ static JSValue js_ctx_get_strokeStyle(JSContext* ctx, JSValueConst this_val) {
     return v;
 }
 
-static JSValue js_ctx_set_strokeStyle(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
-    JS_SetPropertyStr(ctx, JS_DupValue(ctx, this_val), "_strokeStyle", JS_DupValue(ctx, val));
+static JSValue js_ctx_set_strokeStyle(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_UNDEFINED;
+    JS_SetPropertyStr(ctx, this_val, "_strokeStyle", JS_DupValue(ctx, argv[0]));
     return JS_UNDEFINED;
 }
 

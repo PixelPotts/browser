@@ -854,9 +854,15 @@ static JSValue js_structuredClone(JSContext* ctx, JSValueConst this_val,
 static JSValue js_queueMicrotask(JSContext* ctx, JSValueConst this_val,
                                   int argc, JSValueConst* argv) {
     if (argc < 1 || !JS_IsFunction(ctx, argv[0])) return JS_UNDEFINED;
-    // QuickJS: enqueue as a resolved promise .then()
-    JSValue promise = JS_NewPromiseCapability(ctx, nullptr);
-    if (JS_IsException(promise)) {
+    // Use Promise.resolve().then(callback) to schedule as microtask
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue prom_ctor = JS_GetPropertyStr(ctx, global, "Promise");
+    JSValue resolve_fn = JS_GetPropertyStr(ctx, prom_ctor, "resolve");
+    JSValue resolved = JS_Call(ctx, resolve_fn, prom_ctor, 0, nullptr);
+    if (JS_IsException(resolved)) {
+        JS_FreeValue(ctx, resolve_fn);
+        JS_FreeValue(ctx, prom_ctor);
+        JS_FreeValue(ctx, global);
         // Fallback: just call it via setTimeout 0
         if (g_js_engine) {
             JSValue func = JS_DupValue(ctx, argv[0]);
@@ -864,12 +870,6 @@ static JSValue js_queueMicrotask(JSContext* ctx, JSValueConst this_val,
         }
         return JS_UNDEFINED;
     }
-    JS_FreeValue(ctx, promise);
-    // Simpler approach: use Promise.resolve().then(callback)
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue prom_ctor = JS_GetPropertyStr(ctx, global, "Promise");
-    JSValue resolve_fn = JS_GetPropertyStr(ctx, prom_ctor, "resolve");
-    JSValue resolved = JS_Call(ctx, resolve_fn, prom_ctor, 0, nullptr);
     JSValue then_fn = JS_GetPropertyStr(ctx, resolved, "then");
     JSValue result = JS_Call(ctx, then_fn, resolved, 1, argv);
     JS_FreeValue(ctx, result);
