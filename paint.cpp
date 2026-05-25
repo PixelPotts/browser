@@ -363,7 +363,8 @@ static void paint_box(LayoutBox* box, DisplayList& dl, float offset_x, float off
     }
 
     // Replaced elements
-    if (box->type == LayoutBoxType::Replaced && box->replaced_surface) {
+    if (box->type == LayoutBoxType::Replaced && box->replaced_surface &&
+        box->content_rect.w > 0 && box->content_rect.h > 0) {
         PaintCommand cmd;
         cmd.type = PaintCmdType::DrawImage;
         cmd.surface = box->replaced_surface;
@@ -506,6 +507,7 @@ void render_display_list(cairo_t* cr, const DisplayList& dl, float scroll_x, flo
                 int sw = cairo_image_surface_get_width(cmd.surface);
                 int sh = cairo_image_surface_get_height(cmd.surface);
                 if (sw <= 0 || sh <= 0) break;
+                if (cmd.dest_rect.w <= 0 || cmd.dest_rect.h <= 0) break;
 
                 cairo_save(cr);
                 cairo_translate(cr, cmd.dest_rect.x, cmd.dest_rect.y);

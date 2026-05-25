@@ -3286,84 +3286,16 @@ static void layout_and_paint(TabState* tab) {
     tab->display_list = generate_display_list(tab->layout_root.get());
 
     fprintf(stderr, "[LAYOUT] Display list: %zu commands\n", tab->display_list.size());
-    // Debug: dump first few display list commands
-    for (size_t i = 0; i < tab->display_list.size(); i++) {
-        auto& cmd = tab->display_list[i];
-        const char* types[] = {"FillRect","DrawText","DrawBorder","DrawImage",
-                               "PushClip","PopClip","PushOpacity","PopOpacity","Translate","PopTranslate"};
-        fprintf(stderr, "[LAYOUT]   cmd[%zu]: %s", i, types[(int)cmd.type]);
-        if (cmd.type == PaintCmdType::FillRect)
-            fprintf(stderr, " rect=(%.0f,%.0f,%.0f,%.0f) rgba=(%.2f,%.2f,%.2f,%.2f)",
-                    cmd.rect.x, cmd.rect.y, cmd.rect.w, cmd.rect.h,
-                    cmd.color.r, cmd.color.g, cmd.color.b, cmd.color.a);
-        else if (cmd.type == PaintCmdType::DrawText) {
-            fprintf(stderr, " pos=(%.0f,%.0f) color=(%.2f,%.2f,%.2f)",
-                    cmd.text_x, cmd.text_y, cmd.text_color.r, cmd.text_color.g, cmd.text_color.b);
-            if (cmd.pango_layout) {
-                const char* txt = pango_layout_get_text(cmd.pango_layout);
-                fprintf(stderr, " text='%.80s%s'", txt ? txt : "(null)", txt && strlen(txt) > 80 ? "..." : "");
-            }
-        }
-        else if (cmd.type == PaintCmdType::DrawBorder)
-            fprintf(stderr, " rect=(%.0f,%.0f,%.0f,%.0f) widths=(%.0f,%.0f,%.0f,%.0f)",
-                    cmd.border_rect.x, cmd.border_rect.y, cmd.border_rect.w, cmd.border_rect.h,
-                    cmd.border_widths.top, cmd.border_widths.right,
-                    cmd.border_widths.bottom, cmd.border_widths.left);
-        fprintf(stderr, "\n");
-    }
-    // Debug: dump layout tree
-    std::function<void(LayoutBox*, int)> dump_layout = [&](LayoutBox* b, int depth) {
-        if (!b) return;
-        std::string indent(depth*2, ' ');
-        const char* tnames[] = {"Block","Inline","InlineBlock","Text","Replaced","Flex","Grid","Anon","None"};
-        fprintf(stderr, "[LAYOUT-TREE] %s%s", indent.c_str(), tnames[(int)b->type]);
-        if (b->dom_node) fprintf(stderr, " <%s id='%s'>", b->dom_node->tag_name.c_str(), b->dom_node->id.c_str());
-        fprintf(stderr, " rect=(%.0f,%.0f,%.0f,%.0f) bg='%s'",
-                b->content_rect.x, b->content_rect.y, b->content_rect.w, b->content_rect.h,
-                b->bg_color.c_str());
-        if (b->pango_layout) fprintf(stderr, " [has text]");
-        fprintf(stderr, "\n");
-        if (depth < 8) for (auto& c : b->children) dump_layout(c.get(), depth+1);
-    };
-    dump_layout(tab->layout_root.get(), 0);
 
     // Update content height for scrollbar
     tab->content_height = get_content_height(tab->layout_root.get());
 
     fprintf(stderr, "[LAYOUT] Content height: %.0f\n", tab->content_height);
 
-    // Debug: test hit testing at a few positions
-    {
-        float test_pts[][2] = {{100, 40}, {100, 700}, {120, 700}};
-        for (auto& pt : test_pts) {
-            HitTestResult h = hit_test(tab->layout_root.get(), pt[0], pt[1]);
-            if (h.node) {
-                DOMNode* ln = h.node;
-                std::string li;
-                while (ln) {
-                    if (ln->tag_name == "a") {
-                        auto it = ln->attributes.find("href");
-                        if (it != ln->attributes.end()) li = " LINK=" + it->second;
-                        break;
-                    }
-                    ln = ln->parent;
-                }
-                fprintf(stderr, "[HIT-TEST] (%.0f,%.0f) => <%s>%s\n",
-                        pt[0], pt[1], h.node->tag_name.c_str(), li.c_str());
-            }
-        }
-    }
-
     // Set drawing area size to content height so scrollbar works
     if (tab->drawing_area) {
         int h = std::max(1, (int)tab->content_height);
         gtk_widget_set_size_request(tab->drawing_area, -1, h);
-        fprintf(stderr, "[LAYOUT] queue_draw: da=%p visible=%d mapped=%d realized=%d h=%d dl=%zu\n",
-                tab->drawing_area,
-                gtk_widget_get_visible(tab->drawing_area),
-                gtk_widget_get_mapped(tab->drawing_area),
-                gtk_widget_get_realized(tab->drawing_area),
-                h, tab->display_list.size());
         gtk_widget_queue_draw(tab->drawing_area);
         // Also queue redraw on the viewport/scroll parent to force propagation
         GtkWidget* parent = gtk_widget_get_parent(tab->drawing_area);
@@ -3373,7 +3305,6 @@ static void layout_and_paint(TabState* tab) {
         if (gdkwin) {
             gdk_window_invalidate_rect(gdkwin, NULL, TRUE);
             gdk_window_process_updates(gdkwin, TRUE);
-            fprintf(stderr, "[LAYOUT] forced GDK window invalidation\n");
         }
     }
 }
@@ -3382,15 +3313,11 @@ static void layout_and_paint(TabState* tab) {
 static gboolean on_draw_content(GtkWidget* widget, cairo_t* cr, gpointer data) {
     TabState* tab = static_cast<TabState*>(data);
     if (!tab || tab->display_list.empty()) {
-        fprintf(stderr, "[DRAW] on_draw_content called but display_list empty (tab=%p, dl=%zu)\n",
-                tab, tab ? tab->display_list.size() : 0);
         // White background when empty
         cairo_set_source_rgb(cr, 1, 1, 1);
         cairo_paint(cr);
         return FALSE;
     }
-
-    fprintf(stderr, "[DRAW] on_draw_content rendering %zu commands\n", tab->display_list.size());
 
     // White background
     cairo_set_source_rgb(cr, 1, 1, 1);
