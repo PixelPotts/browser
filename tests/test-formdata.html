@@ -1,0 +1,40 @@
+<!DOCTYPE html><html><head><title>Test FormData</title></head>
+<body><div id="out"></div>
+<script>
+var P=0,F=0,T=0,fails=[];
+function t(n,fn){T++;try{if(fn()===true){P++;} else {F++;fails.push(n);}}catch(e){F++;fails.push(n+': '+e.message);}}
+
+t('FormData constructor', function(){
+  var fd = new FormData();
+  return fd instanceof FormData;
+});
+
+t('FormData append/get', function(){
+  var fd = new FormData();
+  fd.append('key', 'value');
+  return fd.get('key') === 'value';
+});
+
+t('FormData has/delete', function(){
+  var fd = new FormData();
+  fd.append('foo', 'bar');
+  var had = fd.has('foo');
+  fd.delete('foo');
+  return had === true && fd.has('foo') === false;
+});
+
+t('Blob constructor with size', function(){
+  var b = new Blob(['hello']);
+  return b.size === 5;
+});
+
+t('Blob constructor with type', function(){
+  var b = new Blob(['test'], {type: 'text/plain'});
+  return b.type === 'text/plain';
+});
+
+var s='=== RESULTS: '+P+'/'+T+' passed, '+F+' failed ===';
+console.log(s);
+fails.forEach(function(f){console.log('FAIL: '+f);});
+document.getElementById('out').textContent=s+'\n'+fails.join('\n');
+</script></body></html>

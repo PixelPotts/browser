@@ -1,0 +1,23 @@
+<!DOCTYPE html><html><head><title>Test Observers</title></head>
+<body><div id="out"></div>
+<script>
+var P=0,F=0,T=0,fails=[];
+function t(n,fn){T++;try{if(fn()===true){P++;} else {F++;fails.push(n);}}catch(e){F++;fails.push(n+': '+e.message);}}
+
+t('MutationObserver exists as constructor', function(){
+  return typeof MutationObserver === 'function';
+});
+
+t('ResizeObserver exists as constructor', function(){
+  return typeof ResizeObserver === 'function';
+});
+
+t('IntersectionObserver exists as constructor', function(){
+  return typeof IntersectionObserver === 'function';
+});
+
+var s='=== RESULTS: '+P+'/'+T+' passed, '+F+' failed ===';
+console.log(s);
+fails.forEach(function(f){console.log('FAIL: '+f);});
+document.getElementById('out').textContent=s+'\n'+fails.join('\n');
+</script></body></html>

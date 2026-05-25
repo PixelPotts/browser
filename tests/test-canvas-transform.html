@@ -1,0 +1,55 @@
+<!DOCTYPE html><html><head><title>Test Canvas Transform</title></head>
+<body><div id="out"></div>
+<canvas id="c" width="100" height="100"></canvas>
+<script>
+var P=0,F=0,T=0,fails=[];
+function t(n,fn){T++;try{if(fn()===true){P++;} else {F++;fails.push(n);}}catch(e){F++;fails.push(n+': '+e.message);}}
+
+var ctx = document.getElementById('c').getContext('2d');
+
+t('save exists', function(){
+  return typeof ctx.save === 'function';
+});
+
+t('restore exists', function(){
+  return typeof ctx.restore === 'function';
+});
+
+t('translate exists', function(){
+  return typeof ctx.translate === 'function';
+});
+
+t('rotate exists', function(){
+  return typeof ctx.rotate === 'function';
+});
+
+t('scale exists', function(){
+  return typeof ctx.scale === 'function';
+});
+
+t('fillText exists', function(){
+  return typeof ctx.fillText === 'function';
+});
+
+t('measureText exists', function(){
+  return typeof ctx.measureText === 'function';
+});
+
+t('createLinearGradient returns object with addColorStop', function(){
+  var g = ctx.createLinearGradient(0, 0, 100, 100);
+  return g !== null && typeof g.addColorStop === 'function';
+});
+
+t('setLineDash exists', function(){
+  return typeof ctx.setLineDash === 'function';
+});
+
+t('getLineDash exists', function(){
+  return typeof ctx.getLineDash === 'function';
+});
+
+var s='=== RESULTS: '+P+'/'+T+' passed, '+F+' failed ===';
+console.log(s);
+fails.forEach(function(f){console.log('FAIL: '+f);});
+document.getElementById('out').textContent=s+'\n'+fails.join('\n');
+</script></body></html>

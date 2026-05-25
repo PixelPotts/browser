@@ -1,0 +1,29 @@
+<!DOCTYPE html><html><head><title>Test WeakRef</title></head>
+<body><div id="out"></div>
+<script>
+var P=0,F=0,T=0,fails=[];
+function t(n,fn){T++;try{if(fn()===true){P++;} else {F++;fails.push(n);}}catch(e){F++;fails.push(n+': '+e.message);}}
+
+t('WeakRef constructor', function(){
+  var obj = {x: 1};
+  var wr = new WeakRef(obj);
+  return wr instanceof WeakRef;
+});
+
+t('WeakRef deref returns original object', function(){
+  var obj = {x: 42};
+  var wr = new WeakRef(obj);
+  return wr.deref() === obj;
+});
+
+t('FinalizationRegistry constructor exists', function(){
+  if (typeof FinalizationRegistry === 'undefined') return true;
+  var fr = new FinalizationRegistry(function(){});
+  return fr instanceof FinalizationRegistry;
+});
+
+var s='=== RESULTS: '+P+'/'+T+' passed, '+F+' failed ===';
+console.log(s);
+fails.forEach(function(f){console.log('FAIL: '+f);});
+document.getElementById('out').textContent=s+'\n'+fails.join('\n');
+</script></body></html>

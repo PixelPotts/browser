@@ -1,0 +1,42 @@
+<!DOCTYPE html><html><head><title>Test Canvas Path</title></head>
+<body><div id="out"></div>
+<canvas id="c" width="100" height="100"></canvas>
+<script>
+var P=0,F=0,T=0,fails=[];
+function t(n,fn){T++;try{if(fn()===true){P++;} else {F++;fails.push(n);}}catch(e){F++;fails.push(n+': '+e.message);}}
+
+var ctx = document.getElementById('c').getContext('2d');
+
+t('beginPath exists', function(){
+  return typeof ctx.beginPath === 'function';
+});
+
+t('closePath exists', function(){
+  return typeof ctx.closePath === 'function';
+});
+
+t('moveTo exists', function(){
+  return typeof ctx.moveTo === 'function';
+});
+
+t('lineTo exists', function(){
+  return typeof ctx.lineTo === 'function';
+});
+
+t('arc exists', function(){
+  return typeof ctx.arc === 'function';
+});
+
+t('fill exists', function(){
+  return typeof ctx.fill === 'function';
+});
+
+t('stroke exists', function(){
+  return typeof ctx.stroke === 'function';
+});
+
+var s='=== RESULTS: '+P+'/'+T+' passed, '+F+' failed ===';
+console.log(s);
+fails.forEach(function(f){console.log('FAIL: '+f);});
+document.getElementById('out').textContent=s+'\n'+fails.join('\n');
+</script></body></html>

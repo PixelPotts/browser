@@ -1,0 +1,39 @@
+<!DOCTYPE html><html><head><title>Test Storage</title></head>
+<body><div id="out"></div>
+<script>
+var P=0,F=0,T=0,fails=[];
+function t(n,fn){T++;try{if(fn()===true){P++;} else {F++;fails.push(n);}}catch(e){F++;fails.push(n+': '+e.message);}}
+
+t('localStorage exists', function(){
+  return typeof localStorage === 'object' && localStorage !== null;
+});
+
+t('localStorage setItem/getItem', function(){
+  localStorage.setItem('__test_key__', 'hello');
+  var v = localStorage.getItem('__test_key__');
+  localStorage.removeItem('__test_key__');
+  return v === 'hello';
+});
+
+t('localStorage removeItem', function(){
+  localStorage.setItem('__test_rm__', 'val');
+  localStorage.removeItem('__test_rm__');
+  return localStorage.getItem('__test_rm__') === null;
+});
+
+t('sessionStorage exists', function(){
+  return typeof sessionStorage === 'object' && sessionStorage !== null;
+});
+
+t('sessionStorage setItem/getItem', function(){
+  sessionStorage.setItem('__test_ss__', 'world');
+  var v = sessionStorage.getItem('__test_ss__');
+  sessionStorage.removeItem('__test_ss__');
+  return v === 'world';
+});
+
+var s='=== RESULTS: '+P+'/'+T+' passed, '+F+' failed ===';
+console.log(s);
+fails.forEach(function(f){console.log('FAIL: '+f);});
+document.getElementById('out').textContent=s+'\n'+fails.join('\n');
+</script></body></html>

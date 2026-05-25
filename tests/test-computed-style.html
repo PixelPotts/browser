@@ -1,0 +1,31 @@
+<!DOCTYPE html><html><head><title>Test Computed Style</title></head>
+<body><div id="out"></div>
+<div id="styled" style="color: red;">test</div>
+<script>
+var P=0,F=0,T=0,fails=[];
+function t(n,fn){T++;try{if(fn()===true){P++;} else {F++;fails.push(n);}}catch(e){F++;fails.push(n+': '+e.message);}}
+
+t('getComputedStyle exists', function(){
+  return typeof window.getComputedStyle === 'function';
+});
+
+t('getComputedStyle returns object with getPropertyValue', function(){
+  var el = document.getElementById('styled');
+  var cs = window.getComputedStyle(el);
+  return cs !== null && typeof cs.getPropertyValue === 'function';
+});
+
+t('matchMedia exists', function(){
+  return typeof window.matchMedia === 'function';
+});
+
+t('matchMedia returns object with matches property', function(){
+  var mq = window.matchMedia('(min-width: 1px)');
+  return mq !== null && typeof mq.matches === 'boolean';
+});
+
+var s='=== RESULTS: '+P+'/'+T+' passed, '+F+' failed ===';
+console.log(s);
+fails.forEach(function(f){console.log('FAIL: '+f);});
+document.getElementById('out').textContent=s+'\n'+fails.join('\n');
+</script></body></html>

@@ -1,0 +1,36 @@
+<!DOCTYPE html><html><head><title>Test Range</title></head>
+<body><div id="out"></div>
+<p id="rangetest">Some text here</p>
+<script>
+var P=0,F=0,T=0,fails=[];
+function t(n,fn){T++;try{if(fn()===true){P++;} else {F++;fails.push(n);}}catch(e){F++;fails.push(n+': '+e.message);}}
+
+t('createRange exists', function(){
+  return typeof document.createRange === 'function';
+});
+
+t('Range has setStart method', function(){
+  var r = document.createRange();
+  return typeof r.setStart === 'function';
+});
+
+t('Range has setEnd method', function(){
+  var r = document.createRange();
+  return typeof r.setEnd === 'function';
+});
+
+t('Range has selectNode method', function(){
+  var r = document.createRange();
+  return typeof r.selectNode === 'function';
+});
+
+t('getSelection returns object with rangeCount', function(){
+  var sel = window.getSelection();
+  return sel !== null && typeof sel === 'object' && typeof sel.rangeCount === 'number';
+});
+
+var s='=== RESULTS: '+P+'/'+T+' passed, '+F+' failed ===';
+console.log(s);
+fails.forEach(function(f){console.log('FAIL: '+f);});
+document.getElementById('out').textContent=s+'\n'+fails.join('\n');
+</script></body></html>

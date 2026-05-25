@@ -1,0 +1,35 @@
+<!DOCTYPE html><html><head><title>Test TreeWalker</title></head>
+<body><div id="out"></div>
+<div id="twtest"><span>A</span><span>B</span></div>
+<script>
+var P=0,F=0,T=0,fails=[];
+function t(n,fn){T++;try{if(fn()===true){P++;} else {F++;fails.push(n);}}catch(e){F++;fails.push(n+': '+e.message);}}
+
+t('createTreeWalker exists', function(){
+  return typeof document.createTreeWalker === 'function';
+});
+
+t('basic nextNode traversal', function(){
+  var root = document.getElementById('twtest');
+  var tw = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+  var first = tw.nextNode();
+  return first !== null && first.tagName === 'SPAN';
+});
+
+t('NodeFilter.SHOW_ALL', function(){
+  return typeof NodeFilter !== 'undefined' && NodeFilter.SHOW_ALL === 0xFFFFFFFF;
+});
+
+t('NodeFilter.SHOW_ELEMENT', function(){
+  return typeof NodeFilter !== 'undefined' && NodeFilter.SHOW_ELEMENT === 1;
+});
+
+t('NodeFilter.SHOW_TEXT', function(){
+  return typeof NodeFilter !== 'undefined' && NodeFilter.SHOW_TEXT === 4;
+});
+
+var s='=== RESULTS: '+P+'/'+T+' passed, '+F+' failed ===';
+console.log(s);
+fails.forEach(function(f){console.log('FAIL: '+f);});
+document.getElementById('out').textContent=s+'\n'+fails.join('\n');
+</script></body></html>

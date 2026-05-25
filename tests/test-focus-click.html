@@ -1,0 +1,40 @@
+<!DOCTYPE html><html><head><title>Test Focus Click</title></head>
+<body><div id="out"></div>
+<input id="inp" type="text" />
+<button id="btn">Click me</button>
+<div id="scrolltarget" style="height:10px;">target</div>
+<script>
+var P=0,F=0,T=0,fails=[];
+function t(n,fn){T++;try{if(fn()===true){P++;} else {F++;fails.push(n);}}catch(e){F++;fails.push(n+': '+e.message);}}
+
+t('element.focus() does not throw', function(){
+  var el = document.getElementById('inp');
+  el.focus();
+  return true;
+});
+
+t('element.blur() does not throw', function(){
+  var el = document.getElementById('inp');
+  el.blur();
+  return true;
+});
+
+t('element.click() dispatches click event', function(){
+  var el = document.getElementById('btn');
+  var clicked = false;
+  el.addEventListener('click', function(){ clicked = true; });
+  el.click();
+  return clicked === true;
+});
+
+t('scrollIntoView does not throw', function(){
+  var el = document.getElementById('scrolltarget');
+  el.scrollIntoView();
+  return true;
+});
+
+var s='=== RESULTS: '+P+'/'+T+' passed, '+F+' failed ===';
+console.log(s);
+fails.forEach(function(f){console.log('FAIL: '+f);});
+document.getElementById('out').textContent=s+'\n'+fails.join('\n');
+</script></body></html>
