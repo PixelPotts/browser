@@ -44,6 +44,8 @@ struct PaintCommand {
     // DrawImage
     cairo_surface_t* surface = nullptr;  // not owned
     Rect dest_rect;
+    int object_fit = 0;  // 0=fill, 1=contain, 2=cover, 3=scale-down, 4=none
+    int natural_w = 0, natural_h = 0;  // intrinsic image dimensions
 
     // PushClip
     Rect clip_rect;

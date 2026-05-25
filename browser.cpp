@@ -1468,6 +1468,22 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
                   else if (s == "cover")      elem->object_fit = 2;
                   else if (s == "scale-down") elem->object_fit = 3;
                   else if (s == "none")       elem->object_fit = 4; }
+                // aspect-ratio
+                { auto s = prop_val(r.decls, "aspect-ratio");
+                  if (!s.empty()) {
+                      auto sl = tolower_s(s);
+                      if (sl != "auto") {
+                          size_t slash = s.find('/');
+                          if (slash != std::string::npos) {
+                              try { float w = std::stof(s.substr(0,slash));
+                                    float h = std::stof(s.substr(slash+1));
+                                    if (h > 0) elem->aspect_ratio = w / h;
+                              } catch(...) {}
+                          } else {
+                              try { elem->aspect_ratio = std::stof(s); } catch(...) {}
+                          }
+                      }
+                  } }
                 // text-shadow (store only)
                 { auto s = prop_val(r.decls, "text-shadow");
                   if (!s.empty()) elem->text_shadow = s; }
@@ -1635,6 +1651,22 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
               else if (s == "cover")      elem->object_fit = 2;
               else if (s == "scale-down") elem->object_fit = 3;
               else if (s == "none")       elem->object_fit = 4; }
+            // aspect-ratio (inline)
+            { auto s = prop_val(ist, "aspect-ratio");
+              if (!s.empty()) {
+                  auto sl = tolower_s(s);
+                  if (sl != "auto") {
+                      size_t slash = s.find('/');
+                      if (slash != std::string::npos) {
+                          try { float w = std::stof(s.substr(0,slash));
+                                float h = std::stof(s.substr(slash+1));
+                                if (h > 0) elem->aspect_ratio = w / h;
+                          } catch(...) {}
+                      } else {
+                          try { elem->aspect_ratio = std::stof(s); } catch(...) {}
+                      }
+                  }
+              } }
             // text-shadow (inline, store only)
             { auto s = prop_val(ist, "text-shadow");
               if (!s.empty()) elem->text_shadow = s; }

@@ -369,6 +369,9 @@ static void paint_box(LayoutBox* box, DisplayList& dl, float offset_x, float off
         cmd.type = PaintCmdType::DrawImage;
         cmd.surface = box->replaced_surface;
         cmd.dest_rect = {cx, cy, box->content_rect.w, box->content_rect.h};
+        cmd.natural_w = box->natural_width;
+        cmd.natural_h = box->natural_height;
+        cmd.object_fit = node ? node->object_fit : 0;
         cmd.dom_node = node;
         dl.push_back(cmd);
     }
@@ -509,12 +512,61 @@ void render_display_list(cairo_t* cr, const DisplayList& dl, float scroll_x, flo
                 if (sw <= 0 || sh <= 0) break;
                 if (cmd.dest_rect.w <= 0 || cmd.dest_rect.h <= 0) break;
 
-                cairo_save(cr);
-                cairo_translate(cr, cmd.dest_rect.x, cmd.dest_rect.y);
-                cairo_scale(cr, cmd.dest_rect.w / sw, cmd.dest_rect.h / sh);
-                cairo_set_source_surface(cr, cmd.surface, 0, 0);
-                cairo_paint(cr);
-                cairo_restore(cr);
+                float dw = cmd.dest_rect.w, dh = cmd.dest_rect.h;
+                float dx = cmd.dest_rect.x, dy = cmd.dest_rect.y;
+                float sx = dw / sw, sy = dh / sh;
+
+                if (cmd.object_fit == 1 || cmd.object_fit == 3) {
+                    // contain (or scale-down): fit inside, preserve aspect ratio
+                    float scale = std::min(sx, sy);
+                    if (cmd.object_fit == 3 && scale > 1.0f) scale = 1.0f; // scale-down: don't upscale
+                    float rw = sw * scale, rh = sh * scale;
+                    dx += (dw - rw) / 2;
+                    dy += (dh - rh) / 2;
+                    sx = scale;
+                    sy = scale;
+                    cairo_save(cr);
+                    cairo_rectangle(cr, cmd.dest_rect.x, cmd.dest_rect.y, dw, dh);
+                    cairo_clip(cr);
+                    cairo_translate(cr, dx, dy);
+                    cairo_scale(cr, sx, sy);
+                    cairo_set_source_surface(cr, cmd.surface, 0, 0);
+                    cairo_paint(cr);
+                    cairo_restore(cr);
+                } else if (cmd.object_fit == 2) {
+                    // cover: fill dest, preserve aspect ratio, clip overflow
+                    float scale = std::max(sx, sy);
+                    float rw = sw * scale, rh = sh * scale;
+                    float ox = (dw - rw) / 2;
+                    float oy = (dh - rh) / 2;
+                    cairo_save(cr);
+                    cairo_rectangle(cr, dx, dy, dw, dh);
+                    cairo_clip(cr);
+                    cairo_translate(cr, dx + ox, dy + oy);
+                    cairo_scale(cr, scale, scale);
+                    cairo_set_source_surface(cr, cmd.surface, 0, 0);
+                    cairo_paint(cr);
+                    cairo_restore(cr);
+                } else if (cmd.object_fit == 4) {
+                    // none: render at natural size, centered, clipped
+                    float ox = (dw - sw) / 2;
+                    float oy = (dh - sh) / 2;
+                    cairo_save(cr);
+                    cairo_rectangle(cr, dx, dy, dw, dh);
+                    cairo_clip(cr);
+                    cairo_translate(cr, dx + ox, dy + oy);
+                    cairo_set_source_surface(cr, cmd.surface, 0, 0);
+                    cairo_paint(cr);
+                    cairo_restore(cr);
+                } else {
+                    // fill (default): stretch to fill dest
+                    cairo_save(cr);
+                    cairo_translate(cr, dx, dy);
+                    cairo_scale(cr, sx, sy);
+                    cairo_set_source_surface(cr, cmd.surface, 0, 0);
+                    cairo_paint(cr);
+                    cairo_restore(cr);
+                }
                 break;
             }
 

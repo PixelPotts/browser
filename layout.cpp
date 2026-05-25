@@ -618,12 +618,29 @@ static void layout_box(LayoutBox* box, float containing_width, float containing_
             // Replaced elements get their natural size or CSS size
             {
                 float w = -1, h = -1;
+                bool w_explicit = false, h_explicit = false;
                 if (box->dom_node) {
                     w = resolve_width(box->dom_node, containing_width);
                     h = resolve_height(box->dom_node, containing_height);
+                    w_explicit = (w >= 0);
+                    h_explicit = (h >= 0);
                 }
                 if (w < 0) w = (float)box->natural_width;
                 if (h < 0) h = (float)box->natural_height;
+
+                // Apply aspect-ratio when only one dimension is explicit
+                float ar = box->dom_node ? box->dom_node->aspect_ratio : 0;
+                if (ar <= 0 && box->natural_width > 0 && box->natural_height > 0) {
+                    ar = (float)box->natural_width / (float)box->natural_height;
+                }
+                if (ar > 0) {
+                    if (w_explicit && !h_explicit) {
+                        h = w / ar;
+                    } else if (h_explicit && !w_explicit) {
+                        w = h * ar;
+                    }
+                }
+
                 w = clamp_size(w, box->dom_node, true);
                 h = clamp_size(h, box->dom_node, false);
 
@@ -921,6 +938,9 @@ static void layout_block(LayoutBox* box, float containing_width, float containin
             }
             content_height = clamp_size(content_height, node, false);
             box->content_rect.h = content_height;
+        } else if (node && node->aspect_ratio > 0 && box->content_rect.w > 0) {
+            // aspect-ratio: compute height from width when height is auto
+            box->content_rect.h = box->content_rect.w / node->aspect_ratio;
         } else {
             box->content_rect.h = auto_height;
         }

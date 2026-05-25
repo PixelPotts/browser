@@ -97,6 +97,7 @@ struct DOMNode {
     int width_pct  = -1;   // percentage width (0-100), -1=not percentage
     int height_pct = -1;   // percentage height (0-100), -1=not percentage
     int object_fit = 0;    // 0=fill, 1=contain, 2=cover, 3=scale-down, 4=none
+    float aspect_ratio = 0; // CSS aspect-ratio (0 = auto/unset, >0 = w/h ratio)
     int border_width[4] = {0,0,0,0};
     int border_radius   = 0;
     std::string border_color;
