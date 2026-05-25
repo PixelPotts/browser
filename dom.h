@@ -59,12 +59,17 @@ struct DOMNode {
     int font_stretch = -1;            // -1=inherit, PangoStretch enum
     std::string text_shadow;          // raw CSS value (store only)
 
-    // Flex properties
+    // Flex container properties
     int flex_direction = 0;     // 0=row, 1=column, 2=row-reverse, 3=column-reverse
     int justify_content = 0;    // 0=start, 1=end, 2=center, 3=between, 4=around, 5=evenly
     int align_items = 0;        // 0=stretch, 1=start, 2=end, 3=center
     int flex_wrap = 0;          // 0=nowrap, 1=wrap
     int gap = 0;                // gap in px
+
+    // Flex item properties
+    float flex_grow = 0.0f;     // flex-grow factor (default 0)
+    float flex_shrink = 1.0f;   // flex-shrink factor (default 1)
+    int flex_basis = -1;        // flex-basis in px (-1 = auto)
 
     // Positioning
     int position = 0;           // 0=static, 1=relative, 2=absolute, 3=fixed

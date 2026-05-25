@@ -1355,6 +1355,41 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
                 { auto s = tolower_s(prop_val(r.decls, "flex-wrap"));
                   if      (s == "nowrap") elem->flex_wrap = 0;
                   else if (s == "wrap")   elem->flex_wrap = 1; }
+                // flex-grow / flex-shrink / flex-basis / flex shorthand
+                { auto s = prop_val(r.decls, "flex-grow");
+                  if (!s.empty()) { try { elem->flex_grow = std::stof(s); } catch(...){} } }
+                { auto s = prop_val(r.decls, "flex-shrink");
+                  if (!s.empty()) { try { elem->flex_shrink = std::stof(s); } catch(...){} } }
+                { auto s = prop_val(r.decls, "flex-basis");
+                  if (!s.empty()) {
+                      auto sl = tolower_s(s);
+                      if (sl == "auto") elem->flex_basis = -1;
+                      else elem->flex_basis = parse_px_val(s, elem->fs_computed);
+                  } }
+                { auto s = prop_val(r.decls, "flex");
+                  if (!s.empty()) {
+                      auto sl = tolower_s(s);
+                      if (sl == "none") { elem->flex_grow = 0; elem->flex_shrink = 0; elem->flex_basis = -1; }
+                      else if (sl == "auto") { elem->flex_grow = 1; elem->flex_shrink = 1; elem->flex_basis = -1; }
+                      else {
+                          // Parse flex shorthand: <grow> [<shrink>] [<basis>]
+                          std::vector<std::string> parts;
+                          size_t i2=0, n2=s.size();
+                          while (i2<n2) { while(i2<n2&&s[i2]==' ')++i2; size_t j2=i2; while(j2<n2&&s[j2]!=' ')++j2;
+                              if(j2>i2) parts.push_back(s.substr(i2,j2-i2)); i2=j2; }
+                          if (parts.size() >= 1) { try { elem->flex_grow = std::stof(parts[0]); } catch(...){} }
+                          if (parts.size() >= 2) { try { elem->flex_shrink = std::stof(parts[1]); } catch(...){} }
+                          if (parts.size() >= 3) {
+                              auto bl = tolower_s(parts[2]);
+                              if (bl == "auto") elem->flex_basis = -1;
+                              else { elem->flex_basis = parse_px_val(parts[2], elem->fs_computed);
+                                     if (elem->flex_basis < 0) elem->flex_basis = 0; }
+                          } else if (parts.size() >= 1) {
+                              // If only grow specified, basis defaults to 0 per spec
+                              elem->flex_basis = 0;
+                          }
+                      }
+                  } }
                 { auto s = prop_val(r.decls, "gap");
                   if (!s.empty()) { int px = parse_px_val(s, elem->fs_computed); if (px > 0) elem->gap = px; } }
                 { auto s = tolower_s(prop_val(r.decls, "position"));
@@ -1497,6 +1532,39 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
             { auto s = tolower_s(prop_val(ist, "flex-wrap"));
               if      (s == "nowrap") elem->flex_wrap = 0;
               else if (s == "wrap")   elem->flex_wrap = 1; }
+            // flex-grow / flex-shrink / flex-basis / flex shorthand (inline)
+            { auto s = prop_val(ist, "flex-grow");
+              if (!s.empty()) { try { elem->flex_grow = std::stof(s); } catch(...){} } }
+            { auto s = prop_val(ist, "flex-shrink");
+              if (!s.empty()) { try { elem->flex_shrink = std::stof(s); } catch(...){} } }
+            { auto s = prop_val(ist, "flex-basis");
+              if (!s.empty()) {
+                  auto sl = tolower_s(s);
+                  if (sl == "auto") elem->flex_basis = -1;
+                  else elem->flex_basis = parse_px_val(s, elem->fs_computed);
+              } }
+            { auto s = prop_val(ist, "flex");
+              if (!s.empty()) {
+                  auto sl = tolower_s(s);
+                  if (sl == "none") { elem->flex_grow = 0; elem->flex_shrink = 0; elem->flex_basis = -1; }
+                  else if (sl == "auto") { elem->flex_grow = 1; elem->flex_shrink = 1; elem->flex_basis = -1; }
+                  else {
+                      std::vector<std::string> parts;
+                      size_t i2=0, n2=s.size();
+                      while (i2<n2) { while(i2<n2&&s[i2]==' ')++i2; size_t j2=i2; while(j2<n2&&s[j2]!=' ')++j2;
+                          if(j2>i2) parts.push_back(s.substr(i2,j2-i2)); i2=j2; }
+                      if (parts.size() >= 1) { try { elem->flex_grow = std::stof(parts[0]); } catch(...){} }
+                      if (parts.size() >= 2) { try { elem->flex_shrink = std::stof(parts[1]); } catch(...){} }
+                      if (parts.size() >= 3) {
+                          auto bl = tolower_s(parts[2]);
+                          if (bl == "auto") elem->flex_basis = -1;
+                          else { elem->flex_basis = parse_px_val(parts[2], elem->fs_computed);
+                                 if (elem->flex_basis < 0) elem->flex_basis = 0; }
+                      } else if (parts.size() >= 1) {
+                          elem->flex_basis = 0;
+                      }
+                  }
+              } }
             { auto s = prop_val(ist, "gap");
               if (!s.empty()) { int px = parse_px_val(s, elem->fs_computed); if (px > 0) elem->gap = px; } }
             { auto s = tolower_s(prop_val(ist, "position"));

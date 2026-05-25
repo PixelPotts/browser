@@ -1005,7 +1005,7 @@ static void layout_inline(LayoutBox* box, float containing_width, PangoContext* 
     box->content_rect.h = (float)ph;
 }
 
-// ---- Flex layout (basic Phase 1 - improved in Phase 4) ----
+// ---- Flex layout with flex-grow/shrink/basis ----
 
 static void layout_flex(LayoutBox* box, float containing_width, float containing_height,
                          PangoContext* pango_ctx) {
@@ -1042,72 +1042,157 @@ static void layout_flex(LayoutBox* box, float containing_width, float containing
     bool is_reverse = (dir == 2 || dir == 3);
     int gap = node ? node->gap : 0;
 
-    // Layout each flex item with content-based sizing for row direction
-    float total_main = 0;
+    // Phase 1: Determine base sizes for each flex item
+    struct FlexItem {
+        LayoutBox* box;
+        float base_size;       // content size from flex-basis or intrinsic
+        float flex_grow;
+        float flex_shrink;
+        float outer_main;      // base_size + margin + padding + border on main axis
+    };
+    std::vector<FlexItem> flex_items;
+
     for (auto& child : box->children) {
-        if (is_row) {
-            // For row flex: determine item width from explicit width or content
-            float item_w = -1;
-            if (child->dom_node) {
-                item_w = resolve_width(child->dom_node, content_width);
-                if (item_w >= 0 && child->dom_node->box_sizing == 1) {
-                    item_w -= child->padding.horizontal() + child->border.horizontal();
-                    if (item_w < 0) item_w = 0;
+        FlexItem fi;
+        fi.box = child.get();
+        fi.flex_grow = child->dom_node ? child->dom_node->flex_grow : 0.0f;
+        fi.flex_shrink = child->dom_node ? child->dom_node->flex_shrink : 1.0f;
+
+        float base = -1;
+        // Check flex-basis first
+        if (child->dom_node && child->dom_node->flex_basis >= 0) {
+            base = (float)child->dom_node->flex_basis;
+            if (child->dom_node->box_sizing == 1) {
+                base -= child->padding.horizontal() + child->border.horizontal();
+                if (base < 0) base = 0;
+            }
+        }
+        // If basis is auto, check explicit width/height
+        if (base < 0 && child->dom_node) {
+            if (is_row) {
+                base = resolve_width(child->dom_node, content_width);
+                if (base >= 0 && child->dom_node->box_sizing == 1) {
+                    base -= child->padding.horizontal() + child->border.horizontal();
+                    if (base < 0) base = 0;
+                }
+            } else {
+                base = resolve_height(child->dom_node, containing_height);
+                if (base >= 0 && child->dom_node->box_sizing == 1) {
+                    base -= child->padding.vertical() + child->border.vertical();
+                    if (base < 0) base = 0;
                 }
             }
-            if (item_w < 0) {
-                // No explicit width: measure intrinsic content width
+        }
+        // If still auto, measure intrinsic size
+        if (base < 0) {
+            if (is_row) {
                 float intrinsic = measure_intrinsic_width(child.get(), pango_ctx);
-                // intrinsic includes padding+border, we need content width only
-                item_w = intrinsic - child->padding.horizontal() - child->border.horizontal();
-                if (item_w < 0) item_w = 0;
+                base = intrinsic - child->padding.horizontal() - child->border.horizontal();
+                if (base < 0) base = 0;
+            } else {
+                // For column: do initial layout to get content height
+                layout_box(child.get(), content_width, containing_height, pango_ctx);
+                base = child->content_rect.h;
             }
-            // Re-layout with correct width
-            child->content_rect.w = item_w;
-            layout_box(child.get(), item_w + child->padding.horizontal() + child->border.horizontal(),
-                       containing_height, pango_ctx);
-        } else {
-            layout_box(child.get(), content_width, containing_height, pango_ctx);
         }
 
-        float child_main = is_row
-            ? (child->content_rect.w + child->margin.horizontal() +
-               child->padding.horizontal() + child->border.horizontal())
-            : (child->content_rect.h + child->margin.vertical() +
-               child->padding.vertical() + child->border.vertical());
-        total_main += child_main;
+        fi.base_size = base;
+        if (is_row) {
+            fi.outer_main = base + child->margin.horizontal() + child->padding.horizontal() + child->border.horizontal();
+        } else {
+            fi.outer_main = base + child->margin.vertical() + child->padding.vertical() + child->border.vertical();
+        }
+        flex_items.push_back(fi);
     }
 
-    int num_gaps = box->children.empty() ? 0 : (int)box->children.size() - 1;
+    // Phase 2: Calculate total base main size and distribute space
+    int num_gaps = flex_items.empty() ? 0 : (int)flex_items.size() - 1;
+    float total_main = 0;
+    for (auto& fi : flex_items) total_main += fi.outer_main;
     total_main += num_gaps * gap;
 
-    // Distribute space
-    float main_size = is_row ? content_width : containing_height;
+    float main_size = is_row ? content_width : (containing_height > 0 ? containing_height : content_width);
     float remaining = main_size - total_main;
 
+    // Grow or shrink items
+    if (remaining > 0) {
+        // Distribute extra space via flex-grow
+        float total_grow = 0;
+        for (auto& fi : flex_items) total_grow += fi.flex_grow;
+        if (total_grow > 0) {
+            for (auto& fi : flex_items) {
+                float grow_share = remaining * (fi.flex_grow / total_grow);
+                fi.base_size += grow_share;
+                fi.outer_main += grow_share;
+            }
+            remaining = 0;
+        }
+    } else if (remaining < 0) {
+        // Shrink items via flex-shrink (weighted by base_size * flex_shrink)
+        float total_shrink_weighted = 0;
+        for (auto& fi : flex_items)
+            total_shrink_weighted += fi.flex_shrink * fi.base_size;
+        if (total_shrink_weighted > 0) {
+            float shrink_amount = -remaining;
+            for (auto& fi : flex_items) {
+                float weight = fi.flex_shrink * fi.base_size / total_shrink_weighted;
+                float shrink = shrink_amount * weight;
+                if (shrink > fi.base_size) shrink = fi.base_size; // don't go negative
+                fi.base_size -= shrink;
+                fi.outer_main -= shrink;
+            }
+            // Recalculate remaining after shrink
+            total_main = 0;
+            for (auto& fi : flex_items) total_main += fi.outer_main;
+            total_main += num_gaps * gap;
+            remaining = main_size - total_main;
+        }
+    }
+
+    // Phase 3: Layout each item with its resolved size
+    for (size_t i = 0; i < flex_items.size(); ++i) {
+        auto& fi = flex_items[i];
+        auto& child = box->children[i];
+        if (is_row) {
+            child->content_rect.w = fi.base_size;
+            layout_box(child.get(), fi.base_size + child->padding.horizontal() + child->border.horizontal(),
+                       containing_height, pango_ctx);
+            // Ensure content_rect.w matches resolved size (layout_box may change it)
+            child->content_rect.w = fi.base_size;
+        } else {
+            layout_box(child.get(), content_width, containing_height, pango_ctx);
+            child->content_rect.h = fi.base_size;
+        }
+    }
+
+    // Phase 4: Position items along main axis
     int jc = node ? node->justify_content : 0;
     float main_start = 0;
     float item_gap = (float)gap;
 
-    if (jc == 1) { // flex-end
-        main_start = remaining;
-    } else if (jc == 2) { // center
-        main_start = remaining / 2;
-    } else if (jc == 3 && box->children.size() > 1) { // space-between
-        item_gap = remaining / ((float)box->children.size() - 1) + gap;
-    } else if (jc == 4 && !box->children.empty()) { // space-around
-        float sp = remaining / (float)box->children.size();
-        main_start = sp / 2;
-        item_gap = sp + gap;
-    } else if (jc == 5 && !box->children.empty()) { // space-evenly
-        float sp = remaining / ((float)box->children.size() + 1);
-        main_start = sp;
-        item_gap = sp + gap;
+    if (remaining > 0) {
+        // Only apply justify-content if there's remaining space (no flex-grow consumed it)
+        if (jc == 1) { // flex-end
+            main_start = remaining;
+        } else if (jc == 2) { // center
+            main_start = remaining / 2;
+        } else if (jc == 3 && flex_items.size() > 1) { // space-between
+            item_gap = remaining / ((float)flex_items.size() - 1) + gap;
+        } else if (jc == 4 && !flex_items.empty()) { // space-around
+            float sp = remaining / (float)flex_items.size();
+            main_start = sp / 2;
+            item_gap = sp + gap;
+        } else if (jc == 5 && !flex_items.empty()) { // space-evenly
+            float sp = remaining / ((float)flex_items.size() + 1);
+            main_start = sp;
+            item_gap = sp + gap;
+        }
     }
 
     float cursor = main_start;
     float max_cross = 0;
 
+    // Build ordered item list (respecting reverse)
     auto items = std::vector<LayoutBox*>();
     for (auto& child : box->children)
         items.push_back(child.get());
@@ -1150,7 +1235,7 @@ static void layout_flex(LayoutBox* box, float containing_width, float containing
         box->content_rect.h = is_row ? max_cross : cursor;
     }
 
-    // Align items on cross axis
+    // Phase 5: Align items on cross axis
     int ai = node ? node->align_items : 0;
     float cross_size = is_row ? box->content_rect.h : box->content_rect.w;
     for (auto* child : items) {
@@ -1167,6 +1252,11 @@ static void layout_flex(LayoutBox* box, float containing_width, float containing
                 if (child->dom_node && child->dom_node->height < 0 && child->dom_node->height_pct < 0)
                     child->content_rect.h = cross_size - child->padding.vertical()
                                            - child->border.vertical() - child->margin.vertical();
+            } else if (!is_row && child->content_rect.w < cross_size - child->padding.horizontal()
+                - child->border.horizontal() - child->margin.horizontal()) {
+                if (child->dom_node && child->dom_node->width < 0 && child->dom_node->width_pct < 0)
+                    child->content_rect.w = cross_size - child->padding.horizontal()
+                                           - child->border.horizontal() - child->margin.horizontal();
             }
         } else if (ai == 2) { // flex-end
             float offset = cross_size - child_cross;
