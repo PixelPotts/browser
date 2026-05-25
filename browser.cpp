@@ -37,6 +37,12 @@ struct ImgSurface {
 };
 static std::unordered_map<uint32_t, ImgSurface> g_img_surfaces;
 
+// Global viewport dimensions for CSS unit resolution (updated before style cascade)
+static float g_viewport_w = 1100.0f;
+static float g_viewport_h = 800.0f;
+// Root font-size for rem units (updated from <html> element)
+static int g_root_font_size = 16;
+
 static gboolean draw_canvas(GtkWidget* w, cairo_t* cr, gpointer data) {
     uint32_t node_id = GPOINTER_TO_UINT(data);
     auto it = g_canvas_map.find(node_id);
@@ -292,8 +298,10 @@ static int parse_fs(const std::string& raw, int parent_px) {
         if (u=="px")  return (int)n;
         if (u=="pt")  return (int)(n*4.0/3.0);
         if (u=="em")  return (int)(n*parent_px);
-        if (u=="rem") return (int)(n*16.0);
+        if (u=="rem") return (int)(n*g_root_font_size);
         if (u=="%")   return (int)(n/100.0*parent_px);
+        if (u=="vw")  return (int)(n*g_viewport_w/100.0);
+        if (u=="vh")  return (int)(n*g_viewport_h/100.0);
     } catch (...) {}
     return -1;
 }
@@ -312,24 +320,32 @@ static double parse_lh(const std::string& raw, int fs_px) {
 }
 
 // parse a CSS length value → pixels (best-effort; 'auto' → 0)
-static int parse_px_val(const std::string& raw) {
+// fs_ctx: font-size of the element's context for em/ch/ex resolution (default 16)
+static int parse_px_val(const std::string& raw, int fs_ctx = 16) {
     std::string v = collapse_ws(tolower_s(raw));
     if (v.empty() || v=="auto") return 0;
     try {
         size_t pos; double n = std::stod(v, &pos); std::string u = v.substr(pos);
         if (u==""||u=="px") return (int)n;
         if (u=="pt")        return (int)(n*4.0/3.0);
-        if (u=="em")        return (int)(n*16); // approximate
-        if (u=="rem")       return (int)(n*16);
-        if (u=="vw")        return (int)(n*11); // approximate: 1100px viewport
-        if (u=="vh")        return (int)(n*8);  // approximate: 800px viewport
-        if (u=="vmin")      return (int)(n*8);
-        if (u=="vmax")      return (int)(n*11);
+        if (u=="em")        return (int)(n*fs_ctx);
+        if (u=="rem")       return (int)(n*g_root_font_size);
+        if (u=="vw")        return (int)(n*g_viewport_w/100.0);
+        if (u=="vh")        return (int)(n*g_viewport_h/100.0);
+        if (u=="vmin")      return (int)(n*std::min(g_viewport_w,g_viewport_h)/100.0);
+        if (u=="vmax")      return (int)(n*std::max(g_viewport_w,g_viewport_h)/100.0);
+        if (u=="ch")        return (int)(n*fs_ctx*0.5);  // approximate: 0.5em
+        if (u=="ex")        return (int)(n*fs_ctx*0.5);  // approximate: x-height
+        if (u=="cm")        return (int)(n*37.8);  // 96dpi
+        if (u=="mm")        return (int)(n*3.78);
+        if (u=="in")        return (int)(n*96.0);
+        if (u=="pc")        return (int)(n*16.0);
+        if (u=="%")         return (int)(n*fs_ctx/100.0); // % of font-size context (caller may override)
     } catch (...) {}
     return 0;
 }
 
-static std::array<int,4> parse_box_shorthand(const std::string& raw) {
+static std::array<int,4> parse_box_shorthand(const std::string& raw, int fs_ctx = 16) {
     std::array<int,4> v={0,0,0,0};
     std::vector<std::string> parts;
     size_t i=0, n=raw.size();
@@ -340,7 +356,7 @@ static std::array<int,4> parse_box_shorthand(const std::string& raw) {
         i=j;
     }
     if (parts.empty()) return v;
-    auto p=[](const std::string& s){ return parse_px_val(s); };
+    auto p=[fs_ctx](const std::string& s){ return parse_px_val(s, fs_ctx); };
     if (parts.size()==1) v={p(parts[0]),p(parts[0]),p(parts[0]),p(parts[0])};
     else if(parts.size()==2) v={p(parts[0]),p(parts[1]),p(parts[0]),p(parts[1])};
     else if(parts.size()==3) v={p(parts[0]),p(parts[1]),p(parts[2]),p(parts[1])};
@@ -770,45 +786,45 @@ static bool is_block_element(const std::string& t) {
     return false;
 }
 
-static void apply_box(const std::string& decls, BoxModel& bm) {
+static void apply_box(const std::string& decls, BoxModel& bm, int fs_ctx = 16) {
     auto m = prop_val(decls, "margin");
     if (!m.empty()) {
-        auto v = parse_box_shorthand(m);
+        auto v = parse_box_shorthand(m, fs_ctx);
         for (int i=0; i<4; ++i) bm.margin[i] = v[i];
         if (tolower_s(m).find("auto") != std::string::npos) bm.halign_center = true;
     }
-    { auto s=prop_val(decls,"margin-top");    if(!s.empty()) bm.margin[0]=parse_px_val(s); }
-    { auto s=prop_val(decls,"margin-right");  if(!s.empty()) bm.margin[1]=parse_px_val(s); }
-    { auto s=prop_val(decls,"margin-bottom"); if(!s.empty()) bm.margin[2]=parse_px_val(s); }
-    { auto s=prop_val(decls,"margin-left");   if(!s.empty()) { bm.margin[3]=parse_px_val(s); if(tolower_s(s)=="auto") bm.halign_center=true; } }
+    { auto s=prop_val(decls,"margin-top");    if(!s.empty()) bm.margin[0]=parse_px_val(s, fs_ctx); }
+    { auto s=prop_val(decls,"margin-right");  if(!s.empty()) bm.margin[1]=parse_px_val(s, fs_ctx); }
+    { auto s=prop_val(decls,"margin-bottom"); if(!s.empty()) bm.margin[2]=parse_px_val(s, fs_ctx); }
+    { auto s=prop_val(decls,"margin-left");   if(!s.empty()) { bm.margin[3]=parse_px_val(s, fs_ctx); if(tolower_s(s)=="auto") bm.halign_center=true; } }
     auto p = prop_val(decls, "padding");
-    if (!p.empty()) { auto v=parse_box_shorthand(p); for(int i=0;i<4;++i) bm.padding[i]=v[i]; }
-    { auto s=prop_val(decls,"padding-top");    if(!s.empty()) bm.padding[0]=parse_px_val(s); }
-    { auto s=prop_val(decls,"padding-right");  if(!s.empty()) bm.padding[1]=parse_px_val(s); }
-    { auto s=prop_val(decls,"padding-bottom"); if(!s.empty()) bm.padding[2]=parse_px_val(s); }
-    { auto s=prop_val(decls,"padding-left");   if(!s.empty()) bm.padding[3]=parse_px_val(s); }
+    if (!p.empty()) { auto v=parse_box_shorthand(p, fs_ctx); for(int i=0;i<4;++i) bm.padding[i]=v[i]; }
+    { auto s=prop_val(decls,"padding-top");    if(!s.empty()) bm.padding[0]=parse_px_val(s, fs_ctx); }
+    { auto s=prop_val(decls,"padding-right");  if(!s.empty()) bm.padding[1]=parse_px_val(s, fs_ctx); }
+    { auto s=prop_val(decls,"padding-bottom"); if(!s.empty()) bm.padding[2]=parse_px_val(s, fs_ctx); }
+    { auto s=prop_val(decls,"padding-left");   if(!s.empty()) bm.padding[3]=parse_px_val(s, fs_ctx); }
     { auto s=prop_val(decls,"width");     auto sl=tolower_s(s);
       if(!s.empty()&&sl!="auto") {
           size_t pct_pos = s.find('%');
           if (pct_pos != std::string::npos) {
               try { bm.width_pct = std::stoi(s.substr(0, pct_pos)); } catch(...){}
           } else {
-              bm.width=parse_px_val(s);
+              bm.width=parse_px_val(s, fs_ctx);
           }
       } }
-    { auto s=prop_val(decls,"max-width"); if(!s.empty()) bm.max_width=parse_px_val(s); }
-    { auto s=prop_val(decls,"min-width"); if(!s.empty()) bm.min_width=parse_px_val(s); }
+    { auto s=prop_val(decls,"max-width"); if(!s.empty()&&tolower_s(s)!="none") bm.max_width=parse_px_val(s, fs_ctx); }
+    { auto s=prop_val(decls,"min-width"); if(!s.empty()) bm.min_width=parse_px_val(s, fs_ctx); }
     { auto s=prop_val(decls,"height");    auto sl=tolower_s(s);
       if(!s.empty()&&sl!="auto") {
           size_t pct_pos = s.find('%');
           if (pct_pos != std::string::npos) {
               try { bm.height_pct = std::stoi(s.substr(0, pct_pos)); } catch(...){}
           } else {
-              bm.height=parse_px_val(s);
+              bm.height=parse_px_val(s, fs_ctx);
           }
       } }
-    { auto s=prop_val(decls,"min-height"); if(!s.empty()) bm.min_height=parse_px_val(s); }
-    { auto s=prop_val(decls,"max-height"); if(!s.empty()) bm.max_height=parse_px_val(s); }
+    { auto s=prop_val(decls,"min-height"); if(!s.empty()) bm.min_height=parse_px_val(s, fs_ctx); }
+    { auto s=prop_val(decls,"max-height"); if(!s.empty()&&tolower_s(s)!="none") bm.max_height=parse_px_val(s, fs_ctx); }
     { auto s=tolower_s(prop_val(decls,"display"));
       if      (s=="none")                       bm.display=BoxModel::Display::None;
       else if (s=="flex"||s=="inline-flex")     bm.display=BoxModel::Display::Flex;
@@ -863,7 +879,7 @@ static void apply_box(const std::string& decls, BoxModel& bm) {
     { auto s=tolower_s(prop_val(decls,"border-style")); if (!s.empty()) bm.border_style=s; }
     { auto s=prop_val(decls,"border-radius"); if (!s.empty()) {
           size_t sl=s.find('/');
-          bm.border_radius=parse_px_val(sl==std::string::npos ? s : s.substr(0,sl));
+          bm.border_radius=parse_px_val(sl==std::string::npos ? s : s.substr(0,sl), fs_ctx);
     }}
     { auto s=prop_val(decls,"box-shadow"); if (!s.empty()) bm.box_shadow=s; }
     { auto s=prop_val(decls,"opacity"); if (!s.empty()) {
@@ -1132,9 +1148,10 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
             // Apply CSS cascade for img sizing/box model
             {
                 BoxModel bm;
+                int img_fs = cur_parent ? cur_parent->fs_computed : 16;
                 for (const auto& r : css) {
                     if (!dom_sel_matches(r.sel, img_node.get())) continue;
-                    apply_box(r.decls, bm);
+                    apply_box(r.decls, bm, img_fs);
                     // object-fit
                     { auto s = tolower_s(prop_val(r.decls, "object-fit"));
                       if      (s == "fill")       img_node->object_fit = 0;
@@ -1146,7 +1163,7 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
                 // Inline style overrides
                 auto style_it = img_node->attributes.find("style");
                 if (style_it != img_node->attributes.end() && !style_it->second.empty()) {
-                    apply_box(style_it->second, bm);
+                    apply_box(style_it->second, bm, img_fs);
                     auto s = tolower_s(prop_val(style_it->second, "object-fit"));
                     if      (s == "fill")       img_node->object_fit = 0;
                     else if (s == "contain")    img_node->object_fit = 1;
@@ -1294,7 +1311,7 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
                     if (f >= 0) elem->lh_computed = f;
                 }
                 std::string prev_bg = bm.bg_image;
-                apply_box(r.decls, bm);
+                apply_box(r.decls, bm, elem->fs_computed);
                 if (bm.bg_image != prev_bg) bg_img_src = r.src_url;
                 { auto s = prop_val(r.decls, "color"); if (!s.empty()) elem->color_computed = collapse_ws(s); }
                 { auto s = tolower_s(prop_val(r.decls, "text-align"));
@@ -1339,20 +1356,20 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
                   if      (s == "nowrap") elem->flex_wrap = 0;
                   else if (s == "wrap")   elem->flex_wrap = 1; }
                 { auto s = prop_val(r.decls, "gap");
-                  if (!s.empty()) { int px = parse_px_val(s); if (px > 0) elem->gap = px; } }
+                  if (!s.empty()) { int px = parse_px_val(s, elem->fs_computed); if (px > 0) elem->gap = px; } }
                 { auto s = tolower_s(prop_val(r.decls, "position"));
                   if      (s == "static")   elem->position = 0;
                   else if (s == "relative") elem->position = 1;
                   else if (s == "absolute") elem->position = 2;
                   else if (s == "fixed")    elem->position = 3; }
                 { auto s = prop_val(r.decls, "top");
-                  if (!s.empty() && tolower_s(s) != "auto") elem->pos_top = parse_px_val(s); }
+                  if (!s.empty() && tolower_s(s) != "auto") elem->pos_top = parse_px_val(s, elem->fs_computed); }
                 { auto s = prop_val(r.decls, "left");
-                  if (!s.empty() && tolower_s(s) != "auto") elem->pos_left = parse_px_val(s); }
+                  if (!s.empty() && tolower_s(s) != "auto") elem->pos_left = parse_px_val(s, elem->fs_computed); }
                 { auto s = prop_val(r.decls, "right");
-                  if (!s.empty() && tolower_s(s) != "auto") elem->pos_right = parse_px_val(s); }
+                  if (!s.empty() && tolower_s(s) != "auto") elem->pos_right = parse_px_val(s, elem->fs_computed); }
                 { auto s = prop_val(r.decls, "bottom");
-                  if (!s.empty() && tolower_s(s) != "auto") elem->pos_bottom = parse_px_val(s); }
+                  if (!s.empty() && tolower_s(s) != "auto") elem->pos_bottom = parse_px_val(s, elem->fs_computed); }
                 { auto s = prop_val(r.decls, "z-index");
                   if (!s.empty()) { try { elem->z_index = std::stoi(s); } catch(...){} } }
                 // font-style from CSS rules (BUG FIX: was only parsed from inline styles)
@@ -1375,11 +1392,11 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
                 // letter-spacing
                 { auto s = prop_val(r.decls, "letter-spacing");
                   if (tolower_s(s) == "normal") elem->letter_spacing = 0;
-                  else if (!s.empty()) { int px = parse_px_val(s); elem->letter_spacing = px * PANGO_SCALE; } }
+                  else if (!s.empty()) { int px = parse_px_val(s, elem->fs_computed); elem->letter_spacing = px * PANGO_SCALE; } }
                 // word-spacing
                 { auto s = prop_val(r.decls, "word-spacing");
                   if (tolower_s(s) == "normal") elem->word_spacing = 0;
-                  else if (!s.empty()) elem->word_spacing = parse_px_val(s); }
+                  else if (!s.empty()) elem->word_spacing = parse_px_val(s, elem->fs_computed); }
                 // font-variant
                 { auto s = tolower_s(prop_val(r.decls, "font-variant"));
                   if (s == "small-caps") elem->font_variant = 1;
@@ -1389,7 +1406,7 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
                   if (!s.empty()) { int ws = parse_white_space(s); if (ws >= 0) elem->white_space = ws; } }
                 // text-indent
                 { auto s = prop_val(r.decls, "text-indent");
-                  if (!s.empty()) elem->text_indent = parse_px_val(s); }
+                  if (!s.empty()) elem->text_indent = parse_px_val(s, elem->fs_computed); }
                 // text-overflow
                 { auto s = tolower_s(prop_val(r.decls, "text-overflow"));
                   if (s == "ellipsis") elem->text_overflow = 1;
@@ -1437,7 +1454,7 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
               else if (fs == "normal") elem->fi_computed = PANGO_STYLE_NORMAL; }
             { int px = parse_fs(prop_val(ist, "font-size"), parent_fs); if (px > 0) elem->fs_computed = px; }
             { double f = parse_lh(prop_val(ist, "line-height"), elem->fs_computed); if (f >= 0) elem->lh_computed = f; }
-            apply_box(ist, bm);
+            apply_box(ist, bm, elem->fs_computed);
             { auto s = prop_val(ist, "color"); if (!s.empty()) elem->color_computed = collapse_ws(s); }
             { auto s = tolower_s(prop_val(ist, "text-align"));
               if      (s == "center")  elem->text_align_computed = 1;
@@ -1481,20 +1498,20 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
               if      (s == "nowrap") elem->flex_wrap = 0;
               else if (s == "wrap")   elem->flex_wrap = 1; }
             { auto s = prop_val(ist, "gap");
-              if (!s.empty()) { int px = parse_px_val(s); if (px > 0) elem->gap = px; } }
+              if (!s.empty()) { int px = parse_px_val(s, elem->fs_computed); if (px > 0) elem->gap = px; } }
             { auto s = tolower_s(prop_val(ist, "position"));
               if      (s == "static")   elem->position = 0;
               else if (s == "relative") elem->position = 1;
               else if (s == "absolute") elem->position = 2;
               else if (s == "fixed")    elem->position = 3; }
             { auto s = prop_val(ist, "top");
-              if (!s.empty() && tolower_s(s) != "auto") elem->pos_top = parse_px_val(s); }
+              if (!s.empty() && tolower_s(s) != "auto") elem->pos_top = parse_px_val(s, elem->fs_computed); }
             { auto s = prop_val(ist, "left");
-              if (!s.empty() && tolower_s(s) != "auto") elem->pos_left = parse_px_val(s); }
+              if (!s.empty() && tolower_s(s) != "auto") elem->pos_left = parse_px_val(s, elem->fs_computed); }
             { auto s = prop_val(ist, "right");
-              if (!s.empty() && tolower_s(s) != "auto") elem->pos_right = parse_px_val(s); }
+              if (!s.empty() && tolower_s(s) != "auto") elem->pos_right = parse_px_val(s, elem->fs_computed); }
             { auto s = prop_val(ist, "bottom");
-              if (!s.empty() && tolower_s(s) != "auto") elem->pos_bottom = parse_px_val(s); }
+              if (!s.empty() && tolower_s(s) != "auto") elem->pos_bottom = parse_px_val(s, elem->fs_computed); }
             { auto s = prop_val(ist, "z-index");
               if (!s.empty()) { try { elem->z_index = std::stoi(s); } catch(...){} } }
             // text-decoration shorthand (inline)
@@ -1509,11 +1526,11 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
             // letter-spacing (inline)
             { auto s = prop_val(ist, "letter-spacing");
               if (tolower_s(s) == "normal") elem->letter_spacing = 0;
-              else if (!s.empty()) { int px = parse_px_val(s); elem->letter_spacing = px * PANGO_SCALE; } }
+              else if (!s.empty()) { int px = parse_px_val(s, elem->fs_computed); elem->letter_spacing = px * PANGO_SCALE; } }
             // word-spacing (inline)
             { auto s = prop_val(ist, "word-spacing");
               if (tolower_s(s) == "normal") elem->word_spacing = 0;
-              else if (!s.empty()) elem->word_spacing = parse_px_val(s); }
+              else if (!s.empty()) elem->word_spacing = parse_px_val(s, elem->fs_computed); }
             // font-variant (inline)
             { auto s = tolower_s(prop_val(ist, "font-variant"));
               if (s == "small-caps") elem->font_variant = 1;
@@ -1523,7 +1540,7 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
               if (!s.empty()) { int ws = parse_white_space(s); if (ws >= 0) elem->white_space = ws; } }
             // text-indent (inline)
             { auto s = prop_val(ist, "text-indent");
-              if (!s.empty()) elem->text_indent = parse_px_val(s); }
+              if (!s.empty()) elem->text_indent = parse_px_val(s, elem->fs_computed); }
             // text-overflow (inline)
             { auto s = tolower_s(prop_val(ist, "text-overflow"));
               if (s == "ellipsis") elem->text_overflow = 1;
@@ -1554,11 +1571,11 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
                 if (!dom_sel_matches(r.sel, match_node)) continue;
                 if (!r.decls.empty() && r.decls.find("!important") == std::string::npos) continue;
                 // Re-apply only important properties
-                if (prop_is_important(r.decls, "display")) apply_box(r.decls, bm);
+                if (prop_is_important(r.decls, "display")) apply_box(r.decls, bm, elem->fs_computed);
                 if (prop_is_important(r.decls, "color")) {
                     auto s = prop_val(r.decls, "color"); if (!s.empty()) elem->color_computed = collapse_ws(s); }
                 if (prop_is_important(r.decls, "background-color") || prop_is_important(r.decls, "background"))
-                    apply_box(r.decls, bm);
+                    apply_box(r.decls, bm, elem->fs_computed);
                 if (prop_is_important(r.decls, "font-size")) {
                     auto s = prop_val(r.decls, "font-size"); int px = parse_fs(s, parent_fs); if (px > 0) elem->fs_computed = px; }
                 if (prop_is_important(r.decls, "font-weight")) {
@@ -1567,10 +1584,10 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
                     auto fs = tolower_s(prop_val(r.decls, "font-style"));
                     if (fs == "italic") elem->fi_computed = PANGO_STYLE_ITALIC;
                     else if (fs == "normal") elem->fi_computed = PANGO_STYLE_NORMAL; }
-                if (prop_is_important(r.decls, "margin")) apply_box(r.decls, bm);
-                if (prop_is_important(r.decls, "padding")) apply_box(r.decls, bm);
-                if (prop_is_important(r.decls, "width")) apply_box(r.decls, bm);
-                if (prop_is_important(r.decls, "height")) apply_box(r.decls, bm);
+                if (prop_is_important(r.decls, "margin")) apply_box(r.decls, bm, elem->fs_computed);
+                if (prop_is_important(r.decls, "padding")) apply_box(r.decls, bm, elem->fs_computed);
+                if (prop_is_important(r.decls, "width")) apply_box(r.decls, bm, elem->fs_computed);
+                if (prop_is_important(r.decls, "height")) apply_box(r.decls, bm, elem->fs_computed);
                 if (prop_is_important(r.decls, "position")) {
                     auto s = tolower_s(prop_val(r.decls, "position"));
                     if (s == "static") elem->position = 0; else if (s == "relative") elem->position = 1;
@@ -3237,6 +3254,24 @@ static void layout_and_paint(TabState* tab) {
     }
     // Fallback: default
     if (tab->viewport_width <= 10) tab->viewport_width = 1100;
+
+    // Update global viewport dimensions for CSS unit resolution (vw/vh/vmin/vmax)
+    g_viewport_w = tab->viewport_width;
+    // Get viewport height
+    if (tab->scroll && gtk_widget_get_realized(tab->scroll)) {
+        GtkAllocation alloc;
+        gtk_widget_get_allocation(tab->scroll, &alloc);
+        if (alloc.height > 10) g_viewport_h = (float)alloc.height;
+    }
+    if (g_viewport_h <= 10) g_viewport_h = 800.0f;
+
+    // Update root font-size for rem units (from <html> or body element)
+    if (start && start->parent && start->parent->fs_computed > 0)
+        g_root_font_size = start->parent->fs_computed;
+    else if (start && start->fs_computed > 0)
+        g_root_font_size = start->fs_computed;
+    else
+        g_root_font_size = 16;
 
     fprintf(stderr, "[LAYOUT] Starting layout_and_paint, body=%p children=%zu viewport_w=%.0f\n",
             start, start->children.size(), tab->viewport_width);
