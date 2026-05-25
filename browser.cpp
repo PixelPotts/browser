@@ -319,30 +319,111 @@ static double parse_lh(const std::string& raw, int fs_px) {
     return -1.0;
 }
 
+// parse a single CSS length token → pixels (no calc, no auto)
+static double parse_length_token(const std::string& tok, int fs_ctx) {
+    if (tok.empty()) return 0;
+    try {
+        size_t pos; double n = std::stod(tok, &pos); std::string u = tok.substr(pos);
+        if (u.empty()||u=="px") return n;
+        if (u=="pt")   return n*4.0/3.0;
+        if (u=="em")   return n*fs_ctx;
+        if (u=="rem")  return n*g_root_font_size;
+        if (u=="vw")   return n*g_viewport_w/100.0;
+        if (u=="vh")   return n*g_viewport_h/100.0;
+        if (u=="vmin") return n*std::min(g_viewport_w,g_viewport_h)/100.0;
+        if (u=="vmax") return n*std::max(g_viewport_w,g_viewport_h)/100.0;
+        if (u=="ch")   return n*fs_ctx*0.5;
+        if (u=="ex")   return n*fs_ctx*0.5;
+        if (u=="cm")   return n*37.8;
+        if (u=="mm")   return n*3.78;
+        if (u=="in")   return n*96.0;
+        if (u=="pc")   return n*16.0;
+        if (u=="%")    return n*fs_ctx/100.0;
+    } catch (...) {}
+    return 0;
+}
+
+// Evaluate a calc() expression: supports +, -, *, / with proper precedence
+static double eval_calc(const std::string& expr, int fs_ctx) {
+    // Tokenize: split into values and operators
+    // Values are CSS lengths; operators are +, -, *, /
+    std::vector<double> values;
+    std::vector<char> ops;
+    std::string cur;
+    bool expect_sign = true; // can have leading sign or sign after operator
+
+    for (size_t i = 0; i < expr.size(); ) {
+        char c = expr[i];
+        if (c == ' ') { ++i; continue; }
+        // Check for +/- that's an operator (not part of a number)
+        if ((c == '+' || c == '-') && !expect_sign && !cur.empty()) {
+            // Flush current token
+            values.push_back(parse_length_token(cur, fs_ctx));
+            cur.clear();
+            ops.push_back(c);
+            ++i;
+            expect_sign = true;
+        } else if ((c == '+' || c == '-') && !expect_sign && cur.empty()) {
+            ops.push_back(c);
+            ++i;
+            expect_sign = true;
+        } else if (c == '*' || c == '/') {
+            if (!cur.empty()) {
+                values.push_back(parse_length_token(cur, fs_ctx));
+                cur.clear();
+            }
+            ops.push_back(c);
+            ++i;
+            expect_sign = true;
+        } else {
+            cur += c;
+            ++i;
+            expect_sign = false;
+        }
+    }
+    if (!cur.empty()) values.push_back(parse_length_token(cur, fs_ctx));
+
+    if (values.empty()) return 0;
+
+    // Apply * and / first (higher precedence)
+    std::vector<double> v2;
+    std::vector<char> ops2;
+    v2.push_back(values[0]);
+    for (size_t i = 0; i < ops.size(); i++) {
+        if (ops[i] == '*') {
+            v2.back() *= values[i+1];
+        } else if (ops[i] == '/') {
+            double d = values[i+1];
+            v2.back() = (d != 0) ? v2.back() / d : 0;
+        } else {
+            ops2.push_back(ops[i]);
+            v2.push_back(values[i+1]);
+        }
+    }
+    // Apply + and -
+    double result = v2[0];
+    for (size_t i = 0; i < ops2.size(); i++) {
+        if (ops2[i] == '+') result += v2[i+1];
+        else result -= v2[i+1];
+    }
+    return result;
+}
+
 // parse a CSS length value → pixels (best-effort; 'auto' → 0)
 // fs_ctx: font-size of the element's context for em/ch/ex resolution (default 16)
 static int parse_px_val(const std::string& raw, int fs_ctx = 16) {
     std::string v = collapse_ws(tolower_s(raw));
     if (v.empty() || v=="auto") return 0;
-    try {
-        size_t pos; double n = std::stod(v, &pos); std::string u = v.substr(pos);
-        if (u==""||u=="px") return (int)n;
-        if (u=="pt")        return (int)(n*4.0/3.0);
-        if (u=="em")        return (int)(n*fs_ctx);
-        if (u=="rem")       return (int)(n*g_root_font_size);
-        if (u=="vw")        return (int)(n*g_viewport_w/100.0);
-        if (u=="vh")        return (int)(n*g_viewport_h/100.0);
-        if (u=="vmin")      return (int)(n*std::min(g_viewport_w,g_viewport_h)/100.0);
-        if (u=="vmax")      return (int)(n*std::max(g_viewport_w,g_viewport_h)/100.0);
-        if (u=="ch")        return (int)(n*fs_ctx*0.5);  // approximate: 0.5em
-        if (u=="ex")        return (int)(n*fs_ctx*0.5);  // approximate: x-height
-        if (u=="cm")        return (int)(n*37.8);  // 96dpi
-        if (u=="mm")        return (int)(n*3.78);
-        if (u=="in")        return (int)(n*96.0);
-        if (u=="pc")        return (int)(n*16.0);
-        if (u=="%")         return (int)(n*fs_ctx/100.0); // % of font-size context (caller may override)
-    } catch (...) {}
-    return 0;
+    // Handle calc() expressions
+    if (v.size() > 6 && v.substr(0, 5) == "calc(") {
+        // Extract content between calc( and )
+        size_t start = 5;
+        size_t end = v.rfind(')');
+        if (end == std::string::npos) end = v.size();
+        std::string expr = v.substr(start, end - start);
+        return (int)eval_calc(expr, fs_ctx);
+    }
+    return (int)parse_length_token(v, fs_ctx);
 }
 
 static std::array<int,4> parse_box_shorthand(const std::string& raw, int fs_ctx = 16) {

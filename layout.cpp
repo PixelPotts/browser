@@ -944,6 +944,8 @@ static void layout_block(LayoutBox* box, float containing_width, float containin
         } else {
             box->content_rect.h = auto_height;
         }
+        // Apply min-height / max-height clamp even when height is auto
+        box->content_rect.h = clamp_size(box->content_rect.h, node, false);
     }
 
     // Store scroll dimensions
@@ -1407,6 +1409,8 @@ static void layout_flex(LayoutBox* box, float containing_width, float containing
     } else {
         box->content_rect.h = is_row ? max_cross : cursor;
     }
+    // Apply min-height / max-height clamp
+    box->content_rect.h = clamp_size(box->content_rect.h, node, false);
 
     // Phase 5: Align items on cross axis
     int ai = node ? node->align_items : 0;
