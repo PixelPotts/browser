@@ -208,9 +208,19 @@ std::unique_ptr<LayoutBox> build_layout_tree(DOMNode* node, PangoContext* pango_
         }
     }
 
+    // Block-in-inline: if an Inline element contains Block children, promote to Block
+    if (!is_block_level(box->type) && !box->children.empty()) {
+        for (auto& child : box->children) {
+            if (is_block_level(child->type)) {
+                box->type = LayoutBoxType::Block;
+                break;
+            }
+        }
+    }
+
     // If this is a block container with mixed block/inline children,
     // wrap consecutive inline children in anonymous block boxes
-    if (is_block_level(dtype) && !box->children.empty()) {
+    if (is_block_level(box->type) && !box->children.empty()) {
         bool has_block = false, has_inline = false;
         for (auto& child : box->children) {
             if (is_block_level(child->type))
