@@ -1053,7 +1053,8 @@ static std::vector<CSSRule> fetch_linked_css(const std::string& html, const std:
 
 // ---- parse HTML to DOM tree ----
 
-static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, const std::string& base) {
+static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, const std::string& base,
+                                                    std::vector<CSSRule>* out_css = nullptr) {
     auto css = extract_css(html);
     for (auto& r : fetch_linked_css(html, base)) css.push_back(std::move(r));
 
@@ -1981,6 +1982,9 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
     // All parsed elements are owned by the tree now; clear orphans to free extra refs
     doc->orphans.clear();
 
+    // Output CSS rules for re-cascade
+    if (out_css) *out_css = std::move(css);
+
     return doc;
 }
 
@@ -2032,6 +2036,7 @@ struct TabState {
     float scroll_x = 0, scroll_y = 0;           // viewport scroll position
     float content_height = 0;                    // total page height for scrollbar
     float viewport_width = 1100;                 // current viewport width
+    std::vector<CSSRule> css_rules;              // parsed CSS rules for re-cascade
 
     // Inspector panel
     GtkWidget* inspector_box = nullptr;
@@ -3423,6 +3428,488 @@ static void connect_replaced_surfaces(LayoutBox* box, TabState* tab) {
         connect_replaced_surfaces(child.get(), tab);
 }
 
+// ---------------------------------------------------------------------------
+// CSS Re-cascade: apply stylesheet rules to all DOM nodes before each layout.
+// This ensures dynamically-created elements (via JS) get CSS classes applied.
+// ---------------------------------------------------------------------------
+static void apply_css_to_node(DOMNode* node, const std::vector<CSSRule>& css) {
+    if (node->node_type != DOMNode::ELEMENT) return;
+    const std::string& tname = node->tag_name;
+
+    // --- 1. Reset style fields to defaults ---
+    node->fw_computed = -1;
+    node->fi_computed = -1;
+    node->fs_computed = 16;
+    node->lh_computed = -1.0;
+    node->color_computed.clear();
+    node->text_align_computed = -1;
+    node->text_transform = -1;
+    node->font_family.clear();
+    node->box_shadow.clear();
+    node->opacity = 1.0;
+    node->overflow = -1;
+    node->text_decoration = -1;
+    node->text_decoration_color.clear();
+    node->text_decoration_style = 0;
+    node->letter_spacing = INT_MIN;
+    node->word_spacing = INT_MIN;
+    node->font_variant = -1;
+    node->white_space = -1;
+    node->text_indent = INT_MIN;
+    node->text_overflow = 0;
+    node->font_stretch = -1;
+    node->text_shadow.clear();
+    node->flex_direction = 0;
+    node->justify_content = 0;
+    node->align_items = 0;
+    node->flex_wrap = 0;
+    node->gap = 0;
+    node->flex_grow = 0.0f;
+    node->flex_shrink = 1.0f;
+    node->flex_basis = -1;
+    node->position = 0;
+    node->pos_top = INT_MIN;
+    node->pos_left = INT_MIN;
+    node->pos_right = INT_MIN;
+    node->pos_bottom = INT_MIN;
+    node->z_index = 0;
+    for (int i = 0; i < 4; ++i) { node->margin[i] = 0; node->padding[i] = 0; node->border_width[i] = 0; }
+    node->width = -1; node->max_width = -1; node->height = -1;
+    node->min_width = -1; node->min_height = -1; node->max_height = -1;
+    node->box_sizing = 0; node->width_sizing = 0; node->height_sizing = 0;
+    node->overflow_x = -1; node->overflow_y = -1;
+    node->width_pct = -1; node->height_pct = -1;
+    node->object_fit = 0; node->aspect_ratio = 0;
+    node->border_radius = 0;
+    node->border_color.clear(); node->border_style.clear();
+    node->halign_center = false;
+    node->display = DOMNode::Display::Inherit;
+    node->floatdir = DOMNode::Float::None;
+    node->bg_image.clear(); node->bg_color.clear();
+    // Clear bg-related style_props
+    node->style_props.erase("background-repeat");
+    node->style_props.erase("background-size");
+    node->style_props.erase("background-position");
+
+    // --- 2. Inherit font-size from parent ---
+    int parent_fs = (node->parent && node->parent->fs_computed > 0) ? node->parent->fs_computed : 16;
+    node->fs_computed = parent_fs;
+
+    // --- 3. UA defaults ---
+    static const char* BOLD_TAGS[]={"b","strong","th","h1","h2","h3","h4","h5","h6",nullptr};
+    for (int bi = 0; BOLD_TAGS[bi]; ++bi)
+        if (tname == BOLD_TAGS[bi]) node->fw_computed = PANGO_WEIGHT_BOLD;
+    if (tname == "i" || tname == "em" || tname == "cite" || tname == "dfn" || tname == "var")
+        node->fi_computed = PANGO_STYLE_ITALIC;
+    if (tname == "h1") { node->fs_computed = 32; node->margin[0] = 21; node->margin[2] = 21; }
+    else if (tname == "h2") { node->fs_computed = 24; node->margin[0] = 19; node->margin[2] = 19; }
+    else if (tname == "h3") { node->fs_computed = 19; node->margin[0] = 18; node->margin[2] = 18; }
+    else if (tname == "h4") { node->fs_computed = 16; node->margin[0] = 21; node->margin[2] = 21; }
+    else if (tname == "h5") { node->fs_computed = 13; node->margin[0] = 22; node->margin[2] = 22; }
+    else if (tname == "h6") { node->fs_computed = 11; node->margin[0] = 24; node->margin[2] = 24; }
+    if (tname == "p") { node->margin[0] = 16; node->margin[2] = 16; }
+    else if (tname == "blockquote") { node->margin[0] = 16; node->margin[2] = 16; node->margin[1] = 40; node->margin[3] = 40; }
+    else if (tname == "ul" || tname == "ol") { node->margin[0] = 16; node->margin[2] = 16; node->padding[3] = 40; }
+    else if (tname == "hr") { node->margin[0] = 8; node->margin[2] = 8; }
+    if (tname == "s" || tname == "del" || tname == "strike") node->text_decoration = 4;
+    if (tname == "u" || tname == "ins") node->text_decoration = 1;
+    if (tname == "code" || tname == "kbd" || tname == "samp" || tname == "tt") node->font_family = "monospace";
+    if (tname == "pre") { node->font_family = "monospace"; node->white_space = 2; }
+    if (tname == "small") node->fs_computed = (int)(parent_fs * 0.83);
+    if (tname == "sub" || tname == "sup") node->fs_computed = (int)(parent_fs * 0.83);
+    if (tname == "big") node->fs_computed = (int)(parent_fs * 1.17);
+    if (tname == "abbr") { node->text_decoration = 1; node->text_decoration_style = 2; }
+
+    // --- 4. Apply CSS rules ---
+    BoxModel bm;
+    for (const auto& r : css) {
+        if (!dom_sel_matches(r.sel, node)) continue;
+        if (r.fw != -1) node->fw_computed = r.fw;
+        if (!r.fs_raw.empty()) { int px = parse_fs(r.fs_raw, parent_fs); if (px > 0) node->fs_computed = px; }
+        if (!r.lh_raw.empty()) { double f = parse_lh(r.lh_raw, node->fs_computed); if (f >= 0) node->lh_computed = f; }
+        apply_box(r.decls, bm, node->fs_computed);
+        { auto s = prop_val(r.decls, "color"); if (!s.empty()) node->color_computed = collapse_ws(s); }
+        { auto s = tolower_s(prop_val(r.decls, "text-align"));
+          if      (s == "center")  node->text_align_computed = 1;
+          else if (s == "right")   node->text_align_computed = 2;
+          else if (s == "justify") node->text_align_computed = 3;
+          else if (s == "left")    node->text_align_computed = 0; }
+        { auto s = tolower_s(prop_val(r.decls, "text-transform"));
+          if      (s == "uppercase")  node->text_transform = 1;
+          else if (s == "lowercase")  node->text_transform = 2;
+          else if (s == "capitalize") node->text_transform = 3;
+          else if (s == "none")       node->text_transform = 0; }
+        { auto s = prop_val(r.decls, "font-family"); if (!s.empty()) node->font_family = s; }
+        { auto s = prop_val(r.decls, "box-shadow"); if (!s.empty()) node->box_shadow = s; }
+        { auto s = prop_val(r.decls, "opacity"); if (!s.empty()) { try { node->opacity = std::stod(s); } catch(...){} } }
+        { auto s = tolower_s(prop_val(r.decls, "overflow"));
+          if      (s == "visible") node->overflow = 0;
+          else if (s == "hidden")  node->overflow = 1;
+          else if (s == "scroll")  node->overflow = 2;
+          else if (s == "auto")    node->overflow = 3; }
+        { auto s = tolower_s(prop_val(r.decls, "flex-direction"));
+          if      (s == "row")            node->flex_direction = 0;
+          else if (s == "column")         node->flex_direction = 1;
+          else if (s == "row-reverse")    node->flex_direction = 2;
+          else if (s == "column-reverse") node->flex_direction = 3; }
+        { auto s = tolower_s(prop_val(r.decls, "justify-content"));
+          if      (s == "flex-start" || s == "start") node->justify_content = 0;
+          else if (s == "flex-end" || s == "end")     node->justify_content = 1;
+          else if (s == "center")                     node->justify_content = 2;
+          else if (s == "space-between")              node->justify_content = 3;
+          else if (s == "space-around")               node->justify_content = 4;
+          else if (s == "space-evenly")               node->justify_content = 5; }
+        { auto s = tolower_s(prop_val(r.decls, "align-items"));
+          if      (s == "stretch")                    node->align_items = 0;
+          else if (s == "flex-start" || s == "start") node->align_items = 1;
+          else if (s == "flex-end" || s == "end")     node->align_items = 2;
+          else if (s == "center")                     node->align_items = 3; }
+        { auto s = tolower_s(prop_val(r.decls, "flex-wrap"));
+          if      (s == "nowrap") node->flex_wrap = 0;
+          else if (s == "wrap")   node->flex_wrap = 1; }
+        { auto s = prop_val(r.decls, "flex-grow");
+          if (!s.empty()) { try { node->flex_grow = std::stof(s); } catch(...){} } }
+        { auto s = prop_val(r.decls, "flex-shrink");
+          if (!s.empty()) { try { node->flex_shrink = std::stof(s); } catch(...){} } }
+        { auto s = prop_val(r.decls, "flex-basis");
+          if (!s.empty()) { auto sl = tolower_s(s); if (sl == "auto") node->flex_basis = -1;
+              else node->flex_basis = parse_px_val(s, node->fs_computed); } }
+        { auto s = prop_val(r.decls, "flex");
+          if (!s.empty()) {
+              auto sl = tolower_s(s);
+              if (sl == "none") { node->flex_grow = 0; node->flex_shrink = 0; node->flex_basis = -1; }
+              else if (sl == "auto") { node->flex_grow = 1; node->flex_shrink = 1; node->flex_basis = -1; }
+              else {
+                  std::vector<std::string> parts;
+                  size_t i2=0, n2=s.size();
+                  while (i2<n2) { while(i2<n2&&s[i2]==' ')++i2; size_t j2=i2; while(j2<n2&&s[j2]!=' ')++j2;
+                      if(j2>i2) parts.push_back(s.substr(i2,j2-i2)); i2=j2; }
+                  if (parts.size() >= 1) { try { node->flex_grow = std::stof(parts[0]); } catch(...){} }
+                  if (parts.size() >= 2) { try { node->flex_shrink = std::stof(parts[1]); } catch(...){} }
+                  if (parts.size() >= 3) { auto bl = tolower_s(parts[2]);
+                      if (bl == "auto") node->flex_basis = -1;
+                      else { node->flex_basis = parse_px_val(parts[2], node->fs_computed);
+                             if (node->flex_basis < 0) node->flex_basis = 0; }
+                  } else if (parts.size() >= 1) { node->flex_basis = 0; }
+              }
+          } }
+        { auto s = prop_val(r.decls, "gap");
+          if (!s.empty()) { int px = parse_px_val(s, node->fs_computed); if (px > 0) node->gap = px; } }
+        { auto s = tolower_s(prop_val(r.decls, "position"));
+          if      (s == "static")   node->position = 0;
+          else if (s == "relative") node->position = 1;
+          else if (s == "absolute") node->position = 2;
+          else if (s == "fixed")    node->position = 3; }
+        { auto s = prop_val(r.decls, "top");
+          if (!s.empty() && tolower_s(s) != "auto") node->pos_top = parse_px_val(s, node->fs_computed); }
+        { auto s = prop_val(r.decls, "left");
+          if (!s.empty() && tolower_s(s) != "auto") node->pos_left = parse_px_val(s, node->fs_computed); }
+        { auto s = prop_val(r.decls, "right");
+          if (!s.empty() && tolower_s(s) != "auto") node->pos_right = parse_px_val(s, node->fs_computed); }
+        { auto s = prop_val(r.decls, "bottom");
+          if (!s.empty() && tolower_s(s) != "auto") node->pos_bottom = parse_px_val(s, node->fs_computed); }
+        { auto s = prop_val(r.decls, "z-index");
+          if (!s.empty()) { try { node->z_index = std::stoi(s); } catch(...){} } }
+        { std::string fs = tolower_s(prop_val(r.decls, "font-style"));
+          if (fs == "italic") node->fi_computed = PANGO_STYLE_ITALIC;
+          else if (fs == "oblique") node->fi_computed = PANGO_STYLE_OBLIQUE;
+          else if (fs == "normal") node->fi_computed = PANGO_STYLE_NORMAL; }
+        { auto s = tolower_s(prop_val(r.decls, "text-decoration"));
+          if (!s.empty()) parse_text_decoration(s, node); }
+        { auto s = tolower_s(prop_val(r.decls, "text-decoration-line"));
+          if (!s.empty()) node->text_decoration = parse_td_line(s); }
+        { auto s = prop_val(r.decls, "text-decoration-color");
+          if (!s.empty()) node->text_decoration_color = s; }
+        { auto s = tolower_s(prop_val(r.decls, "text-decoration-style"));
+          if (!s.empty()) node->text_decoration_style = parse_td_style(s); }
+        { auto s = prop_val(r.decls, "letter-spacing");
+          if (tolower_s(s) == "normal") node->letter_spacing = 0;
+          else if (!s.empty()) { int px = parse_px_val(s, node->fs_computed); node->letter_spacing = px * PANGO_SCALE; } }
+        { auto s = prop_val(r.decls, "word-spacing");
+          if (tolower_s(s) == "normal") node->word_spacing = 0;
+          else if (!s.empty()) node->word_spacing = parse_px_val(s, node->fs_computed); }
+        { auto s = tolower_s(prop_val(r.decls, "font-variant"));
+          if (s == "small-caps") node->font_variant = 1;
+          else if (s == "normal") node->font_variant = 0; }
+        { auto s = tolower_s(prop_val(r.decls, "white-space"));
+          if (!s.empty()) { int ws = parse_white_space(s); if (ws >= 0) node->white_space = ws; } }
+        { auto s = prop_val(r.decls, "text-indent");
+          if (!s.empty()) node->text_indent = parse_px_val(s, node->fs_computed); }
+        { auto s = tolower_s(prop_val(r.decls, "text-overflow"));
+          if (s == "ellipsis") node->text_overflow = 1;
+          else if (s == "clip") node->text_overflow = 0; }
+        { auto s = tolower_s(prop_val(r.decls, "font-stretch"));
+          if (!s.empty()) { int st = parse_font_stretch(s); if (st >= 0) node->font_stretch = st; } }
+        { auto s = tolower_s(prop_val(r.decls, "object-fit"));
+          if      (s == "fill")       node->object_fit = 0;
+          else if (s == "contain")    node->object_fit = 1;
+          else if (s == "cover")      node->object_fit = 2;
+          else if (s == "scale-down") node->object_fit = 3;
+          else if (s == "none")       node->object_fit = 4; }
+        { auto s = prop_val(r.decls, "aspect-ratio");
+          if (!s.empty()) { auto sl = tolower_s(s); if (sl != "auto") {
+              size_t slash = s.find('/');
+              if (slash != std::string::npos) { try { float w = std::stof(s.substr(0,slash));
+                  float h = std::stof(s.substr(slash+1)); if (h > 0) node->aspect_ratio = w / h; } catch(...) {} }
+              else { try { node->aspect_ratio = std::stof(s); } catch(...) {} }
+          } } }
+        { auto s = prop_val(r.decls, "text-shadow"); if (!s.empty()) node->text_shadow = s; }
+        { auto s = prop_val(r.decls, "font");
+          if (!s.empty()) parse_font_shorthand(s, node, parent_fs); }
+        if (!node->font_family.empty()) node->font_family = css_font_to_pango(node->font_family);
+    }
+
+    // --- 5. Anchor default underline ---
+    if (tname == "a") {
+        auto href_it = node->attributes.find("href");
+        if (href_it != node->attributes.end() && !href_it->second.empty()) {
+            if (node->text_decoration < 0) node->text_decoration = 1;
+        }
+    }
+    if (tname == "mark") bm.bg_color = "yellow";
+
+    // --- 6. Apply inline styles (highest specificity) ---
+    const std::string& ist = node->inline_style_raw;
+    if (!ist.empty()) {
+        { int v = fw_value(prop_val(ist, "font-weight")); if (v != -1) node->fw_computed = v; }
+        { std::string fs = prop_val(ist, "font-style");
+          if (fs == "italic") node->fi_computed = PANGO_STYLE_ITALIC;
+          else if (fs == "oblique") node->fi_computed = PANGO_STYLE_OBLIQUE;
+          else if (fs == "normal") node->fi_computed = PANGO_STYLE_NORMAL; }
+        { int px = parse_fs(prop_val(ist, "font-size"), parent_fs); if (px > 0) node->fs_computed = px; }
+        { double f = parse_lh(prop_val(ist, "line-height"), node->fs_computed); if (f >= 0) node->lh_computed = f; }
+        apply_box(ist, bm, node->fs_computed);
+        { auto s = prop_val(ist, "color"); if (!s.empty()) node->color_computed = collapse_ws(s); }
+        { auto s = tolower_s(prop_val(ist, "text-align"));
+          if      (s == "center")  node->text_align_computed = 1;
+          else if (s == "right")   node->text_align_computed = 2;
+          else if (s == "justify") node->text_align_computed = 3;
+          else if (s == "left")    node->text_align_computed = 0; }
+        { auto s = tolower_s(prop_val(ist, "text-transform"));
+          if      (s == "uppercase")  node->text_transform = 1;
+          else if (s == "lowercase")  node->text_transform = 2;
+          else if (s == "capitalize") node->text_transform = 3;
+          else if (s == "none")       node->text_transform = 0; }
+        { auto s = prop_val(ist, "font-family"); if (!s.empty()) node->font_family = s; }
+        { auto s = prop_val(ist, "box-shadow"); if (!s.empty()) node->box_shadow = s; }
+        { auto s = prop_val(ist, "opacity"); if (!s.empty()) { try { node->opacity = std::stod(s); } catch(...){} } }
+        { auto s = tolower_s(prop_val(ist, "overflow"));
+          if      (s == "visible") node->overflow = 0;
+          else if (s == "hidden")  node->overflow = 1;
+          else if (s == "scroll")  node->overflow = 2;
+          else if (s == "auto")    node->overflow = 3; }
+        { auto s = tolower_s(prop_val(ist, "flex-direction"));
+          if      (s == "row")            node->flex_direction = 0;
+          else if (s == "column")         node->flex_direction = 1;
+          else if (s == "row-reverse")    node->flex_direction = 2;
+          else if (s == "column-reverse") node->flex_direction = 3; }
+        { auto s = tolower_s(prop_val(ist, "justify-content"));
+          if      (s == "flex-start" || s == "start") node->justify_content = 0;
+          else if (s == "flex-end" || s == "end")     node->justify_content = 1;
+          else if (s == "center")                     node->justify_content = 2;
+          else if (s == "space-between")              node->justify_content = 3;
+          else if (s == "space-around")               node->justify_content = 4;
+          else if (s == "space-evenly")               node->justify_content = 5; }
+        { auto s = tolower_s(prop_val(ist, "align-items"));
+          if      (s == "stretch")                    node->align_items = 0;
+          else if (s == "flex-start" || s == "start") node->align_items = 1;
+          else if (s == "flex-end" || s == "end")     node->align_items = 2;
+          else if (s == "center")                     node->align_items = 3; }
+        { auto s = tolower_s(prop_val(ist, "flex-wrap"));
+          if      (s == "nowrap") node->flex_wrap = 0;
+          else if (s == "wrap")   node->flex_wrap = 1; }
+        { auto s = prop_val(ist, "flex-grow");
+          if (!s.empty()) { try { node->flex_grow = std::stof(s); } catch(...){} } }
+        { auto s = prop_val(ist, "flex-shrink");
+          if (!s.empty()) { try { node->flex_shrink = std::stof(s); } catch(...){} } }
+        { auto s = prop_val(ist, "flex-basis");
+          if (!s.empty()) { auto sl = tolower_s(s); if (sl == "auto") node->flex_basis = -1;
+              else node->flex_basis = parse_px_val(s, node->fs_computed); } }
+        { auto s = prop_val(ist, "flex");
+          if (!s.empty()) {
+              auto sl = tolower_s(s);
+              if (sl == "none") { node->flex_grow = 0; node->flex_shrink = 0; node->flex_basis = -1; }
+              else if (sl == "auto") { node->flex_grow = 1; node->flex_shrink = 1; node->flex_basis = -1; }
+              else {
+                  std::vector<std::string> parts;
+                  size_t i2=0, n2=s.size();
+                  while (i2<n2) { while(i2<n2&&s[i2]==' ')++i2; size_t j2=i2; while(j2<n2&&s[j2]!=' ')++j2;
+                      if(j2>i2) parts.push_back(s.substr(i2,j2-i2)); i2=j2; }
+                  if (parts.size() >= 1) { try { node->flex_grow = std::stof(parts[0]); } catch(...){} }
+                  if (parts.size() >= 2) { try { node->flex_shrink = std::stof(parts[1]); } catch(...){} }
+                  if (parts.size() >= 3) { auto bl = tolower_s(parts[2]);
+                      if (bl == "auto") node->flex_basis = -1;
+                      else { node->flex_basis = parse_px_val(parts[2], node->fs_computed);
+                             if (node->flex_basis < 0) node->flex_basis = 0; }
+                  } else if (parts.size() >= 1) { node->flex_basis = 0; }
+              }
+          } }
+        { auto s = prop_val(ist, "gap");
+          if (!s.empty()) { int px = parse_px_val(s, node->fs_computed); if (px > 0) node->gap = px; } }
+        { auto s = tolower_s(prop_val(ist, "position"));
+          if      (s == "static")   node->position = 0;
+          else if (s == "relative") node->position = 1;
+          else if (s == "absolute") node->position = 2;
+          else if (s == "fixed")    node->position = 3; }
+        { auto s = prop_val(ist, "top");
+          if (!s.empty() && tolower_s(s) != "auto") node->pos_top = parse_px_val(s, node->fs_computed); }
+        { auto s = prop_val(ist, "left");
+          if (!s.empty() && tolower_s(s) != "auto") node->pos_left = parse_px_val(s, node->fs_computed); }
+        { auto s = prop_val(ist, "right");
+          if (!s.empty() && tolower_s(s) != "auto") node->pos_right = parse_px_val(s, node->fs_computed); }
+        { auto s = prop_val(ist, "bottom");
+          if (!s.empty() && tolower_s(s) != "auto") node->pos_bottom = parse_px_val(s, node->fs_computed); }
+        { auto s = prop_val(ist, "z-index");
+          if (!s.empty()) { try { node->z_index = std::stoi(s); } catch(...){} } }
+        { auto s = tolower_s(prop_val(ist, "text-decoration"));
+          if (!s.empty()) parse_text_decoration(s, node); }
+        { auto s = tolower_s(prop_val(ist, "text-decoration-line"));
+          if (!s.empty()) node->text_decoration = parse_td_line(s); }
+        { auto s = prop_val(ist, "text-decoration-color");
+          if (!s.empty()) node->text_decoration_color = s; }
+        { auto s = tolower_s(prop_val(ist, "text-decoration-style"));
+          if (!s.empty()) node->text_decoration_style = parse_td_style(s); }
+        { auto s = prop_val(ist, "letter-spacing");
+          if (tolower_s(s) == "normal") node->letter_spacing = 0;
+          else if (!s.empty()) { int px = parse_px_val(s, node->fs_computed); node->letter_spacing = px * PANGO_SCALE; } }
+        { auto s = prop_val(ist, "word-spacing");
+          if (tolower_s(s) == "normal") node->word_spacing = 0;
+          else if (!s.empty()) node->word_spacing = parse_px_val(s, node->fs_computed); }
+        { auto s = tolower_s(prop_val(ist, "font-variant"));
+          if (s == "small-caps") node->font_variant = 1;
+          else if (s == "normal") node->font_variant = 0; }
+        { auto s = tolower_s(prop_val(ist, "white-space"));
+          if (!s.empty()) { int ws = parse_white_space(s); if (ws >= 0) node->white_space = ws; } }
+        { auto s = prop_val(ist, "text-indent");
+          if (!s.empty()) node->text_indent = parse_px_val(s, node->fs_computed); }
+        { auto s = tolower_s(prop_val(ist, "text-overflow"));
+          if (s == "ellipsis") node->text_overflow = 1;
+          else if (s == "clip") node->text_overflow = 0; }
+        { auto s = tolower_s(prop_val(ist, "font-stretch"));
+          if (!s.empty()) { int st = parse_font_stretch(s); if (st >= 0) node->font_stretch = st; } }
+        { auto s = tolower_s(prop_val(ist, "object-fit"));
+          if      (s == "fill")       node->object_fit = 0;
+          else if (s == "contain")    node->object_fit = 1;
+          else if (s == "cover")      node->object_fit = 2;
+          else if (s == "scale-down") node->object_fit = 3;
+          else if (s == "none")       node->object_fit = 4; }
+        { auto s = prop_val(ist, "aspect-ratio");
+          if (!s.empty()) { auto sl = tolower_s(s); if (sl != "auto") {
+              size_t slash = s.find('/');
+              if (slash != std::string::npos) { try { float w = std::stof(s.substr(0,slash));
+                  float h = std::stof(s.substr(slash+1)); if (h > 0) node->aspect_ratio = w / h; } catch(...) {} }
+              else { try { node->aspect_ratio = std::stof(s); } catch(...) {} }
+          } } }
+        { auto s = prop_val(ist, "text-shadow"); if (!s.empty()) node->text_shadow = s; }
+        { auto s = prop_val(ist, "font"); if (!s.empty()) parse_font_shorthand(s, node, parent_fs); }
+        if (!node->font_family.empty()) node->font_family = css_font_to_pango(node->font_family);
+    }
+
+    // --- 7. !important pass ---
+    for (const auto& r : css) {
+        if (!dom_sel_matches(r.sel, node)) continue;
+        if (r.decls.empty() || r.decls.find("!important") == std::string::npos) continue;
+        if (prop_is_important(r.decls, "display")) apply_box(r.decls, bm, node->fs_computed);
+        if (prop_is_important(r.decls, "color")) {
+            auto s = prop_val(r.decls, "color"); if (!s.empty()) node->color_computed = collapse_ws(s); }
+        if (prop_is_important(r.decls, "background-color") || prop_is_important(r.decls, "background"))
+            apply_box(r.decls, bm, node->fs_computed);
+        if (prop_is_important(r.decls, "font-size")) {
+            auto s = prop_val(r.decls, "font-size"); int px = parse_fs(s, parent_fs); if (px > 0) node->fs_computed = px; }
+        if (prop_is_important(r.decls, "font-weight")) {
+            int v = fw_from_decls(r.decls); if (v != -1) node->fw_computed = v; }
+        if (prop_is_important(r.decls, "font-style")) {
+            auto fs = tolower_s(prop_val(r.decls, "font-style"));
+            if (fs == "italic") node->fi_computed = PANGO_STYLE_ITALIC;
+            else if (fs == "normal") node->fi_computed = PANGO_STYLE_NORMAL; }
+        if (prop_is_important(r.decls, "margin")) apply_box(r.decls, bm, node->fs_computed);
+        if (prop_is_important(r.decls, "padding")) apply_box(r.decls, bm, node->fs_computed);
+        if (prop_is_important(r.decls, "width")) apply_box(r.decls, bm, node->fs_computed);
+        if (prop_is_important(r.decls, "height")) apply_box(r.decls, bm, node->fs_computed);
+        if (prop_is_important(r.decls, "position")) {
+            auto s = tolower_s(prop_val(r.decls, "position"));
+            if (s == "static") node->position = 0; else if (s == "relative") node->position = 1;
+            else if (s == "absolute") node->position = 2; else if (s == "fixed") node->position = 3; }
+        if (prop_is_important(r.decls, "text-align")) {
+            auto s = tolower_s(prop_val(r.decls, "text-align"));
+            if (s == "center") node->text_align_computed = 1; else if (s == "right") node->text_align_computed = 2;
+            else if (s == "left") node->text_align_computed = 0; }
+        if (prop_is_important(r.decls, "overflow")) {
+            auto s = tolower_s(prop_val(r.decls, "overflow"));
+            if (s == "visible") node->overflow = 0; else if (s == "hidden") node->overflow = 1;
+            else if (s == "scroll") node->overflow = 2; else if (s == "auto") node->overflow = 3; }
+        if (prop_is_important(r.decls, "opacity")) {
+            auto s = prop_val(r.decls, "opacity"); if (!s.empty()) try { node->opacity = std::stod(s); } catch(...){} }
+        if (prop_is_important(r.decls, "font-family")) {
+            auto s = prop_val(r.decls, "font-family"); if (!s.empty()) node->font_family = css_font_to_pango(s); }
+    }
+
+    // --- 8. Pseudo-elements (::before / ::after content) ---
+    node->before_content.clear();
+    node->after_content.clear();
+    for (const auto& r : css) {
+        std::string sel = r.sel;
+        bool is_before = false, is_after = false;
+        if (sel.size() > 8 && sel.substr(sel.size()-8) == "::before") { sel = sel.substr(0, sel.size()-8); is_before = true; }
+        else if (sel.size() > 7 && sel.substr(sel.size()-7) == ":before") { sel = sel.substr(0, sel.size()-7); is_before = true; }
+        else if (sel.size() > 7 && sel.substr(sel.size()-7) == "::after") { sel = sel.substr(0, sel.size()-7); is_after = true; }
+        else if (sel.size() > 6 && sel.substr(sel.size()-6) == ":after") { sel = sel.substr(0, sel.size()-6); is_after = true; }
+        if (!is_before && !is_after) continue;
+        while (!sel.empty() && sel.back() == ' ') sel.pop_back();
+        if (sel.empty()) sel = "*";
+        if (!dom_sel_matches(sel, node)) continue;
+        std::string content = prop_val(r.decls, "content");
+        if (content.empty() || content == "none" || content == "normal") continue;
+        if (content.size() >= 2 && (content.front()=='"' || content.front()=='\''))
+            content = content.substr(1, content.size()-2);
+        if (is_before) node->before_content = content;
+        else node->after_content = content;
+    }
+
+    // --- 9. Transfer BoxModel to node ---
+    for (int j = 0; j < 4; ++j) node->margin[j] = bm.margin[j];
+    for (int j = 0; j < 4; ++j) node->padding[j] = bm.padding[j];
+    node->width = bm.width;
+    node->max_width = bm.max_width;
+    node->height = bm.height;
+    if (bm.min_width >= 0) node->min_width = bm.min_width;
+    if (bm.min_height >= 0) node->min_height = bm.min_height;
+    if (bm.max_height >= 0) node->max_height = bm.max_height;
+    if (bm.box_sizing > 0) node->box_sizing = bm.box_sizing;
+    if (bm.width_sizing > 0) node->width_sizing = bm.width_sizing;
+    if (bm.height_sizing > 0) node->height_sizing = bm.height_sizing;
+    if (bm.overflow_x >= 0) node->overflow_x = bm.overflow_x;
+    if (bm.overflow_y >= 0) node->overflow_y = bm.overflow_y;
+    if (bm.width_pct >= 0) node->width_pct = bm.width_pct;
+    if (bm.height_pct >= 0) node->height_pct = bm.height_pct;
+    for (int j = 0; j < 4; ++j) node->border_width[j] = bm.border_width[j];
+    node->border_radius = bm.border_radius;
+    node->border_color = bm.border_color;
+    node->border_style = bm.border_style;
+    node->halign_center = bm.halign_center;
+    node->display = static_cast<DOMNode::Display>(static_cast<int>(bm.display));
+    node->floatdir = static_cast<DOMNode::Float>(static_cast<int>(bm.floatdir));
+    node->bg_image = bm.bg_image;
+    node->bg_color = bm.bg_color;
+    if (!bm.bg_repeat.empty()) node->style_props["background-repeat"] = bm.bg_repeat;
+    if (!bm.bg_size.empty()) node->style_props["background-size"] = bm.bg_size;
+    if (!bm.bg_position.empty()) node->style_props["background-position"] = bm.bg_position;
+    if (!bm.box_shadow.empty()) node->box_shadow = bm.box_shadow;
+    if (bm.opacity < 1.0) node->opacity = bm.opacity;
+    if (bm.overflow >= 0) node->overflow = bm.overflow;
+}
+
+// Recursively apply CSS to all nodes in the DOM tree
+static void restyle_tree(DOMNode* node, const std::vector<CSSRule>& css) {
+    if (!node) return;
+    if (node->node_type == DOMNode::ELEMENT) {
+        apply_css_to_node(node, css);
+    }
+    for (auto& child : node->children) {
+        restyle_tree(child.get(), css);
+    }
+}
+
 // Build layout tree, perform layout, generate display list
 static void layout_and_paint(TabState* tab) {
     if (!tab || !tab->document || !tab->document->root) return;
@@ -3470,6 +3957,13 @@ static void layout_and_paint(TabState* tab) {
 
     fprintf(stderr, "[LAYOUT] Starting layout_and_paint, body=%p children=%zu viewport_w=%.0f\n",
             start, start->children.size(), tab->viewport_width);
+
+    // Re-cascade CSS to all DOM nodes (ensures dynamically-created elements get styled)
+    if (!tab->css_rules.empty()) {
+        DOMNode* restyle_root = tab->document->root.get();
+        restyle_tree(restyle_root, tab->css_rules);
+        fprintf(stderr, "[RESTYLE] Re-cascaded %zu CSS rules to DOM tree\n", tab->css_rules.size());
+    }
 
     // Pre-load images into surface cache before layout (so natural dimensions are available)
     {
@@ -5458,7 +5952,8 @@ static void fetch_page(AppState* st, TabState* tab, std::string url, int gen) {
     }
 
     std::string raw_source = buf.data;  // save raw source for inspector
-    auto doc = parse_html_to_dom(buf.data, fetch_url);
+    std::vector<CSSRule> page_css;
+    auto doc = parse_html_to_dom(buf.data, fetch_url, &page_css);
 
     fprintf(stderr, "[JS-TRACE] Parsed: %zu script_srcs, %zu inline scripts\n",
             doc->script_srcs.size(), doc->scripts.size());
@@ -5481,11 +5976,13 @@ static void fetch_page(AppState* st, TabState* tab, std::string url, int gen) {
     }
 
     idle_add([st, tab, gen, url, doc, raw_source=std::move(raw_source),
-              external_scripts=std::move(external_scripts)]() {
+              external_scripts=std::move(external_scripts),
+              page_css=std::move(page_css)]() {
         if (gen != tab->generation) return;
         gtk_window_set_title(GTK_WINDOW(st->window), url.c_str());
         tab->document = doc;
         tab->page_source = raw_source;
+        tab->css_rules = page_css;
 
         // Extract title from DOM
         if (doc->body) {
