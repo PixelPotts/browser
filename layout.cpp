@@ -727,17 +727,60 @@ static void layout_block(LayoutBox* box, float containing_width, float containin
     }
 
     if (!all_inline) {
-        // Block formatting context: stack children vertically
+        // Block formatting context: stack children vertically with proper margin collapsing
         float y_cursor = 0;
         float prev_margin_bottom = 0;
 
-        for (auto& child : box->children) {
+        // Parent-child collapsing: if parent has no top border/padding, first child's
+        // top margin collapses through parent (we handle by not adding it to y_cursor
+        // and instead propagating to parent's margin)
+        bool parent_blocks_top_collapse = (box->padding.top > 0 || box->border.top > 0);
+
+        for (size_t ci = 0; ci < box->children.size(); ++ci) {
+            auto& child = box->children[ci];
             layout_box(child.get(), content_width, containing_height, pango_ctx);
 
-            // Margin collapsing (simplified: collapse adjacent margins)
             float top_margin = child->margin.top;
+
+            // Empty block collapsing: if child has no height, no padding, no border,
+            // and no content, its top and bottom margins collapse together
+            bool is_empty_block = (child->content_rect.h == 0 &&
+                                   child->padding.top == 0 && child->padding.bottom == 0 &&
+                                   child->border.top == 0 && child->border.bottom == 0 &&
+                                   child->children.empty() && child->line_boxes.empty());
+            if (is_empty_block) {
+                // Collapse top+bottom margins of empty block into a single margin
+                float combined = std::max(top_margin, child->margin.bottom);
+                if (ci == 0 && !parent_blocks_top_collapse) {
+                    // First child, collapses with parent top margin
+                    box->margin.top = std::max(box->margin.top, combined);
+                } else {
+                    // Collapse with previous sibling's bottom margin
+                    prev_margin_bottom = std::max(prev_margin_bottom, combined);
+                }
+                child->content_rect.x = child->margin.left + child->border.left + child->padding.left;
+                child->content_rect.y = y_cursor;
+                continue;
+            }
+
+            // Parent-child top margin collapsing
+            if (ci == 0 && !parent_blocks_top_collapse) {
+                // First child's top margin collapses with parent's top margin
+                box->margin.top = std::max(box->margin.top, top_margin);
+                // Don't add this margin to y_cursor
+                float child_x = child->margin.left + child->border.left + child->padding.left;
+                float child_y = child->border.top + child->padding.top;
+                child->content_rect.x = child_x;
+                child->content_rect.y = child_y;
+                y_cursor = child_y + child->content_rect.h + child->padding.bottom +
+                           child->border.bottom;
+                prev_margin_bottom = child->margin.bottom;
+                continue;
+            }
+
+            // Normal sibling margin collapsing
             float collapsed = std::max(prev_margin_bottom, top_margin);
-            float effective_gap = collapsed;
+            float effective_gap;
 
             if (y_cursor == 0 && prev_margin_bottom == 0) {
                 effective_gap = top_margin;
@@ -757,7 +800,17 @@ static void layout_block(LayoutBox* box, float containing_width, float containin
             prev_margin_bottom = child->margin.bottom;
         }
 
-        y_cursor += prev_margin_bottom;
+        // Parent-child bottom margin collapsing: if parent has no bottom border/padding
+        // and height is auto, last child's bottom margin collapses with parent
+        bool parent_blocks_bottom_collapse = (box->padding.bottom > 0 || box->border.bottom > 0);
+        float auto_height = y_cursor;
+        if (!parent_blocks_bottom_collapse && !box->children.empty()) {
+            // Last child's bottom margin collapses with parent's bottom margin
+            box->margin.bottom = std::max(box->margin.bottom, prev_margin_bottom);
+            // Don't add prev_margin_bottom to height
+        } else {
+            auto_height += prev_margin_bottom;
+        }
 
         // Resolve content height
         float content_height = resolve_height(node, containing_height);
@@ -769,7 +822,7 @@ static void layout_block(LayoutBox* box, float containing_width, float containin
             content_height = clamp_size(content_height, node, false);
             box->content_rect.h = content_height;
         } else {
-            box->content_rect.h = y_cursor;
+            box->content_rect.h = auto_height;
         }
     }
 
