@@ -1,0 +1,50 @@
+<!DOCTYPE html><html><head><title>String Methods</title></head>
+<body><div id="out"></div>
+<script>
+var P=0,F=0,T=0,fails=[];
+function t(n,fn){T++;try{if(fn()===true){P++;console.log('PASS: '+n);} else {F++;fails.push(n);console.log('FAIL: '+n);}}catch(e){F++;fails.push(n+': '+e.message);console.log('FAIL: '+n+': '+e.message);}}
+
+t('String.prototype.includes', function(){
+  return 'hello world'.includes('world') === true && 'hello world'.includes('xyz') === false;
+});
+
+t('String.prototype.startsWith', function(){
+  return 'hello'.startsWith('hel') === true && 'hello'.startsWith('ell') === false;
+});
+
+t('String.prototype.endsWith', function(){
+  return 'hello'.endsWith('llo') === true && 'hello'.endsWith('hel') === false;
+});
+
+t('String.prototype.repeat', function(){
+  return 'ab'.repeat(3) === 'ababab' && 'x'.repeat(0) === '';
+});
+
+t('String.prototype.padStart', function(){
+  return '5'.padStart(3, '0') === '005' && 'abc'.padStart(2) === 'abc';
+});
+
+t('String.prototype.padEnd', function(){
+  return '5'.padEnd(3, '0') === '500' && 'abc'.padEnd(2) === 'abc';
+});
+
+t('String.prototype.trimStart', function(){
+  return '  hello  '.trimStart() === 'hello  ';
+});
+
+t('String.prototype.trimEnd', function(){
+  return '  hello  '.trimEnd() === '  hello';
+});
+
+t('String.prototype.matchAll', function(){
+  var str = 'aabbaabb';
+  var re = /a+/g;
+  var matches = Array.from(str.matchAll(re));
+  return matches.length === 2 && matches[0][0] === 'aa' && matches[1][0] === 'aa';
+});
+
+var s='=== RESULTS: '+P+'/'+T+' passed, '+F+' failed ===';
+console.log(s);
+fails.forEach(function(f){console.log('FAIL: '+f);});
+document.getElementById('out').textContent=s+'\n'+fails.join('\n');
+</script></body></html>

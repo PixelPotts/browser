@@ -1,0 +1,41 @@
+<!DOCTYPE html><html><head><title>ES2023+ Features</title></head>
+<body><div id="out"></div>
+<script>
+var P=0,F=0,T=0,fails=[];
+function t(n,fn){T++;try{if(fn()===true){P++;console.log('PASS: '+n);} else {F++;fails.push(n);console.log('FAIL: '+n);}}catch(e){F++;fails.push(n+': '+e.message);console.log('FAIL: '+n+': '+e.message);}}
+
+t('Array.prototype.toSorted does not mutate', function(){
+  var orig = [3, 1, 2];
+  var sorted = orig.toSorted();
+  return sorted[0] === 1 && sorted[1] === 2 && sorted[2] === 3 && orig[0] === 3 && orig[1] === 1 && orig[2] === 2;
+});
+
+t('Array.prototype.toReversed does not mutate', function(){
+  var orig = [1, 2, 3];
+  var rev = orig.toReversed();
+  return rev[0] === 3 && rev[1] === 2 && rev[2] === 1 && orig[0] === 1 && orig[1] === 2 && orig[2] === 3;
+});
+
+t('Array.prototype.with', function(){
+  var orig = [1, 2, 3];
+  var result = orig.with(1, 99);
+  return result[0] === 1 && result[1] === 99 && result[2] === 3 && orig[1] === 2;
+});
+
+t('WeakRef deref returns target', function(){
+  var obj = {x: 42};
+  var ref = new WeakRef(obj);
+  return ref.deref().x === 42;
+});
+
+t('Object.fromEntries', function(){
+  var entries = [['a', 1], ['b', 2], ['c', 3]];
+  var obj = Object.fromEntries(entries);
+  return obj.a === 1 && obj.b === 2 && obj.c === 3;
+});
+
+var s='=== RESULTS: '+P+'/'+T+' passed, '+F+' failed ===';
+console.log(s);
+fails.forEach(function(f){console.log('FAIL: '+f);});
+document.getElementById('out').textContent=s+'\n'+fails.join('\n');
+</script></body></html>

@@ -1,0 +1,61 @@
+<!DOCTYPE html><html><head><title>ES2020+ Features</title></head>
+<body><div id="out"></div>
+<script>
+var P=0,F=0,T=0,fails=[];
+function t(n,fn){T++;try{if(fn()===true){P++;console.log('PASS: '+n);} else {F++;fails.push(n);console.log('FAIL: '+n);}}catch(e){F++;fails.push(n+': '+e.message);console.log('FAIL: '+n+': '+e.message);}}
+
+t('optional chaining ?.', function(){
+  var obj = {a: {b: {c: 42}}};
+  return obj?.a?.b?.c === 42 && obj?.x?.y?.z === undefined;
+});
+
+t('nullish coalescing ??', function(){
+  var a = null ?? 'default';
+  var b = undefined ?? 'default';
+  var c = 0 ?? 'default';
+  var d = '' ?? 'default';
+  return a === 'default' && b === 'default' && c === 0 && d === '';
+});
+
+t('globalThis === window', function(){
+  return globalThis === window;
+});
+
+t('Promise.allSettled', function(){
+  return typeof Promise.allSettled === 'function';
+});
+
+t('String.prototype.replaceAll', function(){
+  var s = 'aabbcc'.replaceAll('b', 'x');
+  return s === 'aaxxcc';
+});
+
+t('Array.prototype.at(-1)', function(){
+  var arr = [10, 20, 30];
+  return arr.at(-1) === 30 && arr.at(0) === 10;
+});
+
+t('String.prototype.at(-1)', function(){
+  return 'abc'.at(-1) === 'c' && 'abc'.at(0) === 'a';
+});
+
+t('Object.hasOwn', function(){
+  var obj = {a: 1};
+  return Object.hasOwn(obj, 'a') === true && Object.hasOwn(obj, 'b') === false;
+});
+
+t('Array.prototype.findLast', function(){
+  var arr = [1, 2, 3, 4, 5];
+  return arr.findLast(function(x){ return x < 4; }) === 3;
+});
+
+t('Array.prototype.findLastIndex', function(){
+  var arr = [1, 2, 3, 4, 5];
+  return arr.findLastIndex(function(x){ return x < 4; }) === 2;
+});
+
+var s='=== RESULTS: '+P+'/'+T+' passed, '+F+' failed ===';
+console.log(s);
+fails.forEach(function(f){console.log('FAIL: '+f);});
+document.getElementById('out').textContent=s+'\n'+fails.join('\n');
+</script></body></html>

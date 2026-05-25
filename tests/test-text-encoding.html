@@ -1,0 +1,40 @@
+<!DOCTYPE html><html><head><title>TextEncoder/TextDecoder</title></head>
+<body><div id="out"></div>
+<script>
+var P=0,F=0,T=0,fails=[];
+function t(n,fn){T++;try{if(fn()===true){P++;console.log('PASS: '+n);} else {F++;fails.push(n);console.log('FAIL: '+n);}}catch(e){F++;fails.push(n+': '+e.message);console.log('FAIL: '+n+': '+e.message);}}
+
+t('TextEncoder exists', function(){
+  return typeof TextEncoder === 'function';
+});
+
+t('encode hello returns Uint8Array length 5', function(){
+  var enc = new TextEncoder();
+  var result = enc.encode('hello');
+  return result instanceof Uint8Array && result.length === 5;
+});
+
+t('first byte of hello is 104 (h)', function(){
+  var enc = new TextEncoder();
+  var result = enc.encode('hello');
+  return result[0] === 104;
+});
+
+t('TextDecoder exists', function(){
+  return typeof TextDecoder === 'function';
+});
+
+t('roundtrip encode->decode equals original', function(){
+  var enc = new TextEncoder();
+  var dec = new TextDecoder();
+  var original = 'Hello, World! 123';
+  var encoded = enc.encode(original);
+  var decoded = dec.decode(encoded);
+  return decoded === original;
+});
+
+var s='=== RESULTS: '+P+'/'+T+' passed, '+F+' failed ===';
+console.log(s);
+fails.forEach(function(f){console.log('FAIL: '+f);});
+document.getElementById('out').textContent=s+'\n'+fails.join('\n');
+</script></body></html>

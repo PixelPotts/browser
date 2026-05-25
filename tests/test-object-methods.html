@@ -1,0 +1,65 @@
+<!DOCTYPE html><html><head><title>Object Methods</title></head>
+<body><div id="out"></div>
+<script>
+var P=0,F=0,T=0,fails=[];
+function t(n,fn){T++;try{if(fn()===true){P++;console.log('PASS: '+n);} else {F++;fails.push(n);console.log('FAIL: '+n);}}catch(e){F++;fails.push(n+': '+e.message);console.log('FAIL: '+n+': '+e.message);}}
+
+t('Object.keys returns own enumerable keys', function(){
+  var obj = {a: 1, b: 2, c: 3};
+  var keys = Object.keys(obj);
+  return keys.length === 3 && keys.indexOf('a') !== -1 && keys.indexOf('b') !== -1 && keys.indexOf('c') !== -1;
+});
+
+t('Object.values returns own enumerable values', function(){
+  var obj = {a: 1, b: 2, c: 3};
+  var vals = Object.values(obj);
+  return vals.length === 3 && vals.indexOf(1) !== -1 && vals.indexOf(2) !== -1 && vals.indexOf(3) !== -1;
+});
+
+t('Object.entries returns key-value pairs', function(){
+  var obj = {a: 1, b: 2};
+  var entries = Object.entries(obj);
+  return entries.length === 2 && entries[0].length === 2;
+});
+
+t('Object.assign merges objects', function(){
+  var target = {a: 1};
+  var result = Object.assign(target, {b: 2}, {c: 3});
+  return result === target && target.a === 1 && target.b === 2 && target.c === 3;
+});
+
+t('Object.freeze prevents modification', function(){
+  var obj = {a: 1};
+  Object.freeze(obj);
+  try { obj.a = 2; } catch(e){}
+  return obj.a === 1;
+});
+
+t('spread syntax for objects', function(){
+  var a = {x: 1, y: 2};
+  var b = {...a, z: 3};
+  return b.x === 1 && b.y === 2 && b.z === 3 && b !== a;
+});
+
+t('destructuring assignment', function(){
+  var obj = {a: 10, b: 20, c: 30};
+  var {a, b, c} = obj;
+  return a === 10 && b === 20 && c === 30;
+});
+
+t('Object.defineProperty', function(){
+  var obj = {};
+  Object.defineProperty(obj, 'prop', {
+    value: 42,
+    writable: false,
+    enumerable: true,
+    configurable: false
+  });
+  return obj.prop === 42 && Object.keys(obj).indexOf('prop') !== -1;
+});
+
+var s='=== RESULTS: '+P+'/'+T+' passed, '+F+' failed ===';
+console.log(s);
+fails.forEach(function(f){console.log('FAIL: '+f);});
+document.getElementById('out').textContent=s+'\n'+fails.join('\n');
+</script></body></html>

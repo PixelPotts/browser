@@ -1,0 +1,50 @@
+<!DOCTYPE html><html><head><title>DOM Properties</title></head>
+<body><div id="out"></div>
+<div id="target"><span>Hello</span> World</div>
+<script>
+var P=0,F=0,T=0,fails=[];
+function t(n,fn){T++;try{if(fn()===true){P++;console.log('PASS: '+n);} else {F++;fails.push(n);console.log('FAIL: '+n);}}catch(e){F++;fails.push(n+': '+e.message);console.log('FAIL: '+n+': '+e.message);}}
+
+var el = document.getElementById('target');
+
+t('outerHTML getter includes tag and content', function(){
+  var html = el.outerHTML;
+  return html.indexOf('<div') !== -1 && html.indexOf('</div>') !== -1 && html.indexOf('Hello') !== -1;
+});
+
+t('isConnected returns true for attached element', function(){
+  return el.isConnected === true;
+});
+
+t('isConnected returns false for detached element', function(){
+  var detached = document.createElement('div');
+  return detached.isConnected === false;
+});
+
+t('innerText getter returns visible text', function(){
+  var text = el.innerText;
+  return typeof text === 'string' && text.indexOf('Hello') !== -1 && text.indexOf('World') !== -1;
+});
+
+t('innerText setter replaces content', function(){
+  var div = document.createElement('div');
+  div.innerHTML = '<span>old</span>';
+  div.innerText = 'new text';
+  return div.textContent === 'new text' && div.childNodes.length === 1 && div.childNodes[0].nodeType === 3;
+});
+
+t('normalize merges adjacent text nodes', function(){
+  var div = document.createElement('div');
+  div.appendChild(document.createTextNode('a'));
+  div.appendChild(document.createTextNode('b'));
+  div.appendChild(document.createTextNode('c'));
+  var before = div.childNodes.length;
+  div.normalize();
+  return before === 3 && div.childNodes.length === 1 && div.textContent === 'abc';
+});
+
+var s='=== RESULTS: '+P+'/'+T+' passed, '+F+' failed ===';
+console.log(s);
+fails.forEach(function(f){console.log('FAIL: '+f);});
+document.getElementById('out').textContent=s+'\n'+fails.join('\n');
+</script></body></html>

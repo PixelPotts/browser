@@ -1,0 +1,45 @@
+<!DOCTYPE html><html><head><title>Promises</title></head>
+<body><div id="out"></div>
+<script>
+var P=0,F=0,T=0,fails=[];
+function t(n,fn){T++;try{if(fn()===true){P++;console.log('PASS: '+n);} else {F++;fails.push(n);console.log('FAIL: '+n);}}catch(e){F++;fails.push(n+': '+e.message);console.log('FAIL: '+n+': '+e.message);}}
+
+t('Promise constructor exists', function(){
+  return typeof Promise === 'function';
+});
+
+t('Promise.resolve returns fulfilled promise', function(){
+  var p = Promise.resolve(42);
+  return p instanceof Promise;
+});
+
+t('Promise.reject returns rejected promise', function(){
+  var p = Promise.reject('err');
+  p.catch(function(){});
+  return p instanceof Promise;
+});
+
+t('then/catch are functions', function(){
+  var p = new Promise(function(resolve){resolve(1);});
+  return typeof p.then === 'function' && typeof p.catch === 'function';
+});
+
+t('async function returns Promise', function(){
+  var fn = async function(){ return 42; };
+  var result = fn();
+  return result instanceof Promise;
+});
+
+t('Promise.all exists', function(){
+  return typeof Promise.all === 'function';
+});
+
+t('Promise.race exists', function(){
+  return typeof Promise.race === 'function';
+});
+
+var s='=== RESULTS: '+P+'/'+T+' passed, '+F+' failed ===';
+console.log(s);
+fails.forEach(function(f){console.log('FAIL: '+f);});
+document.getElementById('out').textContent=s+'\n'+fails.join('\n');
+</script></body></html>

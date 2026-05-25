@@ -1,0 +1,24 @@
+<!DOCTYPE html><html><head><title>Idle Callback</title></head>
+<body><div id="out"></div>
+<script>
+var P=0,F=0,T=0,fails=[];
+function t(n,fn){T++;try{if(fn()===true){P++;console.log('PASS: '+n);} else {F++;fails.push(n);console.log('FAIL: '+n);}}catch(e){F++;fails.push(n+': '+e.message);console.log('FAIL: '+n+': '+e.message);}}
+
+t('requestIdleCallback exists', function(){
+  return typeof requestIdleCallback === 'function';
+});
+
+t('requestIdleCallback returns a number', function(){
+  var id = requestIdleCallback(function(){});
+  return typeof id === 'number';
+});
+
+t('cancelIdleCallback exists', function(){
+  return typeof cancelIdleCallback === 'function';
+});
+
+var s='=== RESULTS: '+P+'/'+T+' passed, '+F+' failed ===';
+console.log(s);
+fails.forEach(function(f){console.log('FAIL: '+f);});
+document.getElementById('out').textContent=s+'\n'+fails.join('\n');
+</script></body></html>

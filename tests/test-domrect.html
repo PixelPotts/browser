@@ -1,0 +1,40 @@
+<!DOCTYPE html><html><head><title>DOMRect / DOMPoint</title></head>
+<body><div id="out"></div>
+<script>
+var P=0,F=0,T=0,fails=[];
+function t(n,fn){T++;try{if(fn()===true){P++;console.log('PASS: '+n);} else {F++;fails.push(n);console.log('FAIL: '+n);}}catch(e){F++;fails.push(n+': '+e.message);console.log('FAIL: '+n+': '+e.message);}}
+
+t('DOMRect constructor with x/y/w/h', function(){
+  var r = new DOMRect(10, 20, 100, 50);
+  return r.x === 10 && r.y === 20 && r.width === 100 && r.height === 50;
+});
+
+t('DOMRect computed top/right/bottom/left', function(){
+  var r = new DOMRect(10, 20, 100, 50);
+  return r.top === 20 && r.right === 110 && r.bottom === 70 && r.left === 10;
+});
+
+t('DOMRectReadOnly exists', function(){
+  return typeof DOMRectReadOnly === 'function';
+});
+
+t('DOMRectReadOnly constructor works', function(){
+  var r = new DOMRectReadOnly(5, 10, 200, 300);
+  return r.x === 5 && r.y === 10 && r.width === 200 && r.height === 300;
+});
+
+t('DOMPoint constructor with x/y/z/w defaults', function(){
+  var p = new DOMPoint(1, 2);
+  return p.x === 1 && p.y === 2 && p.z === 0 && p.w === 1;
+});
+
+t('DOMPoint constructor with all args', function(){
+  var p = new DOMPoint(1, 2, 3, 4);
+  return p.x === 1 && p.y === 2 && p.z === 3 && p.w === 4;
+});
+
+var s='=== RESULTS: '+P+'/'+T+' passed, '+F+' failed ===';
+console.log(s);
+fails.forEach(function(f){console.log('FAIL: '+f);});
+document.getElementById('out').textContent=s+'\n'+fails.join('\n');
+</script></body></html>

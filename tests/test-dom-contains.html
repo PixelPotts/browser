@@ -1,0 +1,38 @@
+<!DOCTYPE html><html><head><title>DOM contains()</title></head>
+<body><div id="out"></div>
+<div id="parent"><div id="child"><div id="deep">deep</div></div></div>
+<div id="other">other</div>
+<script>
+var P=0,F=0,T=0,fails=[];
+function t(n,fn){T++;try{if(fn()===true){P++;console.log('PASS: '+n);} else {F++;fails.push(n);console.log('FAIL: '+n);}}catch(e){F++;fails.push(n+': '+e.message);console.log('FAIL: '+n+': '+e.message);}}
+
+var parent = document.getElementById('parent');
+var child = document.getElementById('child');
+var deep = document.getElementById('deep');
+var other = document.getElementById('other');
+
+t('contains(self) returns true', function(){
+  return parent.contains(parent) === true;
+});
+
+t('contains(child) returns true', function(){
+  return parent.contains(child) === true;
+});
+
+t('contains(non-child) returns false', function(){
+  return parent.contains(other) === false;
+});
+
+t('contains(null) returns false', function(){
+  return parent.contains(null) === false;
+});
+
+t('contains(deeply-nested) returns true', function(){
+  return parent.contains(deep) === true;
+});
+
+var s='=== RESULTS: '+P+'/'+T+' passed, '+F+' failed ===';
+console.log(s);
+fails.forEach(function(f){console.log('FAIL: '+f);});
+document.getElementById('out').textContent=s+'\n'+fails.join('\n');
+</script></body></html>

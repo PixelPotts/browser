@@ -1,0 +1,81 @@
+<!DOCTYPE html><html><head><title>DOM Modern Insertion</title></head>
+<body><div id="out"></div>
+<div id="container"></div>
+<script>
+var P=0,F=0,T=0,fails=[];
+function t(n,fn){T++;try{if(fn()===true){P++;console.log('PASS: '+n);} else {F++;fails.push(n);console.log('FAIL: '+n);}}catch(e){F++;fails.push(n+': '+e.message);console.log('FAIL: '+n+': '+e.message);}}
+
+var container = document.getElementById('container');
+
+function reset(){
+  container.innerHTML = '<div id="ref">ref</div>';
+  return document.getElementById('ref');
+}
+
+t('append(node) adds element to end', function(){
+  reset();
+  var span = document.createElement('span');
+  span.id = 'appended';
+  container.append(span);
+  return container.lastElementChild && container.lastElementChild.id === 'appended';
+});
+
+t('append(string) adds text node', function(){
+  container.innerHTML = '';
+  container.append('hello');
+  return container.childNodes.length === 1 && container.childNodes[0].nodeType === 3 && container.textContent === 'hello';
+});
+
+t('append(multiple) adds multiple nodes', function(){
+  container.innerHTML = '';
+  var a = document.createElement('span');
+  var b = document.createElement('div');
+  container.append(a, 'text', b);
+  return container.childNodes.length === 3;
+});
+
+t('prepend(node) adds element to beginning', function(){
+  container.innerHTML = '<span id="existing">E</span>';
+  var div = document.createElement('div');
+  div.id = 'prepended';
+  container.prepend(div);
+  return container.firstElementChild && container.firstElementChild.id === 'prepended';
+});
+
+t('before(node) inserts before reference', function(){
+  var ref = reset();
+  var span = document.createElement('span');
+  span.id = 'before';
+  ref.before(span);
+  return ref.previousElementSibling && ref.previousElementSibling.id === 'before';
+});
+
+t('after(node) inserts after reference', function(){
+  var ref = reset();
+  var span = document.createElement('span');
+  span.id = 'after';
+  ref.after(span);
+  return ref.nextElementSibling && ref.nextElementSibling.id === 'after';
+});
+
+t('replaceWith(node) replaces element', function(){
+  var ref = reset();
+  var span = document.createElement('span');
+  span.id = 'replacement';
+  ref.replaceWith(span);
+  return container.firstElementChild && container.firstElementChild.id === 'replacement' && !document.getElementById('ref');
+});
+
+t('replaceChildren clears and adds new children', function(){
+  container.innerHTML = '<span>a</span><span>b</span>';
+  var div = document.createElement('div');
+  div.id = 'rc';
+  container.replaceChildren(div, 'text');
+  return container.childNodes.length === 2 && container.firstElementChild.id === 'rc';
+});
+
+var s='=== RESULTS: '+P+'/'+T+' passed, '+F+' failed ===';
+console.log(s);
+fails.forEach(function(f){console.log('FAIL: '+f);});
+document.getElementById('out').textContent=s+'\n'+fails.join('\n');
+</script></body></html>

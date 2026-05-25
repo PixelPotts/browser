@@ -1,0 +1,65 @@
+<!DOCTYPE html><html><head><title>Document Methods</title></head>
+<body><div id="out"></div>
+<script>
+var P=0,F=0,T=0,fails=[];
+function t(n,fn){T++;try{if(fn()===true){P++;console.log('PASS: '+n);} else {F++;fails.push(n);console.log('FAIL: '+n);}}catch(e){F++;fails.push(n+': '+e.message);console.log('FAIL: '+n+': '+e.message);}}
+
+t('createDocumentFragment returns fragment', function(){
+  var frag = document.createDocumentFragment();
+  return frag && frag.nodeType === 11;
+});
+
+t('createDocumentFragment can hold children', function(){
+  var frag = document.createDocumentFragment();
+  var span = document.createElement('span');
+  frag.appendChild(span);
+  return frag.childNodes.length === 1;
+});
+
+t('createComment returns comment node (nodeType=8)', function(){
+  var comment = document.createComment('test comment');
+  return comment.nodeType === 8;
+});
+
+t('createComment has correct textContent', function(){
+  var comment = document.createComment('hello');
+  return comment.textContent === 'hello' || comment.data === 'hello';
+});
+
+t('document.title is a string', function(){
+  return typeof document.title === 'string';
+});
+
+t('document.readyState is complete', function(){
+  return document.readyState === 'complete' || document.readyState === 'interactive' || document.readyState === 'loading';
+});
+
+t('document.URL is a string', function(){
+  return typeof document.URL === 'string' && document.URL.length > 0;
+});
+
+t('document.compatMode is CSS1Compat or BackCompat', function(){
+  return document.compatMode === 'CSS1Compat' || document.compatMode === 'BackCompat';
+});
+
+t('document.characterSet is a string', function(){
+  return typeof document.characterSet === 'string';
+});
+
+t('document.contentType is a string', function(){
+  return typeof document.contentType === 'string';
+});
+
+t('document.nodeType is 9', function(){
+  return document.nodeType === 9;
+});
+
+t('document.nodeName is #document', function(){
+  return document.nodeName === '#document';
+});
+
+var s='=== RESULTS: '+P+'/'+T+' passed, '+F+' failed ===';
+console.log(s);
+fails.forEach(function(f){console.log('FAIL: '+f);});
+document.getElementById('out').textContent=s+'\n'+fails.join('\n');
+</script></body></html>

@@ -1,0 +1,60 @@
+<!DOCTYPE html><html><head><title>Symbols & Iterators</title></head>
+<body><div id="out"></div>
+<script>
+var P=0,F=0,T=0,fails=[];
+function t(n,fn){T++;try{if(fn()===true){P++;console.log('PASS: '+n);} else {F++;fails.push(n);console.log('FAIL: '+n);}}catch(e){F++;fails.push(n+': '+e.message);console.log('FAIL: '+n+': '+e.message);}}
+
+t('Symbol exists', function(){
+  return typeof Symbol === 'function';
+});
+
+t('Symbol.iterator exists', function(){
+  return typeof Symbol.iterator === 'symbol';
+});
+
+t('for..of array sums correctly', function(){
+  var arr = [1, 2, 3, 4, 5];
+  var sum = 0;
+  for(var x of arr){ sum += x; }
+  return sum === 15;
+});
+
+t('for..of Map', function(){
+  var m = new Map();
+  m.set('a', 1);
+  m.set('b', 2);
+  var keys = [];
+  var vals = [];
+  for(var entry of m){ keys.push(entry[0]); vals.push(entry[1]); }
+  return keys.length === 2 && keys[0] === 'a' && vals[1] === 2;
+});
+
+t('for..of Set', function(){
+  var s = new Set([10, 20, 30]);
+  var sum = 0;
+  for(var x of s){ sum += x; }
+  return sum === 60;
+});
+
+t('custom Symbol.iterator protocol', function(){
+  var obj = {};
+  obj[Symbol.iterator] = function(){
+    var i = 0;
+    var data = [10, 20, 30];
+    return {
+      next: function(){
+        if(i < data.length) return {value: data[i++], done: false};
+        return {value: undefined, done: true};
+      }
+    };
+  };
+  var result = [];
+  for(var x of obj){ result.push(x); }
+  return result.length === 3 && result[0] === 10 && result[1] === 20 && result[2] === 30;
+});
+
+var s='=== RESULTS: '+P+'/'+T+' passed, '+F+' failed ===';
+console.log(s);
+fails.forEach(function(f){console.log('FAIL: '+f);});
+document.getElementById('out').textContent=s+'\n'+fails.join('\n');
+</script></body></html>

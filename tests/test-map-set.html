@@ -1,0 +1,73 @@
+<!DOCTYPE html><html><head><title>Map & Set</title></head>
+<body><div id="out"></div>
+<script>
+var P=0,F=0,T=0,fails=[];
+function t(n,fn){T++;try{if(fn()===true){P++;console.log('PASS: '+n);} else {F++;fails.push(n);console.log('FAIL: '+n);}}catch(e){F++;fails.push(n+': '+e.message);console.log('FAIL: '+n+': '+e.message);}}
+
+t('Map set/get/has', function(){
+  var m = new Map();
+  m.set('key', 'val');
+  return m.get('key') === 'val' && m.has('key') === true && m.has('nope') === false;
+});
+
+t('Map delete', function(){
+  var m = new Map();
+  m.set('a', 1);
+  m.delete('a');
+  return m.has('a') === false && m.size === 0;
+});
+
+t('Map size', function(){
+  var m = new Map();
+  m.set('a', 1);
+  m.set('b', 2);
+  m.set('c', 3);
+  return m.size === 3;
+});
+
+t('Map forEach', function(){
+  var m = new Map();
+  m.set('x', 10);
+  m.set('y', 20);
+  var sum = 0;
+  m.forEach(function(v){ sum += v; });
+  return sum === 30;
+});
+
+t('Map iteration with for..of', function(){
+  var m = new Map([['a', 1], ['b', 2]]);
+  var keys = [];
+  for(var entry of m){ keys.push(entry[0]); }
+  return keys.length === 2 && keys[0] === 'a' && keys[1] === 'b';
+});
+
+t('Set add/has/delete/size', function(){
+  var s = new Set();
+  s.add(1);
+  s.add(2);
+  s.add(2);
+  var has2 = s.has(2);
+  var size = s.size;
+  s.delete(2);
+  return has2 === true && size === 2 && s.has(2) === false && s.size === 1;
+});
+
+t('WeakMap basic usage', function(){
+  var wm = new WeakMap();
+  var obj = {};
+  wm.set(obj, 42);
+  return wm.get(obj) === 42 && wm.has(obj) === true;
+});
+
+t('WeakSet basic usage', function(){
+  var ws = new WeakSet();
+  var obj = {};
+  ws.add(obj);
+  return ws.has(obj) === true;
+});
+
+var s='=== RESULTS: '+P+'/'+T+' passed, '+F+' failed ===';
+console.log(s);
+fails.forEach(function(f){console.log('FAIL: '+f);});
+document.getElementById('out').textContent=s+'\n'+fails.join('\n');
+</script></body></html>

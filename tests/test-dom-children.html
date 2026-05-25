@@ -1,0 +1,46 @@
+<!DOCTYPE html><html><head><title>DOM Children</title></head>
+<body><div id="out"></div>
+<div id="empty"></div>
+<div id="mixed">text<span id="first">A</span>more text<span id="last">B</span>end text</div>
+<script>
+var P=0,F=0,T=0,fails=[];
+function t(n,fn){T++;try{if(fn()===true){P++;console.log('PASS: '+n);} else {F++;fails.push(n);console.log('FAIL: '+n);}}catch(e){F++;fails.push(n+': '+e.message);console.log('FAIL: '+n+': '+e.message);}}
+
+var empty = document.getElementById('empty');
+var mixed = document.getElementById('mixed');
+
+t('hasChildNodes returns false for empty element', function(){
+  return empty.hasChildNodes() === false;
+});
+
+t('hasChildNodes returns true for non-empty element', function(){
+  return mixed.hasChildNodes() === true;
+});
+
+t('childElementCount counts only elements', function(){
+  return mixed.childElementCount === 2;
+});
+
+t('firstElementChild returns first element child', function(){
+  return mixed.firstElementChild && mixed.firstElementChild.id === 'first';
+});
+
+t('lastElementChild returns last element child', function(){
+  return mixed.lastElementChild && mixed.lastElementChild.id === 'last';
+});
+
+t('childElementCount ignores text nodes', function(){
+  var div = document.createElement('div');
+  div.appendChild(document.createTextNode('a'));
+  div.appendChild(document.createElement('span'));
+  div.appendChild(document.createTextNode('b'));
+  div.appendChild(document.createElement('span'));
+  div.appendChild(document.createTextNode('c'));
+  return div.childElementCount === 2 && div.childNodes.length === 5;
+});
+
+var s='=== RESULTS: '+P+'/'+T+' passed, '+F+' failed ===';
+console.log(s);
+fails.forEach(function(f){console.log('FAIL: '+f);});
+document.getElementById('out').textContent=s+'\n'+fails.join('\n');
+</script></body></html>

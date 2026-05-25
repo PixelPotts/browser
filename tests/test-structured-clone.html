@@ -1,0 +1,51 @@
+<!DOCTYPE html><html><head><title>structuredClone</title></head>
+<body><div id="out"></div>
+<script>
+var P=0,F=0,T=0,fails=[];
+function t(n,fn){T++;try{if(fn()===true){P++;console.log('PASS: '+n);} else {F++;fails.push(n);console.log('FAIL: '+n);}}catch(e){F++;fails.push(n+': '+e.message);console.log('FAIL: '+n+': '+e.message);}}
+
+t('clone number', function(){
+  var c = structuredClone(42);
+  return c === 42;
+});
+
+t('clone string', function(){
+  var c = structuredClone('hello');
+  return c === 'hello';
+});
+
+t('clone boolean', function(){
+  var c = structuredClone(true);
+  return c === true;
+});
+
+t('clone null', function(){
+  var c = structuredClone(null);
+  return c === null;
+});
+
+t('deep clone object - mutation does not affect original', function(){
+  var orig = {a: 1, b: {c: 2}};
+  var c = structuredClone(orig);
+  c.b.c = 99;
+  return orig.b.c === 2 && c.b.c === 99;
+});
+
+t('deep clone array', function(){
+  var orig = [1, [2, 3], 4];
+  var c = structuredClone(orig);
+  c[1][0] = 99;
+  return orig[1][0] === 2 && c[1][0] === 99 && Array.isArray(c);
+});
+
+t('clone nested object', function(){
+  var orig = {x: {y: {z: 'deep'}}};
+  var c = structuredClone(orig);
+  return c.x.y.z === 'deep' && c.x !== orig.x && c.x.y !== orig.x.y;
+});
+
+var s='=== RESULTS: '+P+'/'+T+' passed, '+F+' failed ===';
+console.log(s);
+fails.forEach(function(f){console.log('FAIL: '+f);});
+document.getElementById('out').textContent=s+'\n'+fails.join('\n');
+</script></body></html>

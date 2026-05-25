@@ -1,0 +1,39 @@
+<!DOCTYPE html><html><head><title>Crypto API</title></head>
+<body><div id="out"></div>
+<script>
+var P=0,F=0,T=0,fails=[];
+function t(n,fn){T++;try{if(fn()===true){P++;console.log('PASS: '+n);} else {F++;fails.push(n);console.log('FAIL: '+n);}}catch(e){F++;fails.push(n+': '+e.message);console.log('FAIL: '+n+': '+e.message);}}
+
+t('crypto object exists', function(){
+  return typeof crypto === 'object' && crypto !== null;
+});
+
+t('randomUUID returns 36-char string', function(){
+  var uuid = crypto.randomUUID();
+  return typeof uuid === 'string' && uuid.length === 36;
+});
+
+t('randomUUID has version 4 at position 14', function(){
+  var uuid = crypto.randomUUID();
+  return uuid.charAt(14) === '4';
+});
+
+t('randomUUID returns unique values', function(){
+  var a = crypto.randomUUID();
+  var b = crypto.randomUUID();
+  return a !== b;
+});
+
+t('getRandomValues fills Uint8Array', function(){
+  var arr = new Uint8Array(32);
+  crypto.getRandomValues(arr);
+  var hasNonZero = false;
+  for(var i=0;i<arr.length;i++){if(arr[i]!==0){hasNonZero=true;break;}}
+  return hasNonZero;
+});
+
+var s='=== RESULTS: '+P+'/'+T+' passed, '+F+' failed ===';
+console.log(s);
+fails.forEach(function(f){console.log('FAIL: '+f);});
+document.getElementById('out').textContent=s+'\n'+fails.join('\n');
+</script></body></html>
