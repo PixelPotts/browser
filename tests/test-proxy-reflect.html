@@ -1,0 +1,40 @@
+<!DOCTYPE html><html><head><title>Test Proxy and Reflect</title></head>
+<body><div id="out"></div>
+<script>
+var P=0,F=0,T=0,fails=[];
+function t(n,fn){T++;try{if(fn()===true){P++;} else {F++;fails.push(n);}}catch(e){F++;fails.push(n+': '+e.message);}}
+
+t('Proxy get trap', function(){
+  var obj = { a: 1 };
+  var p = new Proxy(obj, {
+    get: function(target, prop){ return prop === 'b' ? 42 : target[prop]; }
+  });
+  return p.a === 1 && p.b === 42;
+});
+
+t('Proxy set trap', function(){
+  var obj = {};
+  var log = [];
+  var p = new Proxy(obj, {
+    set: function(target, prop, value){ log.push(prop); target[prop] = value; return true; }
+  });
+  p.x = 10;
+  return obj.x === 10 && log[0] === 'x';
+});
+
+t('Reflect.ownKeys', function(){
+  var obj = { a: 1, b: 2 };
+  var keys = Reflect.ownKeys(obj);
+  return Array.isArray(keys) && keys.indexOf('a') !== -1 && keys.indexOf('b') !== -1;
+});
+
+t('Reflect.has', function(){
+  var obj = { foo: 'bar' };
+  return Reflect.has(obj, 'foo') === true && Reflect.has(obj, 'baz') === false;
+});
+
+var s='=== RESULTS: '+P+'/'+T+' passed, '+F+' failed ===';
+console.log(s);
+fails.forEach(function(f){console.log('FAIL: '+f);});
+document.getElementById('out').textContent=s+'\n'+fails.join('\n');
+</script></body></html>

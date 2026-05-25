@@ -1,0 +1,39 @@
+<!DOCTYPE html><html><head><title>Test Location</title></head>
+<body><div id="out"></div>
+<script>
+var P=0,F=0,T=0,fails=[];
+function t(n,fn){T++;try{if(fn()===true){P++;} else {F++;fails.push(n);}}catch(e){F++;fails.push(n+': '+e.message);}}
+
+t('location.href is string', function(){
+  return typeof location.href === 'string' && location.href.length > 0;
+});
+
+t('location.protocol is string', function(){
+  return typeof location.protocol === 'string';
+});
+
+t('location.hostname is string', function(){
+  return typeof location.hostname === 'string';
+});
+
+t('location.pathname is string', function(){
+  return typeof location.pathname === 'string';
+});
+
+t('location.assign exists', function(){
+  return typeof location.assign === 'function';
+});
+
+t('location.replace exists', function(){
+  return typeof location.replace === 'function';
+});
+
+t('location.reload exists', function(){
+  return typeof location.reload === 'function';
+});
+
+var s='=== RESULTS: '+P+'/'+T+' passed, '+F+' failed ===';
+console.log(s);
+fails.forEach(function(f){console.log('FAIL: '+f);});
+document.getElementById('out').textContent=s+'\n'+fails.join('\n');
+</script></body></html>

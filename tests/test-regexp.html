@@ -1,0 +1,40 @@
+<!DOCTYPE html><html><head><title>Test RegExp</title></head>
+<body><div id="out"></div>
+<script>
+var P=0,F=0,T=0,fails=[];
+function t(n,fn){T++;try{if(fn()===true){P++;} else {F++;fails.push(n);}}catch(e){F++;fails.push(n+': '+e.message);}}
+
+t('RegExp test', function(){
+  return /hello/.test('hello world') === true && /xyz/.test('hello') === false;
+});
+
+t('RegExp exec with capture groups', function(){
+  var m = /(\d+)-(\d+)/.exec('date: 2024-05');
+  return m !== null && m[1] === '2024' && m[2] === '05';
+});
+
+t('RegExp global flag', function(){
+  var r = /a/g;
+  return r.global === true;
+});
+
+t('RegExp ignoreCase flag', function(){
+  var r = /hello/i;
+  return r.ignoreCase === true && r.test('HELLO') === true;
+});
+
+t('Named capture groups', function(){
+  var m = /(?<year>\d{4})-(?<month>\d{2})/.exec('2024-05');
+  return m !== null && m.groups.year === '2024' && m.groups.month === '05';
+});
+
+t('String.match with /g', function(){
+  var matches = 'aaa bbb aaa'.match(/aaa/g);
+  return Array.isArray(matches) && matches.length === 2;
+});
+
+var s='=== RESULTS: '+P+'/'+T+' passed, '+F+' failed ===';
+console.log(s);
+fails.forEach(function(f){console.log('FAIL: '+f);});
+document.getElementById('out').textContent=s+'\n'+fails.join('\n');
+</script></body></html>

@@ -1,0 +1,33 @@
+<!DOCTYPE html><html><head><title>Test Template Literals</title></head>
+<body><div id="out"></div>
+<script>
+var P=0,F=0,T=0,fails=[];
+function t(n,fn){T++;try{if(fn()===true){P++;} else {F++;fails.push(n);}}catch(e){F++;fails.push(n+': '+e.message);}}
+
+t('interpolation', function(){
+  var name = 'world';
+  var s = `hello ${name}`;
+  return s === 'hello world';
+});
+
+t('tagged template', function(){
+  function tag(strings, val){
+    return strings[0] + val.toUpperCase() + strings[1];
+  }
+  var x = 'test';
+  var result = tag`begin ${x} end`;
+  return result === 'begin TEST end';
+});
+
+t('multi-line template', function(){
+  var s = `line1
+line2
+line3`;
+  return s.indexOf('\n') !== -1 && s.split('\n').length === 3;
+});
+
+var s='=== RESULTS: '+P+'/'+T+' passed, '+F+' failed ===';
+console.log(s);
+fails.forEach(function(f){console.log('FAIL: '+f);});
+document.getElementById('out').textContent=s+'\n'+fails.join('\n');
+</script></body></html>

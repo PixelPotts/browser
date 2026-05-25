@@ -1,0 +1,59 @@
+<!DOCTYPE html><html><head><title>Test URL</title></head>
+<body><div id="out"></div>
+<script>
+var P=0,F=0,T=0,fails=[];
+function t(n,fn){T++;try{if(fn()===true){P++;} else {F++;fails.push(n);}}catch(e){F++;fails.push(n+': '+e.message);}}
+
+t('URL constructor parses hostname', function(){
+  var u = new URL('https://example.com/path?q=1');
+  return u.hostname === 'example.com';
+});
+
+t('URL constructor parses pathname', function(){
+  var u = new URL('https://example.com/path?q=1');
+  return u.pathname === '/path';
+});
+
+t('URL constructor parses protocol', function(){
+  var u = new URL('https://example.com/path');
+  return u.protocol === 'https:';
+});
+
+t('URL.searchParams', function(){
+  var u = new URL('https://example.com/?foo=bar');
+  return u.searchParams.get('foo') === 'bar';
+});
+
+t('URLSearchParams constructor', function(){
+  var sp = new URLSearchParams('a=1&b=2');
+  return sp.get('a') === '1' && sp.get('b') === '2';
+});
+
+t('URLSearchParams set', function(){
+  var sp = new URLSearchParams();
+  sp.set('x', '10');
+  return sp.get('x') === '10';
+});
+
+t('URLSearchParams has', function(){
+  var sp = new URLSearchParams('key=val');
+  return sp.has('key') === true && sp.has('nope') === false;
+});
+
+t('URLSearchParams delete', function(){
+  var sp = new URLSearchParams('a=1');
+  sp.delete('a');
+  return sp.has('a') === false;
+});
+
+t('URLSearchParams toString', function(){
+  var sp = new URLSearchParams();
+  sp.set('foo', 'bar');
+  return sp.toString() === 'foo=bar';
+});
+
+var s='=== RESULTS: '+P+'/'+T+' passed, '+F+' failed ===';
+console.log(s);
+fails.forEach(function(f){console.log('FAIL: '+f);});
+document.getElementById('out').textContent=s+'\n'+fails.join('\n');
+</script></body></html>

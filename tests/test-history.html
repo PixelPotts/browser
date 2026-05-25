@@ -1,0 +1,35 @@
+<!DOCTYPE html><html><head><title>Test History</title></head>
+<body><div id="out"></div>
+<script>
+var P=0,F=0,T=0,fails=[];
+function t(n,fn){T++;try{if(fn()===true){P++;} else {F++;fails.push(n);}}catch(e){F++;fails.push(n+': '+e.message);}}
+
+t('history.length is number', function(){
+  return typeof history.length === 'number';
+});
+
+t('history.pushState exists', function(){
+  return typeof history.pushState === 'function';
+});
+
+t('history.replaceState exists', function(){
+  return typeof history.replaceState === 'function';
+});
+
+t('history.back exists', function(){
+  return typeof history.back === 'function';
+});
+
+t('history.forward exists', function(){
+  return typeof history.forward === 'function';
+});
+
+t('history.go exists', function(){
+  return typeof history.go === 'function';
+});
+
+var s='=== RESULTS: '+P+'/'+T+' passed, '+F+' failed ===';
+console.log(s);
+fails.forEach(function(f){console.log('FAIL: '+f);});
+document.getElementById('out').textContent=s+'\n'+fails.join('\n');
+</script></body></html>

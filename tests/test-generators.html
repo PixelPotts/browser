@@ -1,0 +1,39 @@
+<!DOCTYPE html><html><head><title>Test Generators</title></head>
+<body><div id="out"></div>
+<script>
+var P=0,F=0,T=0,fails=[];
+function t(n,fn){T++;try{if(fn()===true){P++;} else {F++;fails.push(n);}}catch(e){F++;fails.push(n+': '+e.message);}}
+
+t('generator function yields values', function(){
+  function* gen(){ yield 1; yield 2; yield 3; }
+  var g = gen();
+  var a = g.next();
+  var b = g.next();
+  return a.value === 1 && b.value === 2;
+});
+
+t('generator next/done', function(){
+  function* gen(){ yield 'a'; }
+  var g = gen();
+  var first = g.next();
+  var second = g.next();
+  return first.done === false && first.value === 'a' && second.done === true;
+});
+
+t('Array.from generator', function(){
+  function* gen(){ yield 10; yield 20; yield 30; }
+  var arr = Array.from(gen());
+  return arr.length === 3 && arr[0] === 10 && arr[1] === 20 && arr[2] === 30;
+});
+
+t('async function returns Promise', function(){
+  async function af(){ return 42; }
+  var result = af();
+  return result instanceof Promise;
+});
+
+var s='=== RESULTS: '+P+'/'+T+' passed, '+F+' failed ===';
+console.log(s);
+fails.forEach(function(f){console.log('FAIL: '+f);});
+document.getElementById('out').textContent=s+'\n'+fails.join('\n');
+</script></body></html>

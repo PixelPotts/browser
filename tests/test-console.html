@@ -1,0 +1,39 @@
+<!DOCTYPE html><html><head><title>Test Console</title></head>
+<body><div id="out"></div>
+<script>
+var P=0,F=0,T=0,fails=[];
+function t(n,fn){T++;try{if(fn()===true){P++;} else {F++;fails.push(n);}}catch(e){F++;fails.push(n+': '+e.message);}}
+
+t('console.log exists', function(){
+  return typeof console.log === 'function';
+});
+
+t('console.warn exists', function(){
+  return typeof console.warn === 'function';
+});
+
+t('console.error exists', function(){
+  return typeof console.error === 'function';
+});
+
+t('console.info exists', function(){
+  return typeof console.info === 'function';
+});
+
+t('console.debug exists', function(){
+  return typeof console.debug === 'function';
+});
+
+t('console.table exists', function(){
+  return typeof console.table === 'function';
+});
+
+t('console.dir exists', function(){
+  return typeof console.dir === 'function';
+});
+
+var s='=== RESULTS: '+P+'/'+T+' passed, '+F+' failed ===';
+console.log(s);
+fails.forEach(function(f){console.log('FAIL: '+f);});
+document.getElementById('out').textContent=s+'\n'+fails.join('\n');
+</script></body></html>

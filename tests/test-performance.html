@@ -1,0 +1,24 @@
+<!DOCTYPE html><html><head><title>Test Performance</title></head>
+<body><div id="out"></div>
+<script>
+var P=0,F=0,T=0,fails=[];
+function t(n,fn){T++;try{if(fn()===true){P++;} else {F++;fails.push(n);}}catch(e){F++;fails.push(n+': '+e.message);}}
+
+t('performance.now() returns number >= 0', function(){
+  var n = performance.now();
+  return typeof n === 'number' && n >= 0;
+});
+
+t('performance.now() is monotonic (b >= a)', function(){
+  var a = performance.now();
+  var sum = 0;
+  for (var i = 0; i < 1000; i++) sum += i;
+  var b = performance.now();
+  return b >= a;
+});
+
+var s='=== RESULTS: '+P+'/'+T+' passed, '+F+' failed ===';
+console.log(s);
+fails.forEach(function(f){console.log('FAIL: '+f);});
+document.getElementById('out').textContent=s+'\n'+fails.join('\n');
+</script></body></html>

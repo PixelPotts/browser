@@ -1,0 +1,41 @@
+<!DOCTYPE html><html><head><title>Test JSON</title></head>
+<body><div id="out"></div>
+<script>
+var P=0,F=0,T=0,fails=[];
+function t(n,fn){T++;try{if(fn()===true){P++;} else {F++;fails.push(n);}}catch(e){F++;fails.push(n+': '+e.message);}}
+
+t('JSON.parse object', function(){
+  var obj = JSON.parse('{"a":1,"b":"hello"}');
+  return obj.a === 1 && obj.b === 'hello';
+});
+
+t('JSON.parse array', function(){
+  var arr = JSON.parse('[1,2,3]');
+  return Array.isArray(arr) && arr.length === 3 && arr[0] === 1;
+});
+
+t('JSON.stringify', function(){
+  var s = JSON.stringify({x: 10, y: 'test'});
+  var obj = JSON.parse(s);
+  return obj.x === 10 && obj.y === 'test';
+});
+
+t('JSON.stringify with replacer', function(){
+  var s = JSON.stringify({a: 1, b: 2, c: 3}, function(key, val){
+    if (key === 'b') return undefined;
+    return val;
+  });
+  var obj = JSON.parse(s);
+  return obj.a === 1 && obj.b === undefined && obj.c === 3;
+});
+
+t('JSON.stringify with indent', function(){
+  var s = JSON.stringify({a: 1}, null, 2);
+  return s.indexOf('\n') !== -1 && s.indexOf('  ') !== -1;
+});
+
+var s='=== RESULTS: '+P+'/'+T+' passed, '+F+' failed ===';
+console.log(s);
+fails.forEach(function(f){console.log('FAIL: '+f);});
+document.getElementById('out').textContent=s+'\n'+fails.join('\n');
+</script></body></html>

@@ -1,0 +1,67 @@
+<!DOCTYPE html><html><head><title>Test Events</title></head>
+<body><div id="out"></div>
+<script>
+var P=0,F=0,T=0,fails=[];
+function t(n,fn){T++;try{if(fn()===true){P++;} else {F++;fails.push(n);}}catch(e){F++;fails.push(n+': '+e.message);}}
+
+t('addEventListener/dispatchEvent fires', function(){
+  var fired = false;
+  var div = document.createElement('div');
+  div.addEventListener('click', function(){ fired = true; });
+  div.dispatchEvent(new Event('click'));
+  return fired === true;
+});
+
+t('CustomEvent with detail', function(){
+  var detail = null;
+  var div = document.createElement('div');
+  div.addEventListener('myevent', function(e){ detail = e.detail; });
+  div.dispatchEvent(new CustomEvent('myevent', { detail: { foo: 42 } }));
+  return detail !== null && detail.foo === 42;
+});
+
+t('Event constructor with bubbles/cancelable', function(){
+  var e = new Event('test', { bubbles: true, cancelable: true });
+  return e.bubbles === true && e.cancelable === true;
+});
+
+t('removeEventListener stops firing', function(){
+  var count = 0;
+  var div = document.createElement('div');
+  var handler = function(){ count++; };
+  div.addEventListener('click', handler);
+  div.dispatchEvent(new Event('click'));
+  div.removeEventListener('click', handler);
+  div.dispatchEvent(new Event('click'));
+  return count === 1;
+});
+
+t('event.preventDefault sets defaultPrevented', function(){
+  var prevented = false;
+  var div = document.createElement('div');
+  div.addEventListener('test', function(e){
+    e.preventDefault();
+    prevented = e.defaultPrevented;
+  });
+  div.dispatchEvent(new Event('test', { cancelable: true }));
+  return prevented === true;
+});
+
+t('stopPropagation prevents parent handler', function(){
+  var parentFired = false;
+  var parent = document.createElement('div');
+  var child = document.createElement('span');
+  parent.appendChild(child);
+  document.body.appendChild(parent);
+  parent.addEventListener('click', function(){ parentFired = true; });
+  child.addEventListener('click', function(e){ e.stopPropagation(); });
+  child.dispatchEvent(new Event('click', { bubbles: true }));
+  document.body.removeChild(parent);
+  return parentFired === false;
+});
+
+var s='=== RESULTS: '+P+'/'+T+' passed, '+F+' failed ===';
+console.log(s);
+fails.forEach(function(f){console.log('FAIL: '+f);});
+document.getElementById('out').textContent=s+'\n'+fails.join('\n');
+</script></body></html>

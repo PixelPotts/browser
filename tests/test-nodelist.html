@@ -1,0 +1,35 @@
+<!DOCTYPE html><html><head><title>Test NodeList</title></head>
+<body><div id="out"></div>
+<div class="item">A</div><div class="item">B</div><div class="item">C</div>
+<script>
+var P=0,F=0,T=0,fails=[];
+function t(n,fn){T++;try{if(fn()===true){P++;} else {F++;fails.push(n);}}catch(e){F++;fails.push(n+': '+e.message);}}
+
+t('querySelectorAll returns NodeList', function(){
+  var nl = document.querySelectorAll('.item');
+  return nl !== null && typeof nl.length === 'number';
+});
+
+t('NodeList.length', function(){
+  var nl = document.querySelectorAll('.item');
+  return nl.length === 3;
+});
+
+t('NodeList.forEach', function(){
+  var nl = document.querySelectorAll('.item');
+  var count = 0;
+  nl.forEach(function(){ count++; });
+  return count === 3;
+});
+
+t('NodeList.item(index)', function(){
+  var nl = document.querySelectorAll('.item');
+  var first = nl.item(0);
+  return first !== null && first.textContent === 'A';
+});
+
+var s='=== RESULTS: '+P+'/'+T+' passed, '+F+' failed ===';
+console.log(s);
+fails.forEach(function(f){console.log('FAIL: '+f);});
+document.getElementById('out').textContent=s+'\n'+fails.join('\n');
+</script></body></html>

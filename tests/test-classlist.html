@@ -1,0 +1,56 @@
+<!DOCTYPE html><html><head><title>Test ClassList</title></head>
+<body><div id="out"></div>
+<script>
+var P=0,F=0,T=0,fails=[];
+function t(n,fn){T++;try{if(fn()===true){P++;} else {F++;fails.push(n);}}catch(e){F++;fails.push(n+': '+e.message);}}
+
+t('classList.add', function(){
+  var div = document.createElement('div');
+  div.classList.add('foo');
+  return div.classList.contains('foo') === true;
+});
+
+t('classList.remove', function(){
+  var div = document.createElement('div');
+  div.classList.add('foo');
+  div.classList.remove('foo');
+  return div.classList.contains('foo') === false;
+});
+
+t('classList.toggle adds', function(){
+  var div = document.createElement('div');
+  var result = div.classList.toggle('bar');
+  return result === true && div.classList.contains('bar') === true;
+});
+
+t('classList.toggle removes', function(){
+  var div = document.createElement('div');
+  div.classList.add('bar');
+  var result = div.classList.toggle('bar');
+  return result === false && div.classList.contains('bar') === false;
+});
+
+t('classList.contains', function(){
+  var div = document.createElement('div');
+  div.classList.add('alpha');
+  return div.classList.contains('alpha') === true && div.classList.contains('beta') === false;
+});
+
+t('classList.replace(old, new)', function(){
+  var div = document.createElement('div');
+  div.classList.add('old');
+  div.classList.replace('old', 'new');
+  return div.classList.contains('old') === false && div.classList.contains('new') === true;
+});
+
+t('classList.add multiple classes', function(){
+  var div = document.createElement('div');
+  div.classList.add('a', 'b', 'c');
+  return div.classList.contains('a') && div.classList.contains('b') && div.classList.contains('c');
+});
+
+var s='=== RESULTS: '+P+'/'+T+' passed, '+F+' failed ===';
+console.log(s);
+fails.forEach(function(f){console.log('FAIL: '+f);});
+document.getElementById('out').textContent=s+'\n'+fails.join('\n');
+</script></body></html>

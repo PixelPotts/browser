@@ -1,0 +1,31 @@
+<!DOCTYPE html><html><head><title>Test Navigator</title></head>
+<body><div id="out"></div>
+<script>
+var P=0,F=0,T=0,fails=[];
+function t(n,fn){T++;try{if(fn()===true){P++;} else {F++;fails.push(n);}}catch(e){F++;fails.push(n+': '+e.message);}}
+
+t('navigator.userAgent is string', function(){
+  return typeof navigator.userAgent === 'string' && navigator.userAgent.length > 0;
+});
+
+t('navigator.language is string', function(){
+  return typeof navigator.language === 'string' && navigator.language.length > 0;
+});
+
+t('navigator.languages is array-like', function(){
+  return navigator.languages !== undefined && typeof navigator.languages.length === 'number';
+});
+
+t('navigator.platform is string', function(){
+  return typeof navigator.platform === 'string';
+});
+
+t('navigator.onLine is boolean', function(){
+  return typeof navigator.onLine === 'boolean';
+});
+
+var s='=== RESULTS: '+P+'/'+T+' passed, '+F+' failed ===';
+console.log(s);
+fails.forEach(function(f){console.log('FAIL: '+f);});
+document.getElementById('out').textContent=s+'\n'+fails.join('\n');
+</script></body></html>

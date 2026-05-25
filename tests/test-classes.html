@@ -1,0 +1,45 @@
+<!DOCTYPE html><html><head><title>Test Classes</title></head>
+<body><div id="out"></div>
+<script>
+var P=0,F=0,T=0,fails=[];
+function t(n,fn){T++;try{if(fn()===true){P++;} else {F++;fails.push(n);}}catch(e){F++;fails.push(n+': '+e.message);}}
+
+t('class declaration', function(){
+  class Animal {
+    constructor(name){ this.name = name; }
+    speak(){ return this.name + ' speaks'; }
+  }
+  var a = new Animal('Dog');
+  return a.name === 'Dog' && a.speak() === 'Dog speaks';
+});
+
+t('extends/instanceof', function(){
+  class Base { constructor(){ this.x = 1; } }
+  class Child extends Base { constructor(){ super(); this.y = 2; } }
+  var c = new Child();
+  return c instanceof Child && c instanceof Base && c.x === 1 && c.y === 2;
+});
+
+t('static methods', function(){
+  class Util {
+    static double(n){ return n * 2; }
+  }
+  return Util.double(5) === 10;
+});
+
+t('getters/setters', function(){
+  class Obj {
+    constructor(){ this._val = 0; }
+    get val(){ return this._val; }
+    set val(v){ this._val = v * 2; }
+  }
+  var o = new Obj();
+  o.val = 5;
+  return o.val === 10;
+});
+
+var s='=== RESULTS: '+P+'/'+T+' passed, '+F+' failed ===';
+console.log(s);
+fails.forEach(function(f){console.log('FAIL: '+f);});
+document.getElementById('out').textContent=s+'\n'+fails.join('\n');
+</script></body></html>

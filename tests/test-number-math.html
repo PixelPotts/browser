@@ -1,0 +1,51 @@
+<!DOCTYPE html><html><head><title>Test Number and Math</title></head>
+<body><div id="out"></div>
+<script>
+var P=0,F=0,T=0,fails=[];
+function t(n,fn){T++;try{if(fn()===true){P++;} else {F++;fails.push(n);}}catch(e){F++;fails.push(n+': '+e.message);}}
+
+t('Number.isFinite', function(){
+  return Number.isFinite(42) === true && Number.isFinite(Infinity) === false && Number.isFinite(NaN) === false;
+});
+
+t('Number.isNaN', function(){
+  return Number.isNaN(NaN) === true && Number.isNaN(42) === false && Number.isNaN('hello') === false;
+});
+
+t('Number.isInteger', function(){
+  return Number.isInteger(5) === true && Number.isInteger(5.5) === false;
+});
+
+t('Number.parseInt', function(){
+  return Number.parseInt('42') === 42 && Number.parseInt('0xFF', 16) === 255;
+});
+
+t('Number.parseFloat', function(){
+  return Number.parseFloat('3.14') === 3.14;
+});
+
+t('Math.trunc', function(){
+  return Math.trunc(4.9) === 4 && Math.trunc(-4.9) === -4;
+});
+
+t('Math.sign', function(){
+  return Math.sign(5) === 1 && Math.sign(-5) === -1 && Math.sign(0) === 0;
+});
+
+t('Math.cbrt', function(){
+  return Math.cbrt(27) === 3 && Math.cbrt(8) === 2;
+});
+
+t('Math.log2', function(){
+  return Math.log2(8) === 3 && Math.log2(1) === 0;
+});
+
+t('Math.hypot', function(){
+  return Math.hypot(3, 4) === 5;
+});
+
+var s='=== RESULTS: '+P+'/'+T+' passed, '+F+' failed ===';
+console.log(s);
+fails.forEach(function(f){console.log('FAIL: '+f);});
+document.getElementById('out').textContent=s+'\n'+fails.join('\n');
+</script></body></html>

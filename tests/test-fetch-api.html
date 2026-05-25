@@ -1,0 +1,32 @@
+<!DOCTYPE html><html><head><title>Test Fetch API</title></head>
+<body><div id="out"></div>
+<script>
+var P=0,F=0,T=0,fails=[];
+function t(n,fn){T++;try{if(fn()===true){P++;} else {F++;fails.push(n);}}catch(e){F++;fails.push(n+': '+e.message);}}
+
+t('fetch exists', function(){
+  return typeof fetch === 'function';
+});
+
+t('Response constructor', function(){
+  return typeof Response === 'function';
+});
+
+t('Request constructor', function(){
+  return typeof Request === 'function';
+});
+
+t('Headers constructor', function(){
+  return typeof Headers === 'function';
+});
+
+t('AbortController has signal and abort', function(){
+  var ac = new AbortController();
+  return ac.signal !== undefined && typeof ac.abort === 'function';
+});
+
+var s='=== RESULTS: '+P+'/'+T+' passed, '+F+' failed ===';
+console.log(s);
+fails.forEach(function(f){console.log('FAIL: '+f);});
+document.getElementById('out').textContent=s+'\n'+fails.join('\n');
+</script></body></html>

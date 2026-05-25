@@ -1,0 +1,36 @@
+<!DOCTYPE html><html><head><title>Test Date</title></head>
+<body><div id="out"></div>
+<script>
+var P=0,F=0,T=0,fails=[];
+function t(n,fn){T++;try{if(fn()===true){P++;} else {F++;fails.push(n);}}catch(e){F++;fails.push(n+': '+e.message);}}
+
+t('Date.now() returns number', function(){
+  return typeof Date.now() === 'number' && Date.now() > 0;
+});
+
+t('new Date() creates date', function(){
+  var d = new Date();
+  return d instanceof Date;
+});
+
+t('toISOString()', function(){
+  var d = new Date('2024-01-15T12:00:00Z');
+  var iso = d.toISOString();
+  return typeof iso === 'string' && iso.indexOf('2024') !== -1 && iso.indexOf('T') !== -1;
+});
+
+t('getTime()', function(){
+  var d = new Date('2024-01-15T12:00:00Z');
+  return typeof d.getTime() === 'number' && d.getTime() > 0;
+});
+
+t('Date.parse', function(){
+  var ms = Date.parse('2024-01-15T12:00:00Z');
+  return typeof ms === 'number' && ms > 0;
+});
+
+var s='=== RESULTS: '+P+'/'+T+' passed, '+F+' failed ===';
+console.log(s);
+fails.forEach(function(f){console.log('FAIL: '+f);});
+document.getElementById('out').textContent=s+'\n'+fails.join('\n');
+</script></body></html>

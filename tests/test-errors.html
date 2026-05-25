@@ -1,0 +1,45 @@
+<!DOCTYPE html><html><head><title>Test Errors</title></head>
+<body><div id="out"></div>
+<script>
+var P=0,F=0,T=0,fails=[];
+function t(n,fn){T++;try{if(fn()===true){P++;} else {F++;fails.push(n);}}catch(e){F++;fails.push(n+': '+e.message);}}
+
+t('try/catch/finally', function(){
+  var caught = false, finalized = false;
+  try { throw new Error('test'); }
+  catch(e){ caught = true; }
+  finally { finalized = true; }
+  return caught === true && finalized === true;
+});
+
+t('Error instanceof Error', function(){
+  return (new Error('x')) instanceof Error;
+});
+
+t('TypeError instanceof Error', function(){
+  return (new TypeError('x')) instanceof Error;
+});
+
+t('RangeError instanceof Error', function(){
+  return (new RangeError('x')) instanceof Error;
+});
+
+t('SyntaxError instanceof Error', function(){
+  return (new SyntaxError('x')) instanceof Error;
+});
+
+t('Error.message', function(){
+  var e = new Error('hello');
+  return e.message === 'hello';
+});
+
+t('Error.name', function(){
+  var e = new TypeError('x');
+  return e.name === 'TypeError';
+});
+
+var s='=== RESULTS: '+P+'/'+T+' passed, '+F+' failed ===';
+console.log(s);
+fails.forEach(function(f){console.log('FAIL: '+f);});
+document.getElementById('out').textContent=s+'\n'+fails.join('\n');
+</script></body></html>
