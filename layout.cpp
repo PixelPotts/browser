@@ -215,6 +215,26 @@ std::unique_ptr<LayoutBox> build_layout_tree(DOMNode* node, PangoContext* pango_
         }
     }
 
+    // Form controls: synthesize text box from value/placeholder for rendering
+    if (box->children.empty() && (tag == "input" || tag == "textarea")) {
+        std::string display_text;
+        auto val_it = node->attributes.find("value");
+        if (val_it != node->attributes.end() && !val_it->second.empty()) {
+            display_text = val_it->second;
+        } else {
+            auto ph_it = node->attributes.find("placeholder");
+            if (ph_it != node->attributes.end()) display_text = ph_it->second;
+        }
+        if (!display_text.empty()) {
+            auto text_box = std::make_unique<LayoutBox>();
+            text_box->type = LayoutBoxType::Text;
+            text_box->dom_node = node;
+            text_box->text = display_text;
+            text_box->parent = box.get();
+            box->children.push_back(std::move(text_box));
+        }
+    }
+
     // Block-in-inline: if an Inline element contains Block children, promote to Block
     if (!is_block_level(box->type) && !box->children.empty()) {
         for (auto& child : box->children) {

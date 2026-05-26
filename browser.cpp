@@ -3866,7 +3866,51 @@ static void apply_css_to_node(DOMNode* node, const std::vector<CSSRule>& css) {
         else node->after_content = content;
     }
 
-    // --- 9. Transfer BoxModel to node ---
+    // --- 9. Form control UA defaults (intrinsic sizing) ---
+    if (tname == "input") {
+        auto type_it = node->attributes.find("type");
+        std::string itype = type_it != node->attributes.end() ? tolower_s(type_it->second) : "text";
+        if (itype != "hidden") {
+            // Input elements are inline-block with intrinsic height
+            if (bm.display == BoxModel::Display::Inherit) bm.display = BoxModel::Display::InlineBlock;
+            if (bm.height < 0 && bm.min_height < 0) {
+                bm.min_height = node->fs_computed + 8;
+            }
+            if (bm.padding[0] == 0 && bm.padding[2] == 0) { bm.padding[0] = 2; bm.padding[2] = 2; }
+            if (bm.padding[1] == 0 && bm.padding[3] == 0) { bm.padding[1] = 4; bm.padding[3] = 4; }
+            if (bm.border_width[0] == 0 && bm.border_style.empty()) {
+                for (int j = 0; j < 4; ++j) bm.border_width[j] = 1;
+                bm.border_style = "solid";
+                bm.border_color = "#767676";
+            }
+            // Input: single line, clip overflow
+            if (node->white_space < 0) node->white_space = 1; // nowrap
+            if (node->overflow < 0) node->overflow = 1; // hidden
+        }
+    } else if (tname == "textarea") {
+        if (bm.display == BoxModel::Display::Inherit) bm.display = BoxModel::Display::InlineBlock;
+        if (bm.height < 0 && bm.min_height < 0 && bm.height_pct < 0) {
+            bm.min_height = node->fs_computed * 4 + 8;
+        }
+        if (bm.padding[0] == 0 && bm.padding[2] == 0) { bm.padding[0] = 2; bm.padding[2] = 2; }
+        if (bm.padding[1] == 0 && bm.padding[3] == 0) { bm.padding[1] = 4; bm.padding[3] = 4; }
+        if (bm.border_width[0] == 0 && bm.border_style.empty()) {
+            for (int j = 0; j < 4; ++j) bm.border_width[j] = 1;
+            bm.border_style = "solid";
+            bm.border_color = "#767676";
+        }
+        // Textarea: pre-wrap to show newlines
+        if (node->white_space < 0) node->white_space = 3; // pre-wrap
+    } else if (tname == "select") {
+        if (bm.display == BoxModel::Display::Inherit) bm.display = BoxModel::Display::InlineBlock;
+        if (bm.height < 0 && bm.min_height < 0) bm.min_height = node->fs_computed + 8;
+    } else if (tname == "button") {
+        if (bm.display == BoxModel::Display::Inherit) bm.display = BoxModel::Display::InlineBlock;
+        if (bm.padding[0] == 0 && bm.padding[2] == 0) { bm.padding[0] = 4; bm.padding[2] = 4; }
+        if (bm.padding[1] == 0 && bm.padding[3] == 0) { bm.padding[1] = 8; bm.padding[3] = 8; }
+    }
+
+    // --- 10. Transfer BoxModel to node ---
     for (int j = 0; j < 4; ++j) node->margin[j] = bm.margin[j];
     for (int j = 0; j < 4; ++j) node->padding[j] = bm.padding[j];
     node->width = bm.width;
