@@ -779,7 +779,11 @@ static std::vector<CSSRule> parse_css(const std::string& css) {
                     || !prop_val(decls,"max-height").empty()
                     || !prop_val(decls,"min-width").empty()
                     || !prop_val(decls,"min-height").empty()
-                    || !prop_val(decls,"object-fit").empty();
+                    || !prop_val(decls,"object-fit").empty()
+                    || !prop_val(decls,"flex-grow").empty()
+                    || !prop_val(decls,"flex-shrink").empty()
+                    || !prop_val(decls,"flex-basis").empty()
+                    || !prop_val(decls,"flex").empty();
         if (fw==-1 && fs_raw.empty() && lh_raw.empty() && !has_box) continue;
         // split comma-separated selectors
         size_t j=0;

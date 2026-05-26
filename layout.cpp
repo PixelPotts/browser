@@ -1307,6 +1307,17 @@ static void layout_flex(LayoutBox* box, float containing_width, float containing
     total_main += num_gaps * gap;
 
     float main_size = is_row ? content_width : (containing_height > 0 ? containing_height : content_width);
+    // For column flex: if this box has an explicit height, use that as main_size
+    if (!is_row && node) {
+        float explicit_h = resolve_height(node, containing_height);
+        if (explicit_h >= 0) {
+            if (node->box_sizing == 1) {
+                explicit_h -= box->padding.vertical() + box->border.vertical();
+                if (explicit_h < 0) explicit_h = 0;
+            }
+            main_size = explicit_h;
+        }
+    }
     float remaining = main_size - total_main;
 
     // Grow or shrink items
