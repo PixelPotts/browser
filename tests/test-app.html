@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>NoteSketch - Stage 8</title>
+<title>NoteSketch - Stage 9</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
@@ -201,19 +201,7 @@ body {
     <div class="sidebar-header">
       <input type="text" placeholder="Search notes...">
     </div>
-    <div class="note-list">
-      <div class="note-item active">
-        <div class="note-title">Welcome to NoteSketch</div>
-        <div class="note-preview">This is a demo app that exercises...</div>
-      </div>
-      <div class="note-item">
-        <div class="note-title">Shopping List</div>
-        <div class="note-preview">Milk, Eggs, Bread, Coffee...</div>
-      </div>
-      <div class="note-item">
-        <div class="note-title">Meeting Notes</div>
-        <div class="note-preview">Q3 Planning - Review roadmap...</div>
-      </div>
+    <div class="note-list" id="noteList">
     </div>
     <div class="sidebar-footer">
       <span class="btn btn-primary">+ New Note</span>
@@ -242,8 +230,44 @@ body {
 </div>
 
 <div class="status-bar">
-  <span>Stage 8: Styled buttons (primary, danger, default)</span>
+  <span>Stage 9: Dynamic JS note list</span>
 </div>
+
+<script>
+var notes = [
+  { title: "Welcome to NoteSketch", preview: "This is a demo app that exercises...", active: true },
+  { title: "Shopping List", preview: "Milk, Eggs, Bread, Coffee..." },
+  { title: "Meeting Notes", preview: "Q3 Planning - Review roadmap..." },
+  { title: "Ideas", preview: "Random thoughts and brainstorms..." },
+  { title: "Todo", preview: "Fix layout engine, add buttons..." }
+];
+
+function renderNotes() {
+  var list = document.getElementById("noteList");
+  list.innerHTML = "";
+  for (var i = 0; i < notes.length; i++) {
+    var item = document.createElement("div");
+    item.className = "note-item";
+    if (notes[i].active) {
+      item.className = "note-item active";
+    }
+
+    var title = document.createElement("div");
+    title.className = "note-title";
+    title.innerText = notes[i].title;
+    item.appendChild(title);
+
+    var preview = document.createElement("div");
+    preview.className = "note-preview";
+    preview.innerText = notes[i].preview;
+    item.appendChild(preview);
+
+    list.appendChild(item);
+  }
+}
+
+renderNotes();
+</script>
 
 </body>
 </html>
