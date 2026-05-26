@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>NoteSketch - Stage 2</title>
+<title>NoteSketch - Stage 5</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
@@ -34,13 +34,78 @@ body {
   width: 260px;
   background: #1e293b;
   border-right: 1px solid #334155;
-  padding: 16px;
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-header {
+  padding: 12px;
+  border-bottom: 1px solid #334155;
+  font-size: 14px;
+  color: #94a3b8;
+}
+
+.note-list {
+  flex: 1;
+  padding: 8px;
+}
+
+.note-item {
+  padding: 10px 12px;
+  border-radius: 6px;
+  margin-bottom: 4px;
+}
+.note-item.active {
+  background: #0ea5e9;
+  color: white;
+}
+.note-item .note-title {
+  font-size: 14px;
+  font-weight: 500;
+}
+.note-item .note-preview {
+  font-size: 12px;
+  color: #94a3b8;
+  margin-top: 2px;
+}
+.note-item.active .note-preview {
+  color: #e0f2fe;
+}
+
+.sidebar-footer {
+  padding: 12px;
+  border-top: 1px solid #334155;
+  font-size: 13px;
+  color: #94a3b8;
 }
 
 .main {
   flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.toolbar {
+  padding: 8px 16px;
+  background: #1e293b;
+  border-bottom: 1px solid #334155;
+  font-size: 14px;
+  color: #94a3b8;
+}
+
+.editor-area {
+  flex: 1;
   background: #131c2e;
   padding: 16px;
+  font-size: 14px;
+}
+
+.main-status {
+  padding: 4px 16px;
+  background: #1e293b;
+  border-top: 1px solid #334155;
+  font-size: 12px;
+  color: #94a3b8;
 }
 
 .status-bar {
@@ -59,15 +124,42 @@ body {
 
 <div class="app-body">
   <div class="sidebar">
-    <p>Sidebar (260px fixed)</p>
+    <div class="sidebar-header">
+      Search notes...
+    </div>
+    <div class="note-list">
+      <div class="note-item active">
+        <div class="note-title">Welcome to NoteSketch</div>
+        <div class="note-preview">This is a demo app that exercises...</div>
+      </div>
+      <div class="note-item">
+        <div class="note-title">Shopping List</div>
+        <div class="note-preview">Milk, Eggs, Bread, Coffee...</div>
+      </div>
+      <div class="note-item">
+        <div class="note-title">Meeting Notes</div>
+        <div class="note-preview">Q3 Planning - Review roadmap...</div>
+      </div>
+    </div>
+    <div class="sidebar-footer">
+      [+ New Note] [Export]
+    </div>
   </div>
   <div class="main">
-    <p>Main area (flex: 1)</p>
+    <div class="toolbar">
+      Note title... | [+ Tag] [Delete]
+    </div>
+    <div class="editor-area">
+      Editor content area (flex: 1, fills remaining space)
+    </div>
+    <div class="main-status">
+      0 words, 0 chars
+    </div>
   </div>
 </div>
 
 <div class="status-bar">
-  <span>Stage 2: Two-column flex layout</span>
+  <span>Stage 5: Main area flex-column (toolbar + editor + status)</span>
 </div>
 
 </body>
