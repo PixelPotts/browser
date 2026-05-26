@@ -2,9 +2,9 @@
 """Stage wireframe preview - shows what the browser SHOULD render."""
 import tkinter as tk
 
-def draw_stage_6():
+def draw_stage_7():
     root = tk.Tk()
-    root.title("EXPECTED: Stage 6 - Form Controls")
+    root.title("EXPECTED: Stage 7 - Editor + Canvas Side-by-Side")
     root.geometry("800x600")
     root.configure(bg="#222")
 
@@ -23,16 +23,15 @@ def draw_stage_6():
     # Status bar
     S_TOP = VB - 28
     c.create_rectangle(VL, S_TOP, VR, VB, fill="#0ea5e9", outline="")
-    c.create_text(VL+16, S_TOP+14, text="Stage 6: Form controls", anchor="w", fill="white", font=("sans-serif", 9))
+    c.create_text(VL+16, S_TOP+14, text="Stage 7: Editor + Canvas side-by-side", anchor="w", fill="white", font=("sans-serif", 9))
 
     BODY_TOP = H_BOTTOM
     BODY_BOTTOM = S_TOP
 
     # === Sidebar ===
-    SH_H = 44  # taller for input
+    SH_H = 44
     SF_H = 38
     c.create_rectangle(VL, BODY_TOP, SB_RIGHT, BODY_TOP + SH_H, fill="#1e293b", outline="#334155")
-    # Search input
     c.create_rectangle(VL+12, BODY_TOP+10, SB_RIGHT-12, BODY_TOP+SH_H-10, fill="#0f172a", outline="#475569")
     c.create_text(VL+24, BODY_TOP+SH_H//2, text="Search notes...", anchor="w", fill="#64748b", font=("sans-serif", 9))
 
@@ -60,7 +59,7 @@ def draw_stage_6():
     TB_H = 40
     MS_H = 28
 
-    # Toolbar with input
+    # Toolbar
     c.create_rectangle(SB_RIGHT, BODY_TOP, VR, BODY_TOP + TB_H, fill="#1e293b", outline="#334155")
     inp_left = SB_RIGHT + 16
     inp_right = VR - 130
@@ -68,23 +67,39 @@ def draw_stage_6():
     c.create_text(inp_left+12, BODY_TOP+TB_H//2, text="Note title...", anchor="w", fill="#64748b", font=("sans-serif", 9))
     c.create_text(inp_right+12, BODY_TOP+TB_H//2, text="[+ Tag] [Delete]", anchor="w", fill="#94a3b8", font=("sans-serif", 8))
 
-    # Editor area with textarea
+    # Editor area split: text-editor (left) + canvas-panel (right)
     ED_TOP = BODY_TOP + TB_H
     ED_BOTTOM = BODY_BOTTOM - MS_H
-    c.create_rectangle(SB_RIGHT, ED_TOP, VR, ED_BOTTOM, fill="#0f172a", outline="")
-    # Textarea box
+
+    # Canvas panel on right (320px scaled)
+    canvas_w = int(320 / 840 * (VR - SB_RIGHT))
+    CP_LEFT = VR - canvas_w
+
+    # Text editor (left side)
+    c.create_rectangle(SB_RIGHT, ED_TOP, CP_LEFT, ED_BOTTOM, fill="#0f172a", outline="")
+    # Textarea
     ta_m = 16
-    ta_h = min(200, ED_BOTTOM - ED_TOP - 2*ta_m)
-    c.create_rectangle(SB_RIGHT+ta_m, ED_TOP+ta_m, VR-ta_m, ED_TOP+ta_m+ta_h, fill="#1e293b", outline="#475569")
+    c.create_rectangle(SB_RIGHT+ta_m, ED_TOP+ta_m, CP_LEFT-ta_m, ED_BOTTOM-ta_m, fill="#1e293b", outline="#475569")
     c.create_text(SB_RIGHT+ta_m+12, ED_TOP+ta_m+14, text="Start typing your note...", anchor="w", fill="#64748b", font=("sans-serif", 9))
+
+    # Canvas panel (right side)
+    c.create_rectangle(CP_LEFT, ED_TOP, VR, ED_BOTTOM, fill="#1e293b", outline="")
+    c.create_line(CP_LEFT, ED_TOP, CP_LEFT, ED_BOTTOM, fill="#334155", width=1)
+    # Label
+    c.create_text(CP_LEFT+16, ED_TOP+16, text="Sketch Pad", anchor="w", fill="#94a3b8", font=("sans-serif", 9))
+    # Canvas element
+    cv_top = ED_TOP + 36
+    cv_h = min(200, ED_BOTTOM - cv_top - 16)
+    c.create_rectangle(CP_LEFT+16, cv_top, VR-16, cv_top+cv_h, fill="#0f172a", outline="#475569")
+    c.create_text((CP_LEFT+16+VR-16)//2, cv_top+cv_h//2, text="<canvas>", fill="#475569", font=("sans-serif", 10))
 
     # Main status
     c.create_rectangle(SB_RIGHT, BODY_BOTTOM - MS_H, VR, BODY_BOTTOM, fill="#1e293b", outline="#334155")
     c.create_text(SB_RIGHT+16, BODY_BOTTOM - MS_H//2, text="0 words, 0 chars", anchor="w", fill="#94a3b8", font=("sans-serif", 8))
 
-    c.create_text(400, 595, text="NEW: Search input in sidebar header, title input in toolbar, textarea in editor", fill="#aaa", font=("sans-serif", 8))
+    c.create_text(400, 595, text="NEW: Editor area split into text-editor (flex:1) + canvas-panel (320px) with <canvas>", fill="#aaa", font=("sans-serif", 8))
 
     root.mainloop()
 
 if __name__ == "__main__":
-    draw_stage_6()
+    draw_stage_7()

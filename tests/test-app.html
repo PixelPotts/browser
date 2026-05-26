@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>NoteSketch - Stage 6</title>
+<title>NoteSketch - Stage 7</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
@@ -112,17 +112,41 @@ body {
 
 .editor-area {
   flex: 1;
+  display: flex;
+}
+.text-editor {
+  flex: 1;
   padding: 16px;
 }
-.editor-area textarea {
+.text-editor textarea {
   width: 100%;
-  height: 300px;
+  height: 100%;
   background: #1e293b;
   border: 1px solid #475569;
   border-radius: 6px;
   color: #e2e8f0;
   font-size: 14px;
   padding: 12px;
+}
+.canvas-panel {
+  width: 320px;
+  background: #1e293b;
+  border-left: 1px solid #334155;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+}
+.canvas-panel canvas {
+  width: 100%;
+  height: 200px;
+  background: #0f172a;
+  border: 1px solid #475569;
+  border-radius: 6px;
+}
+.canvas-label {
+  font-size: 12px;
+  color: #94a3b8;
+  margin-bottom: 8px;
 }
 
 .main-status {
@@ -176,7 +200,13 @@ body {
       <span style="font-size: 13px; color: #94a3b8;">[+ Tag] [Delete]</span>
     </div>
     <div class="editor-area">
-      <textarea placeholder="Start typing your note..."></textarea>
+      <div class="text-editor">
+        <textarea placeholder="Start typing your note..."></textarea>
+      </div>
+      <div class="canvas-panel">
+        <div class="canvas-label">Sketch Pad</div>
+        <canvas width="288" height="200"></canvas>
+      </div>
     </div>
     <div class="main-status">
       0 words, 0 chars
@@ -185,7 +215,7 @@ body {
 </div>
 
 <div class="status-bar">
-  <span>Stage 6: Form controls (input + textarea)</span>
+  <span>Stage 7: Editor + Canvas side-by-side</span>
 </div>
 
 </body>
