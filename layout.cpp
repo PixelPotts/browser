@@ -178,6 +178,15 @@ std::unique_ptr<LayoutBox> build_layout_tree(DOMNode* node, PangoContext* pango_
     box->dom_node = node;
     copy_style(box.get(), node);
 
+    // Debug: trace form controls
+    if (node->tag_name == "input" || node->tag_name == "textarea") {
+        fprintf(stderr, "[FORM-DBG] tag=%s type=%d bg='%s' border_w=[%.0f,%.0f,%.0f,%.0f] w=%.0f h=%.0f min_h=%.0f display=%d w_pct=%.0f h_pct=%.0f box_sizing=%d\n",
+            node->tag_name.c_str(), (int)dtype, box->bg_color.c_str(),
+            box->border.top, box->border.right, box->border.bottom, box->border.left,
+            (float)node->width, (float)node->height, (float)node->min_height, (int)node->display,
+            (float)node->width_pct, (float)node->height_pct, node->box_sizing);
+    }
+
     if (dtype == LayoutBoxType::Text) {
         box->text = node->text_content;
         return box;
@@ -808,14 +817,14 @@ static void layout_block(LayoutBox* box, float containing_width, float containin
             all_inline = false;
             break;
         }
-        if (child->type == LayoutBoxType::Replaced)
+        if (child->type == LayoutBoxType::Replaced || child->type == LayoutBoxType::InlineBlock)
             has_replaced = true;
     }
 
     if (all_inline && !box->children.empty()) {
         if (has_replaced) {
-            // Mixed inline + replaced: wrap consecutive inline runs in anonymous blocks
-            // so the BFC can stack them vertically alongside replaced elements
+            // Mixed inline + replaced/inline-block: wrap consecutive inline runs in anonymous blocks
+            // so the BFC can stack them vertically alongside replaced/inline-block elements
             std::vector<std::unique_ptr<LayoutBox>> new_children;
             std::vector<std::unique_ptr<LayoutBox>> inline_run;
 
@@ -842,7 +851,7 @@ static void layout_block(LayoutBox* box, float containing_width, float containin
             };
 
             for (auto& child : box->children) {
-                if (child->type == LayoutBoxType::Replaced) {
+                if (child->type == LayoutBoxType::Replaced || child->type == LayoutBoxType::InlineBlock) {
                     flush_inline();
                     child->parent = box;
                     new_children.push_back(std::move(child));
@@ -860,6 +869,20 @@ static void layout_block(LayoutBox* box, float containing_width, float containin
         if (all_inline) {
             // Pure inline formatting context (no replaced elements)
             layout_inline(box, content_width, pango_ctx);
+
+            // After inline layout, still apply explicit height/min-height/max-height
+            float content_height = resolve_height(node, containing_height);
+            if (content_height >= 0) {
+                if (node && node->box_sizing == 1) {
+                    content_height -= box->padding.vertical() + box->border.vertical();
+                    if (content_height < 0) content_height = 0;
+                }
+                content_height = clamp_size(content_height, node, false);
+                box->content_rect.h = content_height;
+            } else {
+                // Apply min-height / max-height clamp even when height is auto
+                box->content_rect.h = clamp_size(box->content_rect.h, node, false);
+            }
         }
     }
 
@@ -1298,6 +1321,14 @@ static void layout_flex(LayoutBox* box, float containing_width, float containing
             fi.outer_main = base + child->margin.vertical() + child->padding.vertical() + child->border.vertical();
         }
         flex_items.push_back(fi);
+        // Debug: trace flex items in toolbar/sidebar-header
+        if (node && (node->hasClass("toolbar") || node->hasClass("sidebar-header"))) {
+            fprintf(stderr, "[FLEX-FORM] parent=%s child_tag=%s child_type=%d base=%.1f grow=%.1f outer=%.1f w=%.0f h=%.0f\n",
+                node->tag_name.c_str(),
+                child->dom_node ? child->dom_node->tag_name.c_str() : "?",
+                (int)child->type, fi.base_size, fi.flex_grow, fi.outer_main,
+                child->content_rect.w, child->content_rect.h);
+        }
     }
 
     // Phase 2: Calculate total base main size and distribute space

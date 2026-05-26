@@ -4062,6 +4062,25 @@ static void layout_and_paint(TabState* tab) {
             tab->layout_root->content_rect.x, tab->layout_root->content_rect.y,
             tab->layout_root->content_rect.w, tab->layout_root->content_rect.h);
 
+    // Debug: dump form control final positions
+    {
+        std::function<void(LayoutBox*, float, float)> dump_forms = [&](LayoutBox* b, float ox, float oy) {
+            if (!b) return;
+            float cx = ox + b->content_rect.x;
+            float cy = oy + b->content_rect.y;
+            if (b->dom_node && (b->dom_node->tag_name == "input" || b->dom_node->tag_name == "textarea")) {
+                auto bb = b->border_box();
+                fprintf(stderr, "[FORM-LAYOUT] tag=%s content=(%.0f,%.0f,%.0f,%.0f) abs_pos=(%.0f,%.0f) bg='%s' children=%zu type=%d\n",
+                    b->dom_node->tag_name.c_str(),
+                    b->content_rect.x, b->content_rect.y, b->content_rect.w, b->content_rect.h,
+                    cx, cy, b->bg_color.c_str(), b->children.size(), (int)b->type);
+            }
+            for (auto& c : b->children)
+                dump_forms(c.get(), cx - b->scroll_x, cy - b->scroll_y);
+        };
+        dump_forms(tab->layout_root.get(), 0, 0);
+    }
+
     // Connect canvas/img surfaces
     connect_replaced_surfaces(tab->layout_root.get(), tab);
 

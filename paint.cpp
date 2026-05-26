@@ -229,6 +229,14 @@ static void paint_box(LayoutBox* box, DisplayList& dl, float offset_x, float off
     float cx = offset_x + box->content_rect.x;
     float cy = offset_y + box->content_rect.y;
 
+    // Debug: trace form control painting
+    if (node && (node->tag_name == "input" || node->tag_name == "textarea") && box->type != LayoutBoxType::Text) {
+        Rect bb = box->border_box();
+        fprintf(stderr, "[PAINT-FORM] tag=%s bg='%s' border_box=(%.0f,%.0f,%.0f,%.0f) cx=%.0f cy=%.0f type=%d\n",
+            node->tag_name.c_str(), box->bg_color.c_str(),
+            bb.x + offset_x, bb.y + offset_y, bb.w, bb.h, cx, cy, (int)box->type);
+    }
+
     // Background
     std::string bg = box->bg_color;
     if (!bg.empty() && bg != "transparent") {
