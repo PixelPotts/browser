@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>NoteSketch - Stage 1</title>
+<title>NoteSketch - Stage 2</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
@@ -13,12 +13,6 @@ body {
   flex-direction: column;
 }
 
-.app-body {
-  flex-grow: 1;
-  flex-shrink: 1;
-  flex-basis: 0;
-}
-
 .app-header {
   background: #1e293b;
   padding: 12px 24px;
@@ -27,6 +21,26 @@ body {
 .app-header h1 {
   font-size: 20px;
   color: #38bdf8;
+}
+
+.app-body {
+  flex-grow: 1;
+  flex-shrink: 1;
+  flex-basis: 0;
+  display: flex;
+}
+
+.sidebar {
+  width: 260px;
+  background: #1e293b;
+  border-right: 1px solid #334155;
+  padding: 16px;
+}
+
+.main {
+  flex: 1;
+  background: #131c2e;
+  padding: 16px;
 }
 
 .status-bar {
@@ -44,11 +58,16 @@ body {
 </div>
 
 <div class="app-body">
-  <p style="padding: 24px; font-size: 16px;">Stage 1: Basic structure with dark theme. This tests block layout, background-color, color, font-size, and padding.</p>
+  <div class="sidebar">
+    <p>Sidebar (260px fixed)</p>
+  </div>
+  <div class="main">
+    <p>Main area (flex: 1)</p>
+  </div>
 </div>
 
 <div class="status-bar">
-  <span>Ready</span>
+  <span>Stage 2: Two-column flex layout</span>
 </div>
 
 </body>
