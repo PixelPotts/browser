@@ -1009,6 +1009,19 @@ static void layout_block(LayoutBox* box, float containing_width, float containin
         box->content_rect.h = clamp_size(box->content_rect.h, node, false);
     }
 
+    // Resolve height for empty blocks (no children hit neither inline nor BFC path)
+    if (box->children.empty()) {
+        float content_height = resolve_height(node, child_containing_height);
+        if (content_height >= 0) {
+            if (node && node->box_sizing == 1) {
+                content_height -= box->padding.vertical() + box->border.vertical();
+                if (content_height < 0) content_height = 0;
+            }
+            box->content_rect.h = content_height;
+        }
+        box->content_rect.h = clamp_size(box->content_rect.h, node, false);
+    }
+
     // Store scroll dimensions
     box->scroll_width = box->content_rect.w;
     box->scroll_height = box->content_rect.h;
