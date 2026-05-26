@@ -239,6 +239,42 @@ static JSValue js_noop_setter(JSContext* ctx, JSValueConst this_val, int argc, J
     return JS_UNDEFINED;
 }
 
+// element.style = 'css text' setter — treats string as cssText assignment
+static JSValue js_element_set_style(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_UNDEFINED;
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node) return JS_UNDEFINED;
+    const char* val = JS_ToCString(ctx, argv[0]);
+    if (!val) return JS_UNDEFINED;
+    std::string css(val);
+    JS_FreeCString(ctx, val);
+    // Parse "prop: val; prop2: val2"
+    node->style_props.clear();
+    size_t pos = 0;
+    while (pos < css.size()) {
+        size_t semi = css.find(';', pos);
+        if (semi == std::string::npos) semi = css.size();
+        std::string decl = css.substr(pos, semi - pos);
+        size_t colon = decl.find(':');
+        if (colon != std::string::npos) {
+            std::string k = decl.substr(0, colon);
+            std::string v = decl.substr(colon + 1);
+            while (!k.empty() && k[0] == ' ') k.erase(0, 1);
+            while (!k.empty() && k.back() == ' ') k.pop_back();
+            while (!v.empty() && v[0] == ' ') v.erase(0, 1);
+            while (!v.empty() && v.back() == ' ') v.pop_back();
+            if (!k.empty() && !v.empty())
+                node->style_props[k] = v;
+        }
+        pos = semi + 1;
+    }
+    // Also update inline_style_raw for restyle to pick up
+    node->inline_style_raw = css;
+    node->markDirty();
+    if (g_js_engine) g_js_engine->scheduleRerender();
+    return JS_UNDEFINED;
+}
+
 static JSValue js_element_set_id(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     DOMNode* node = js_get_node(ctx, this_val);
     if (!node || argc < 1) return JS_UNDEFINED;
@@ -3113,7 +3149,7 @@ void js_bindings_init(JSEngine* engine) {
     JS_DefinePropertyGetSet(ctx, elem_proto,
         JS_NewAtom(ctx, "style"),
         JS_NewCFunction(ctx, (JSCFunction*)js_element_get_style, "get style", 0),
-        JS_NewCFunction(ctx, js_noop_setter, "set style", 1), JS_PROP_CONFIGURABLE);
+        JS_NewCFunction(ctx, (JSCFunction*)js_element_set_style, "set style", 1), JS_PROP_CONFIGURABLE);
     JS_DefinePropertyGetSet(ctx, elem_proto,
         JS_NewAtom(ctx, "classList"),
         JS_NewCFunction(ctx, (JSCFunction*)js_element_get_classList, "get classList", 0),

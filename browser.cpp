@@ -3674,7 +3674,16 @@ static void apply_css_to_node(DOMNode* node, const std::vector<CSSRule>& css) {
     if (tname == "mark") bm.bg_color = "yellow";
 
     // --- 6. Apply inline styles (highest specificity) ---
-    const std::string& ist = node->inline_style_raw;
+    // Merge JS-set style_props into inline_style_raw so they participate in restyle
+    std::string merged_ist = node->inline_style_raw;
+    if (!node->style_props.empty()) {
+        for (auto& kv : node->style_props) {
+            // style_props override inline_style_raw (JS sets have highest priority)
+            if (!merged_ist.empty() && merged_ist.back() != ';') merged_ist += ';';
+            merged_ist += kv.first + ':' + kv.second;
+        }
+    }
+    const std::string& ist = merged_ist;
     if (!ist.empty()) {
         { int v = fw_value(prop_val(ist, "font-weight")); if (v != -1) node->fw_computed = v; }
         { std::string fs = prop_val(ist, "font-style");
@@ -4047,8 +4056,6 @@ static void layout_and_paint(TabState* tab) {
     }
 
     // Perform layout
-    fprintf(stderr, "[LAYOUT-DBG] viewport_width=%.1f viewport_height=%.1f g_viewport_h=%.1f\n",
-            tab->viewport_width, tab->viewport_height, g_viewport_h);
     perform_layout(tab->layout_root.get(), tab->viewport_width, tab->viewport_height, tab->pango_ctx);
 
     fprintf(stderr, "[LAYOUT] Layout done: content_rect=(%.0f, %.0f, %.0f, %.0f)\n",
