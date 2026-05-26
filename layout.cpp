@@ -1254,6 +1254,13 @@ static void layout_flex(LayoutBox* box, float containing_width, float containing
         }
     }
 
+    // Blockify inline children (CSS spec: flex items are blockified)
+    for (auto& child : box->children) {
+        if (child->type == LayoutBoxType::Inline || child->type == LayoutBoxType::Text) {
+            child->type = LayoutBoxType::Block;
+        }
+    }
+
     // Determine flex direction
     int dir = node ? node->flex_direction : 0;
     bool is_row = (dir == 0 || dir == 2); // row or row-reverse
