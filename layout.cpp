@@ -920,6 +920,10 @@ static void layout_block(LayoutBox* box, float containing_width, float containin
 
         for (size_t ci = 0; ci < box->children.size(); ++ci) {
             auto& child = box->children[ci];
+
+            // Skip absolute/fixed positioned children (laid out separately)
+            if (child->position == 2 || child->position == 3) continue;
+
             layout_box(child.get(), content_width, child_containing_height, pango_ctx);
 
             float top_margin = child->margin.top;
@@ -1313,6 +1317,9 @@ static void layout_flex(LayoutBox* box, float containing_width, float containing
     std::vector<FlexItem> flex_items;
 
     for (auto& child : box->children) {
+        // Skip absolute/fixed positioned children in flex layout
+        if (child->position == 2 || child->position == 3) continue;
+
         FlexItem fi;
         fi.box = child.get();
         fi.flex_grow = child->dom_node ? child->dom_node->flex_grow : 0.0f;
@@ -1568,6 +1575,100 @@ static void layout_flex(LayoutBox* box, float containing_width, float containing
     box->scroll_height = box->content_rect.h;
 }
 
+// ---- Layout absolutely positioned children ----
+
+static void layout_absolute_children(LayoutBox* box, float viewport_width, float viewport_height,
+                                      PangoContext* pango_ctx) {
+    if (!box) return;
+
+    for (auto& child : box->children) {
+        if (child->position == 2 || child->position == 3) {
+            // Determine containing block
+            float cb_w, cb_h, cb_x, cb_y;
+            if (child->position == 3) {
+                // Fixed: containing block is viewport
+                cb_w = viewport_width;
+                cb_h = viewport_height;
+                cb_x = 0;
+                cb_y = 0;
+            } else {
+                // Absolute: containing block is nearest positioned ancestor's padding box
+                cb_w = box->content_rect.w + box->padding.horizontal();
+                cb_h = box->content_rect.h + box->padding.vertical();
+                cb_x = box->content_rect.x - box->padding.left;
+                cb_y = box->content_rect.y - box->padding.top;
+            }
+
+            // Resolve width
+            DOMNode* node = child->dom_node;
+            float w = resolve_width(node, cb_w);
+            if (w >= 0 && node && node->box_sizing == 1) {
+                w -= child->padding.horizontal() + child->border.horizontal();
+                if (w < 0) w = 0;
+            }
+            if (w < 0) {
+                // Both left+right set => derive width
+                if (child->pos_left != INT_MIN && child->pos_right != INT_MIN) {
+                    w = cb_w - child->pos_left - child->pos_right
+                        - child->margin.horizontal() - child->padding.horizontal()
+                        - child->border.horizontal();
+                    if (w < 0) w = 0;
+                } else {
+                    // Shrink-to-fit: use containing width
+                    w = cb_w - child->margin.horizontal() - child->padding.horizontal()
+                        - child->border.horizontal();
+                    if (w < 0) w = 0;
+                }
+            }
+            child->content_rect.w = w;
+
+            // Layout the child's contents
+            layout_box(child.get(), w, cb_h, pango_ctx);
+
+            // Resolve height after layout (may have been set by content)
+            float h = resolve_height(node, cb_h);
+            if (h >= 0) {
+                if (node && node->box_sizing == 1) {
+                    h -= child->padding.vertical() + child->border.vertical();
+                    if (h < 0) h = 0;
+                }
+                child->content_rect.h = h;
+            }
+
+            // Position horizontally
+            if (child->pos_left != INT_MIN) {
+                child->content_rect.x = cb_x + child->pos_left + child->margin.left
+                    + child->border.left + child->padding.left;
+            } else if (child->pos_right != INT_MIN) {
+                float outer_w = child->content_rect.w + child->padding.horizontal()
+                                + child->border.horizontal() + child->margin.right;
+                child->content_rect.x = cb_x + cb_w - child->pos_right - outer_w
+                    + child->margin.left + child->border.left + child->padding.left;
+            } else {
+                child->content_rect.x = cb_x + child->margin.left + child->border.left
+                    + child->padding.left;
+            }
+
+            // Position vertically
+            if (child->pos_top != INT_MIN) {
+                child->content_rect.y = cb_y + child->pos_top + child->margin.top
+                    + child->border.top + child->padding.top;
+            } else if (child->pos_bottom != INT_MIN) {
+                float outer_h = child->content_rect.h + child->padding.vertical()
+                                + child->border.vertical() + child->margin.bottom;
+                child->content_rect.y = cb_y + cb_h - child->pos_bottom - outer_h
+                    + child->margin.top + child->border.top + child->padding.top;
+            } else {
+                child->content_rect.y = cb_y + child->margin.top + child->border.top
+                    + child->padding.top;
+            }
+        }
+
+        // Recurse into all children to find nested absolute elements
+        layout_absolute_children(child.get(), viewport_width, viewport_height, pango_ctx);
+    }
+}
+
 // ---- Apply position: relative offsets (visual shift, element keeps its flow space) ----
 
 static void apply_relative_offsets(LayoutBox* box) {
@@ -1602,6 +1703,9 @@ void perform_layout(LayoutBox* root, float viewport_width, float viewport_height
     // Re-set root position after margin:auto may have updated margins
     root->content_rect.x = root->margin.left + root->padding.left + root->border.left;
     root->content_rect.y = root->margin.top + root->padding.top + root->border.top;
+
+    // Layout absolutely/fixed positioned elements
+    layout_absolute_children(root, viewport_width, viewport_height, pango_ctx);
 
     // Apply position: relative offsets (visual shift only)
     apply_relative_offsets(root);

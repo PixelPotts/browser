@@ -12,6 +12,32 @@ h2 { color: #333; margin-top: 30px; }
 .rel-normal { background: #3498db; }
 .rel-shifted { position: relative; top: 10px; left: 20px; background: #e74c3c; }
 .rel-after { background: #2ecc71; }
+
+/* Feature 2: position: absolute */
+.abs-container {
+    position: relative;
+    background: #ecf0f1;
+    height: 120px;
+    border: 2px solid #95a5a6;
+}
+.abs-badge {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    background: #e74c3c;
+    color: white;
+    padding: 5px 10px;
+    border-radius: 4px;
+}
+.abs-bottom-left {
+    position: absolute;
+    bottom: 10px;
+    left: 10px;
+    background: #2ecc71;
+    color: white;
+    padding: 5px 10px;
+    border-radius: 4px;
+}
 </style>
 </head>
 <body>
@@ -23,6 +49,16 @@ h2 { color: #333; margin-top: 30px; }
     <div class="box rel-normal">Normal (blue)</div>
     <div class="box rel-shifted">Shifted (red)</div>
     <div class="box rel-after">After (green)</div>
+</div>
+
+<h2>Feature 2: position: absolute</h2>
+<div class="section">
+    <p>Red badge top-right, green label bottom-left of the gray container:</p>
+    <div class="abs-container">
+        <span class="abs-badge">NEW</span>
+        <span class="abs-bottom-left">Bottom Left</span>
+        <p style="padding: 10px;">Container content</p>
+    </div>
 </div>
 
 </body>
