@@ -1366,7 +1366,10 @@ static void layout_flex(LayoutBox* box, float containing_width, float containing
             // Ensure content_rect.w matches resolved size (layout_box may change it)
             child->content_rect.w = fi.base_size;
         } else {
-            layout_box(child.get(), content_width, containing_height, pango_ctx);
+            // Pass the resolved main size as containing_height so the child
+            // (e.g. a nested flex row) can stretch its own children correctly
+            float child_h = fi.base_size + child->padding.vertical() + child->border.vertical();
+            layout_box(child.get(), content_width, child_h, pango_ctx);
             child->content_rect.h = fi.base_size;
         }
     }
@@ -1437,6 +1440,12 @@ static void layout_flex(LayoutBox* box, float containing_width, float containing
             if (content_height < 0) content_height = 0;
         }
         box->content_rect.h = content_height;
+    } else if (is_row && containing_height > 0) {
+        // For row flex with no explicit height, use containing_height so children
+        // can stretch to fill (e.g. nested flex row inside a column flex parent)
+        float ch = containing_height - box->padding.vertical() - box->border.vertical();
+        if (ch > max_cross) box->content_rect.h = ch;
+        else box->content_rect.h = max_cross;
     } else {
         box->content_rect.h = is_row ? max_cross : cursor;
     }
