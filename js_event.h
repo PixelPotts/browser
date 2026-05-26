@@ -16,7 +16,8 @@ void js_event_init(JSEngine* engine);
 // Dispatch a JS event on a DOM node with bubbling
 void js_dispatch_event(JSEngine* engine, uint32_t node_id,
                         const std::string& type,
-                        int clientX = 0, int clientY = 0);
+                        int clientX = 0, int clientY = 0,
+                        int offsetX = 0, int offsetY = 0);
 
 // Dispatch a keyboard event
 void js_dispatch_key_event(JSEngine* engine, uint32_t node_id,

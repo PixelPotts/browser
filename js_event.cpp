@@ -21,6 +21,7 @@ struct EventOpaque {
     uint32_t target_id;
     uint32_t current_target_id; // node currently handling event
     int clientX, clientY;
+    int offsetX, offsetY;  // element-relative coordinates
     bool defaultPrevented;
     bool propagationStopped;
     bool bubbles;
@@ -72,6 +73,16 @@ static JSValue js_event_get_clientX(JSContext* ctx, JSValueConst this_val) {
 static JSValue js_event_get_clientY(JSContext* ctx, JSValueConst this_val) {
     auto* op = (EventOpaque*)JS_GetOpaque(this_val, js_event_class_id);
     return op ? JS_NewInt32(ctx, op->clientY) : JS_NewInt32(ctx, 0);
+}
+
+static JSValue js_event_get_offsetX(JSContext* ctx, JSValueConst this_val) {
+    auto* op = (EventOpaque*)JS_GetOpaque(this_val, js_event_class_id);
+    return op ? JS_NewInt32(ctx, op->offsetX) : JS_NewInt32(ctx, 0);
+}
+
+static JSValue js_event_get_offsetY(JSContext* ctx, JSValueConst this_val) {
+    auto* op = (EventOpaque*)JS_GetOpaque(this_val, js_event_class_id);
+    return op ? JS_NewInt32(ctx, op->offsetY) : JS_NewInt32(ctx, 0);
 }
 
 static JSValue js_event_get_bubbles(JSContext* ctx, JSValueConst this_val) {
@@ -216,7 +227,8 @@ JSValue js_create_event(JSContext* ctx, const std::string& type,
 // ---- Event dispatch with bubbling ----
 
 void js_dispatch_event(JSEngine* engine, uint32_t node_id,
-                        const std::string& type, int clientX, int clientY) {
+                        const std::string& type, int clientX, int clientY,
+                        int offsetX, int offsetY) {
     if (!engine || !engine->ctx || !engine->document) return;
 
     auto it = engine->document->node_map.find(node_id);
@@ -226,6 +238,10 @@ void js_dispatch_event(JSEngine* engine, uint32_t node_id,
     // Create event object
     JSValue event = js_create_event(engine->ctx, type, target, clientX, clientY);
     auto* event_op = (EventOpaque*)JS_GetOpaque(event, js_event_class_id);
+    if (event_op) {
+        event_op->offsetX = offsetX;
+        event_op->offsetY = offsetY;
+    }
 
     // Collect bubble path: target -> parent -> ... -> root
     std::vector<DOMNode*> path;
@@ -393,6 +409,22 @@ void js_event_init(JSEngine* engine) {
     JS_DefinePropertyGetSet(ctx, proto,
         JS_NewAtom(ctx, "clientY"),
         JS_NewCFunction(ctx, (JSCFunction*)js_event_get_clientY, "get clientY", 0),
+        JS_UNDEFINED, JS_PROP_CONFIGURABLE);
+    JS_DefinePropertyGetSet(ctx, proto,
+        JS_NewAtom(ctx, "offsetX"),
+        JS_NewCFunction(ctx, (JSCFunction*)js_event_get_offsetX, "get offsetX", 0),
+        JS_UNDEFINED, JS_PROP_CONFIGURABLE);
+    JS_DefinePropertyGetSet(ctx, proto,
+        JS_NewAtom(ctx, "offsetY"),
+        JS_NewCFunction(ctx, (JSCFunction*)js_event_get_offsetY, "get offsetY", 0),
+        JS_UNDEFINED, JS_PROP_CONFIGURABLE);
+    JS_DefinePropertyGetSet(ctx, proto,
+        JS_NewAtom(ctx, "pageX"),
+        JS_NewCFunction(ctx, (JSCFunction*)js_event_get_clientX, "get pageX", 0),
+        JS_UNDEFINED, JS_PROP_CONFIGURABLE);
+    JS_DefinePropertyGetSet(ctx, proto,
+        JS_NewAtom(ctx, "pageY"),
+        JS_NewCFunction(ctx, (JSCFunction*)js_event_get_clientY, "get pageY", 0),
         JS_UNDEFINED, JS_PROP_CONFIGURABLE);
     JS_DefinePropertyGetSet(ctx, proto,
         JS_NewAtom(ctx, "bubbles"),

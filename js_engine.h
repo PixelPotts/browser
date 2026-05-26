@@ -47,7 +47,8 @@ public:
     void clearTimer(uint32_t id);
 
     // Dispatch an event (calls JS handlers)
-    void dispatchEvent(uint32_t node_id, const std::string& type, int clientX = 0, int clientY = 0);
+    void dispatchEvent(uint32_t node_id, const std::string& type, int clientX = 0, int clientY = 0,
+                        int offsetX = 0, int offsetY = 0);
 
     // Schedule re-render after DOM mutation
     void scheduleRerender();

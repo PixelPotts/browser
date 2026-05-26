@@ -5500,8 +5500,9 @@ gboolean JSEngine::rerender_callback(gpointer data) {
 }
 
 void JSEngine::dispatchEvent(uint32_t node_id, const std::string& type,
-                              int clientX, int clientY) {
-    js_dispatch_event(this, node_id, type, clientX, clientY);
+                              int clientX, int clientY,
+                              int offsetX, int offsetY) {
+    js_dispatch_event(this, node_id, type, clientX, clientY, offsetX, offsetY);
 }
 
 void JSEngine::addConsoleEntry(ConsoleLevel level, const std::string& msg, const std::string& source) {

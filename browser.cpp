@@ -4194,10 +4194,20 @@ static gboolean on_draw_area_click(GtkWidget* widget, GdkEventButton* ev, gpoint
         link_node = link_node->parent;
     }
 
-    // Dispatch JS click event
+    // Dispatch JS mousedown then click on press, mouseup on release
     if (tab->js_engine && tab->document) {
-        tab->js_engine->dispatchEvent(hit.node->node_id, "click",
-                                       (int)doc_x, (int)doc_y);
+        if (ev->type == GDK_BUTTON_PRESS) {
+            tab->js_engine->dispatchEvent(hit.node->node_id, "mousedown",
+                                           (int)doc_x, (int)doc_y,
+                                           (int)hit.local_x, (int)hit.local_y);
+            tab->js_engine->dispatchEvent(hit.node->node_id, "click",
+                                           (int)doc_x, (int)doc_y,
+                                           (int)hit.local_x, (int)hit.local_y);
+        } else if (ev->type == GDK_BUTTON_RELEASE) {
+            tab->js_engine->dispatchEvent(hit.node->node_id, "mouseup",
+                                           (int)doc_x, (int)doc_y,
+                                           (int)hit.local_x, (int)hit.local_y);
+        }
     }
 
     return TRUE;
@@ -4240,7 +4250,8 @@ static gboolean on_draw_area_motion(GtkWidget* widget, GdkEventMotion* ev, gpoin
     // Dispatch mousemove to JS
     if (tab->js_engine && hit.node) {
         tab->js_engine->dispatchEvent(hit.node->node_id, "mousemove",
-                                       (int)doc_x, (int)doc_y);
+                                       (int)doc_x, (int)doc_y,
+                                       (int)hit.local_x, (int)hit.local_y);
     }
 
     return FALSE;
@@ -4276,6 +4287,8 @@ static void create_tab_widgets(AppState* st, std::shared_ptr<TabState> tab) {
         GDK_BUTTON_PRESS_MASK | GDK_BUTTON_RELEASE_MASK |
         GDK_POINTER_MOTION_MASK | GDK_SCROLL_MASK);
     g_signal_connect(tab->drawing_area, "button-press-event",
+                     G_CALLBACK(on_draw_area_click), st);
+    g_signal_connect(tab->drawing_area, "button-release-event",
                      G_CALLBACK(on_draw_area_click), st);
     g_signal_connect(tab->drawing_area, "motion-notify-event",
                      G_CALLBACK(on_draw_area_motion), st);
