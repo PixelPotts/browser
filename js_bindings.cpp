@@ -2313,12 +2313,22 @@ static cairo_t* canvas_get_cr(uint32_t node_id) {
     return cairo_create(it->second.surface);
 }
 
+// Defined in browser.cpp — queues repaint on the layout engine's draw area
+extern void queue_main_draw_area(void);
+
 static void canvas_queue_draw(uint32_t node_id) {
     auto it = g_canvas_map.find(node_id);
-    if (it != g_canvas_map.end() && it->second.drawing_area &&
+    if (it == g_canvas_map.end()) return;
+    // Old path: dedicated GTK drawing area
+    if (it->second.drawing_area &&
         GTK_IS_WIDGET(it->second.drawing_area) &&
-        gtk_widget_get_realized(it->second.drawing_area))
+        gtk_widget_get_realized(it->second.drawing_area)) {
         gtk_widget_queue_draw(it->second.drawing_area);
+        return;
+    }
+    // New layout engine path: queue draw on the main drawing_area
+    fprintf(stderr, "[CANVAS-DBG] queue_draw via queue_main_draw_area for canvas node %u\n", node_id);
+    queue_main_draw_area();
 }
 
 static bool parse_css_color(const char* str, double& r, double& g, double& b, double& a) {
@@ -2567,7 +2577,7 @@ static JSValue js_element_getContext(JSContext* ctx, JSValueConst this_val,
 
     // Path methods
     JS_SetPropertyStr(ctx, obj, "beginPath", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst this_val, int, JSValueConst*) -> JSValue {
-        CTX_OP; cairo_new_path(_cr); return JS_UNDEFINED;
+        CTX_OP; fprintf(stderr, "[CANVAS-DBG] beginPath cr=%p\n", (void*)_cr); cairo_new_path(_cr); return JS_UNDEFINED;
     }, "beginPath", 0));
 
     JS_SetPropertyStr(ctx, obj, "closePath", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst this_val, int, JSValueConst*) -> JSValue {
@@ -2577,12 +2587,14 @@ static JSValue js_element_getContext(JSContext* ctx, JSValueConst this_val,
     JS_SetPropertyStr(ctx, obj, "moveTo", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
         CTX_OP; if (argc < 2) return JS_UNDEFINED;
         double x, y; JS_ToFloat64(c, &x, argv[0]); JS_ToFloat64(c, &y, argv[1]);
+        fprintf(stderr, "[CANVAS-DBG] moveTo(%.1f, %.1f)\n", x, y);
         cairo_move_to(_cr, x, y); return JS_UNDEFINED;
     }, "moveTo", 2));
 
     JS_SetPropertyStr(ctx, obj, "lineTo", JS_NewCFunction(ctx, [](JSContext* c, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
         CTX_OP; if (argc < 2) return JS_UNDEFINED;
         double x, y; JS_ToFloat64(c, &x, argv[0]); JS_ToFloat64(c, &y, argv[1]);
+        fprintf(stderr, "[CANVAS-DBG] lineTo(%.1f, %.1f)\n", x, y);
         cairo_line_to(_cr, x, y); return JS_UNDEFINED;
     }, "lineTo", 2));
 
@@ -2681,6 +2693,7 @@ static JSValue js_element_getContext(JSContext* ctx, JSValueConst this_val,
         JS_FreeValue(c, ss);
         JSValue lw = JS_GetPropertyStr(c, this_val, "lineWidth");
         double lwv = 1.0; JS_ToFloat64(c, &lwv, lw); JS_FreeValue(c, lw);
+        fprintf(stderr, "[CANVAS-DBG] stroke color=(%.2f,%.2f,%.2f,%.2f) lineWidth=%.1f\n", r2, g2, b2, a2, lwv);
         cairo_set_source_rgba(_cr, r2, g2, b2, a2);
         cairo_set_line_width(_cr, lwv);
         cairo_stroke_preserve(_cr);

@@ -235,6 +235,11 @@ void js_dispatch_event(JSEngine* engine, uint32_t node_id,
     if (it == engine->document->node_map.end()) return;
     DOMNode* target = it->second;
 
+    fprintf(stderr, "[EVENT-DBG] dispatch '%s' on <%s id=%s> node_id=%u client=(%d,%d) offset=(%d,%d)\n",
+            type.c_str(), target->tag_name.c_str(),
+            target->attributes.count("id") ? target->attributes.at("id").c_str() : "",
+            node_id, clientX, clientY, offsetX, offsetY);
+
     // Create event object
     JSValue event = js_create_event(engine->ctx, type, target, clientX, clientY);
     auto* event_op = (EventOpaque*)JS_GetOpaque(event, js_event_class_id);

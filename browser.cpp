@@ -3409,7 +3409,40 @@ static void connect_replaced_surfaces(LayoutBox* box, TabState* tab) {
     if (!box) return;
     if (box->type == LayoutBoxType::Replaced && box->dom_node) {
         DOMNode* node = box->dom_node;
-        // Canvas elements
+        // Canvas elements — create surface if not yet in g_canvas_map
+        if (node->tag_name == "canvas") {
+            auto it = g_canvas_map.find(node->node_id);
+            if (it == g_canvas_map.end() || !it->second.surface) {
+                int cw = 300, ch = 150; // default canvas size
+                auto w_it = node->attributes.find("width");
+                auto h_it = node->attributes.find("height");
+                if (w_it != node->attributes.end()) {
+                    try { cw = (int)std::stod(w_it->second); } catch (...) {}
+                }
+                if (h_it != node->attributes.end()) {
+                    try { ch = (int)std::stod(h_it->second); } catch (...) {}
+                }
+                auto sit = node->style_props.find("width");
+                if (sit != node->style_props.end()) {
+                    int px = atoi(sit->second.c_str());
+                    if (px > 0) cw = px;
+                }
+                sit = node->style_props.find("height");
+                if (sit != node->style_props.end()) {
+                    int px = atoi(sit->second.c_str());
+                    if (px > 0) ch = px;
+                }
+                cairo_surface_t* surf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, cw, ch);
+                CanvasState cs;
+                cs.surface = surf;
+                cs.drawing_area = nullptr; // no GTK widget in new layout engine
+                cs.width = cw;
+                cs.height = ch;
+                g_canvas_map[node->node_id] = cs;
+                fprintf(stderr, "[CANVAS-DBG] Created canvas surface for node %u: %dx%d\n",
+                        node->node_id, cw, ch);
+            }
+        }
         auto it = g_canvas_map.find(node->node_id);
         if (it != g_canvas_map.end() && it->second.surface) {
             box->replaced_surface = it->second.surface;
@@ -5954,6 +5987,16 @@ static void render_dom_to_gtk(AppState* st, TabState* tab, Document* doc, int ge
     }
 }
 #endif // old GTK widget rendering
+
+// Queue repaint on the layout engine's main drawing area (for canvas updates)
+void queue_main_draw_area(void) {
+    if (!g_js_engine || !g_js_engine->tab_state) return;
+    auto* tab = g_js_engine->tab_state;
+    if (tab->drawing_area && GTK_IS_WIDGET(tab->drawing_area) &&
+        gtk_widget_get_realized(tab->drawing_area)) {
+        gtk_widget_queue_draw(tab->drawing_area);
+    }
+}
 
 // Called by JSEngine::rerender_callback when DOM is dirty
 void do_rerender(AppState* st, TabState* tab) {
