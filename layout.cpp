@@ -1309,7 +1309,9 @@ static void layout_flex(LayoutBox* box, float containing_width, float containing
                 if (base < 0) base = 0;
             } else {
                 // For column: do initial layout to get content height
-                layout_box(child.get(), content_width, containing_height, pango_ctx);
+                // Pass 0 for containing_height so nested row flex doesn't stretch
+                // to full parent height during measurement
+                layout_box(child.get(), content_width, 0, pango_ctx);
                 base = child->content_rect.h;
             }
         }
@@ -1321,13 +1323,14 @@ static void layout_flex(LayoutBox* box, float containing_width, float containing
             fi.outer_main = base + child->margin.vertical() + child->padding.vertical() + child->border.vertical();
         }
         flex_items.push_back(fi);
-        // Debug: trace flex items in toolbar/sidebar-header
-        if (node && (node->hasClass("toolbar") || node->hasClass("sidebar-header"))) {
-            fprintf(stderr, "[FLEX-FORM] parent=%s child_tag=%s child_type=%d base=%.1f grow=%.1f outer=%.1f w=%.0f h=%.0f\n",
-                node->tag_name.c_str(),
+        // Debug: trace flex items in toolbar/sidebar-header/main
+        if (node && (node->hasClass("toolbar") || node->hasClass("sidebar-header") || node->hasClass("main"))) {
+            fprintf(stderr, "[FLEX-FORM] parent_class=%s dir=%s child_tag=%s child_cls=%s child_type=%d base=%.1f grow=%.1f shrink=%.1f outer=%.1f\n",
+                node->hasClass("toolbar") ? "toolbar" : node->hasClass("main") ? "main" : "sidebar-header",
+                is_row ? "row" : "col",
                 child->dom_node ? child->dom_node->tag_name.c_str() : "?",
-                (int)child->type, fi.base_size, fi.flex_grow, fi.outer_main,
-                child->content_rect.w, child->content_rect.h);
+                child->dom_node && !child->dom_node->class_list.empty() ? child->dom_node->class_list[0].c_str() : "",
+                (int)child->type, fi.base_size, fi.flex_grow, fi.flex_shrink, fi.outer_main);
         }
     }
 
