@@ -798,6 +798,24 @@ static void layout_block(LayoutBox* box, float containing_width, float containin
 
     box->content_rect.w = content_width;
 
+    // Compute containing height for children (for percentage height resolution)
+    // This is THIS box's content height, not the raw containing_height from parent
+    float child_containing_height = containing_height;
+    {
+        float resolved_h = resolve_height(node, containing_height);
+        if (resolved_h >= 0) {
+            if (node && node->box_sizing == 1) {
+                resolved_h -= box->padding.vertical() + box->border.vertical();
+                if (resolved_h < 0) resolved_h = 0;
+            }
+            child_containing_height = resolved_h;
+        } else if (containing_height > 0) {
+            // Parent provided a definite height (e.g. flex stretch) — subtract our padding/border
+            float ch = containing_height - box->padding.vertical() - box->border.vertical();
+            if (ch > 0) child_containing_height = ch;
+        }
+    }
+
     // Handle halign_center (margin: auto)
     if (node && node->halign_center) {
         float total_w = content_width + box->padding.horizontal() + box->border.horizontal();
@@ -898,7 +916,7 @@ static void layout_block(LayoutBox* box, float containing_width, float containin
 
         for (size_t ci = 0; ci < box->children.size(); ++ci) {
             auto& child = box->children[ci];
-            layout_box(child.get(), content_width, containing_height, pango_ctx);
+            layout_box(child.get(), content_width, child_containing_height, pango_ctx);
 
             float top_margin = child->margin.top;
 
