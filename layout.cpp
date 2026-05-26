@@ -1512,9 +1512,10 @@ static void layout_flex(LayoutBox* box, float containing_width, float containing
             if (content_height < 0) content_height = 0;
         }
         box->content_rect.h = content_height;
-    } else if (is_row && containing_height > 0) {
-        // For row flex with no explicit height, use containing_height so children
-        // can stretch to fill (e.g. nested flex row inside a column flex parent)
+    } else if (is_row && containing_height > 0 &&
+               box->parent && box->parent->type == LayoutBoxType::Flex) {
+        // For row flex that is itself a flex item (stretched by parent column flex),
+        // use containing_height. But NOT for row flex in a regular block container.
         float ch = containing_height - box->padding.vertical() - box->border.vertical();
         if (ch > max_cross) box->content_rect.h = ch;
         else box->content_rect.h = max_cross;
