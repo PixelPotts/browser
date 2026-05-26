@@ -1319,6 +1319,13 @@ static void layout_flex(LayoutBox* box, float containing_width, float containing
         }
     }
     float remaining = main_size - total_main;
+    fprintf(stderr, "[FLEX-DBG] tag=%s dir=%s main_size=%.1f total_main=%.1f remaining=%.1f containing_h=%.1f items=%zu\n",
+            node ? node->tag_name.c_str() : "?", is_row?"row":"col", main_size, total_main, remaining, containing_height, flex_items.size());
+    for (size_t i = 0; i < flex_items.size(); ++i) {
+        fprintf(stderr, "[FLEX-DBG]   item[%zu] tag=%s base=%.1f grow=%.1f shrink=%.1f outer=%.1f\n",
+                i, flex_items[i].box->dom_node ? flex_items[i].box->dom_node->tag_name.c_str() : "?",
+                flex_items[i].base_size, flex_items[i].flex_grow, flex_items[i].flex_shrink, flex_items[i].outer_main);
+    }
 
     // Grow or shrink items
     if (remaining > 0) {

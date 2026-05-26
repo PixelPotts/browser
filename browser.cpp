@@ -4047,6 +4047,8 @@ static void layout_and_paint(TabState* tab) {
     }
 
     // Perform layout
+    fprintf(stderr, "[LAYOUT-DBG] viewport_width=%.1f viewport_height=%.1f g_viewport_h=%.1f\n",
+            tab->viewport_width, tab->viewport_height, g_viewport_h);
     perform_layout(tab->layout_root.get(), tab->viewport_width, tab->viewport_height, tab->pango_ctx);
 
     fprintf(stderr, "[LAYOUT] Layout done: content_rect=(%.0f, %.0f, %.0f, %.0f)\n",
@@ -4258,8 +4260,11 @@ static void create_tab_widgets(AppState* st, std::shared_ptr<TabState> tab) {
             TabState* tab = static_cast<TabState*>(data);
             if (!tab || !tab->document || !tab->layout_root) return;
             float new_w = (float)alloc->width;
-            if (std::abs(new_w - tab->viewport_width) > 2) {
+            float new_h = (float)alloc->height;
+            if (std::abs(new_w - tab->viewport_width) > 2 ||
+                std::abs(new_h - tab->viewport_height) > 2) {
                 tab->viewport_width = new_w;
+                tab->viewport_height = new_h;
                 layout_and_paint(tab);
             }
         }), tab.get());
