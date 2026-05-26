@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>NoteSketch - Stage 9</title>
+<title>NoteSketch - Stage 10</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
@@ -148,6 +148,20 @@ body {
   color: #94a3b8;
   margin-bottom: 8px;
 }
+.color-swatches {
+  display: flex;
+  gap: 6px;
+  margin-top: 12px;
+}
+.swatch {
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  border: 2px solid #475569;
+}
+.swatch.active {
+  border-color: #38bdf8;
+}
 
 .main-status {
   padding: 4px 16px;
@@ -220,7 +234,14 @@ body {
       </div>
       <div class="canvas-panel">
         <div class="canvas-label">Sketch Pad</div>
-        <canvas width="288" height="200"></canvas>
+        <canvas id="sketchCanvas" width="288" height="200"></canvas>
+        <div class="color-swatches" id="swatches">
+          <div class="swatch active" style="background: #e2e8f0;"></div>
+          <div class="swatch" style="background: #ef4444;"></div>
+          <div class="swatch" style="background: #22c55e;"></div>
+          <div class="swatch" style="background: #3b82f6;"></div>
+          <div class="swatch" style="background: #eab308;"></div>
+        </div>
       </div>
     </div>
     <div class="main-status">
@@ -230,7 +251,7 @@ body {
 </div>
 
 <div class="status-bar">
-  <span>Stage 9: Dynamic JS note list</span>
+  <span>Stage 10: Canvas drawing + color swatches</span>
 </div>
 
 <script>
@@ -267,6 +288,50 @@ function renderNotes() {
 }
 
 renderNotes();
+
+// Canvas drawing
+var canvas = document.getElementById("sketchCanvas");
+var ctx = canvas.getContext("2d");
+var drawing = false;
+var currentColor = "#e2e8f0";
+
+ctx.strokeStyle = currentColor;
+ctx.lineWidth = 3;
+ctx.lineCap = "round";
+
+canvas.addEventListener("mousedown", function(e) {
+  drawing = true;
+  ctx.beginPath();
+  ctx.moveTo(e.offsetX, e.offsetY);
+});
+
+canvas.addEventListener("mousemove", function(e) {
+  if (!drawing) return;
+  ctx.lineTo(e.offsetX, e.offsetY);
+  ctx.stroke();
+});
+
+canvas.addEventListener("mouseup", function() {
+  drawing = false;
+});
+
+// Color swatch selection
+var swatches = document.getElementById("swatches");
+var swatchEls = swatches.children;
+var colors = ["#e2e8f0", "#ef4444", "#22c55e", "#3b82f6", "#eab308"];
+
+for (var i = 0; i < swatchEls.length; i++) {
+  (function(idx) {
+    swatchEls[idx].addEventListener("click", function() {
+      for (var j = 0; j < swatchEls.length; j++) {
+        swatchEls[j].className = "swatch";
+      }
+      swatchEls[idx].className = "swatch active";
+      currentColor = colors[idx];
+      ctx.strokeStyle = currentColor;
+    });
+  })(i);
+}
 </script>
 
 </body>
