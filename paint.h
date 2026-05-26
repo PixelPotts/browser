@@ -16,7 +16,9 @@ enum class PaintCmdType {
     PushOpacity,
     PopOpacity,
     Translate,
-    PopTranslate
+    PopTranslate,
+    DrawBoxShadow,
+    DrawBackgroundImage
 };
 
 struct CairoColor {
@@ -56,6 +58,26 @@ struct PaintCommand {
     // Translate
     float tx = 0, ty = 0;
 
+    // DrawBoxShadow
+    float shadow_offset_x = 0, shadow_offset_y = 0;
+    float shadow_blur = 0, shadow_spread = 0;
+    CairoColor shadow_color;
+    bool shadow_inset = false;
+    Rect shadow_box_rect;
+    int shadow_border_radius = 0;
+
+    // DrawBackgroundImage
+    cairo_surface_t* bg_surface = nullptr;
+    Rect bg_rect;
+    std::string bg_size_mode;     // "cover", "contain", or "NxM"
+    std::string bg_position_str;  // "center", "left top", etc.
+    std::string bg_repeat_mode;   // "repeat", "no-repeat", "repeat-x", "repeat-y"
+
+    // Text shadow data (stored on DrawText commands)
+    float ts_offset_x = 0, ts_offset_y = 0, ts_blur = 0;
+    CairoColor ts_color;
+    bool has_text_shadow = false;
+
     // Back-pointer for hit testing
     DOMNode* dom_node = nullptr;
 };
@@ -66,6 +88,9 @@ using DisplayList = std::vector<PaintCommand>;
 
 // Generate display list from layout tree
 DisplayList generate_display_list(LayoutBox* root);
+
+// Generate display list for fixed-position elements (rendered on top, ignoring scroll)
+DisplayList generate_fixed_display_list(LayoutBox* root);
 
 // Render display list to cairo context
 void render_display_list(cairo_t* cr, const DisplayList& dl, float scroll_x, float scroll_y,

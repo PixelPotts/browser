@@ -1505,6 +1505,10 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
                   if (!s.empty() && tolower_s(s) != "auto") elem->pos_bottom = parse_px_val(s, elem->fs_computed); }
                 { auto s = prop_val(r.decls, "z-index");
                   if (!s.empty()) { try { elem->z_index = std::stoi(s); } catch(...){} } }
+                { auto s = tolower_s(prop_val(r.decls, "visibility"));
+                  if (s == "visible") elem->visibility = 0;
+                  else if (s == "hidden") elem->visibility = 1;
+                  else if (s == "collapse") elem->visibility = 2; }
                 // font-style from CSS rules (BUG FIX: was only parsed from inline styles)
                 { std::string fs = tolower_s(prop_val(r.decls, "font-style"));
                   if (fs == "italic") elem->fi_computed = PANGO_STYLE_ITALIC;
@@ -1696,6 +1700,10 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
               if (!s.empty() && tolower_s(s) != "auto") elem->pos_bottom = parse_px_val(s, elem->fs_computed); }
             { auto s = prop_val(ist, "z-index");
               if (!s.empty()) { try { elem->z_index = std::stoi(s); } catch(...){} } }
+            { auto s = tolower_s(prop_val(ist, "visibility"));
+              if (s == "visible") elem->visibility = 0;
+              else if (s == "hidden") elem->visibility = 1;
+              else if (s == "collapse") elem->visibility = 2; }
             // text-decoration shorthand (inline)
             { auto s = tolower_s(prop_val(ist, "text-decoration"));
               if (!s.empty()) parse_text_decoration(s, elem.get()); }
@@ -2036,6 +2044,7 @@ struct TabState {
     GtkWidget* drawing_area = nullptr;           // single Cairo surface for rendering
     std::unique_ptr<LayoutBox> layout_root;      // layout tree
     DisplayList display_list;                    // paint commands
+    DisplayList fixed_display_list;              // fixed-position elements (no scroll)
     PangoContext* pango_ctx = nullptr;           // shared Pango context
     float scroll_x = 0, scroll_y = 0;           // viewport scroll position
     float content_height = 0;                    // total page height for scrollbar
@@ -3511,6 +3520,7 @@ static void apply_css_to_node(DOMNode* node, const std::vector<CSSRule>& css) {
     node->pos_right = INT_MIN;
     node->pos_bottom = INT_MIN;
     node->z_index = 0;
+    node->visibility = 0;
     for (int i = 0; i < 4; ++i) { node->margin[i] = 0; node->padding[i] = 0; node->border_width[i] = 0; }
     node->width = -1; node->max_width = -1; node->height = -1;
     node->min_width = -1; node->min_height = -1; node->max_height = -1;
@@ -3648,6 +3658,10 @@ static void apply_css_to_node(DOMNode* node, const std::vector<CSSRule>& css) {
           if (!s.empty() && tolower_s(s) != "auto") node->pos_bottom = parse_px_val(s, node->fs_computed); }
         { auto s = prop_val(r.decls, "z-index");
           if (!s.empty()) { try { node->z_index = std::stoi(s); } catch(...){} } }
+        { auto s = tolower_s(prop_val(r.decls, "visibility"));
+          if (s == "visible") node->visibility = 0;
+          else if (s == "hidden") node->visibility = 1;
+          else if (s == "collapse") node->visibility = 2; }
         { std::string fs = tolower_s(prop_val(r.decls, "font-style"));
           if (fs == "italic") node->fi_computed = PANGO_STYLE_ITALIC;
           else if (fs == "oblique") node->fi_computed = PANGO_STYLE_OBLIQUE;
@@ -3808,6 +3822,10 @@ static void apply_css_to_node(DOMNode* node, const std::vector<CSSRule>& css) {
           if (!s.empty() && tolower_s(s) != "auto") node->pos_bottom = parse_px_val(s, node->fs_computed); }
         { auto s = prop_val(ist, "z-index");
           if (!s.empty()) { try { node->z_index = std::stoi(s); } catch(...){} } }
+        { auto s = tolower_s(prop_val(ist, "visibility"));
+          if (s == "visible") node->visibility = 0;
+          else if (s == "hidden") node->visibility = 1;
+          else if (s == "collapse") node->visibility = 2; }
         { auto s = tolower_s(prop_val(ist, "text-decoration"));
           if (!s.empty()) parse_text_decoration(s, node); }
         { auto s = tolower_s(prop_val(ist, "text-decoration-line"));
@@ -4119,8 +4137,25 @@ static void layout_and_paint(TabState* tab) {
 
     // Generate display list
     tab->display_list = generate_display_list(tab->layout_root.get());
+    tab->fixed_display_list = generate_fixed_display_list(tab->layout_root.get());
 
-    fprintf(stderr, "[LAYOUT] Display list: %zu commands\n", tab->display_list.size());
+    fprintf(stderr, "[LAYOUT] Display list: %zu commands, fixed: %zu\n",
+            tab->display_list.size(), tab->fixed_display_list.size());
+
+    // Connect background image surfaces to display list commands
+    auto connect_bg_images = [&](DisplayList& dl) {
+        for (auto& cmd : dl) {
+            if (cmd.type == PaintCmdType::DrawBackgroundImage && cmd.dom_node && !cmd.bg_surface) {
+                std::string bg_url = cmd.dom_node->bg_image;
+                if (!bg_url.empty()) {
+                    cairo_surface_t* surf = load_image_surface(tab, bg_url, cmd.dom_node->node_id + 100000);
+                    if (surf) cmd.bg_surface = surf;
+                }
+            }
+        }
+    };
+    connect_bg_images(tab->display_list);
+    connect_bg_images(tab->fixed_display_list);
 
     // Update content height for scrollbar
     tab->content_height = get_content_height(tab->layout_root.get());
@@ -4165,6 +4200,13 @@ static gboolean on_draw_content(GtkWidget* widget, cairo_t* cr, gpointer data) {
 
     render_display_list(cr, tab->display_list, sx, sy,
                         (float)alloc.width, (float)alloc.height);
+
+    // Render fixed-position elements on top (no scroll offset)
+    if (!tab->fixed_display_list.empty()) {
+        render_display_list(cr, tab->fixed_display_list, 0, 0,
+                            (float)alloc.width, (float)alloc.height);
+    }
+
     return FALSE;
 }
 
@@ -4227,6 +4269,61 @@ static gboolean on_draw_area_click(GtkWidget* widget, GdkEventButton* ev, gpoint
         link_node = link_node->parent;
     }
 
+    // Update :focus and :active states
+    if (tab->document) {
+        bool state_changed = false;
+
+        if (ev->type == GDK_BUTTON_PRESS) {
+            // Clear all :active flags
+            std::function<void(DOMNode*)> clear_active = [&](DOMNode* n) {
+                if (!n) return;
+                if (n->is_active) { n->is_active = false; state_changed = true; }
+                for (auto& c : n->children) clear_active(c.get());
+            };
+            clear_active(tab->document->root.get());
+
+            // Set :active on hit node and ancestors
+            DOMNode* an = hit.node;
+            while (an) {
+                if (!an->is_active) { an->is_active = true; state_changed = true; }
+                an = an->parent;
+            }
+
+            // Clear all :focus flags, set on hit node
+            std::function<void(DOMNode*)> clear_focus = [&](DOMNode* n) {
+                if (!n) return;
+                if (n->is_focused) { n->is_focused = false; state_changed = true; }
+                for (auto& c : n->children) clear_focus(c.get());
+            };
+            clear_focus(tab->document->root.get());
+
+            // Set focus on the hit element (or its focusable ancestor)
+            DOMNode* fn = hit.node;
+            while (fn) {
+                if (fn->tag_name == "input" || fn->tag_name == "textarea" ||
+                    fn->tag_name == "select" || fn->tag_name == "button" ||
+                    fn->tag_name == "a" || fn->attributes.count("tabindex")) {
+                    fn->is_focused = true;
+                    state_changed = true;
+                    break;
+                }
+                fn = fn->parent;
+            }
+        } else if (ev->type == GDK_BUTTON_RELEASE) {
+            // Clear :active
+            std::function<void(DOMNode*)> clear_active = [&](DOMNode* n) {
+                if (!n) return;
+                if (n->is_active) { n->is_active = false; state_changed = true; }
+                for (auto& c : n->children) clear_active(c.get());
+            };
+            clear_active(tab->document->root.get());
+        }
+
+        if (state_changed) {
+            layout_and_paint(tab);
+        }
+    }
+
     // Dispatch JS mousedown then click on press, mouseup on release
     if (tab->js_engine && tab->document) {
         if (ev->type == GDK_BUTTON_PRESS) {
@@ -4246,7 +4343,7 @@ static gboolean on_draw_area_click(GtkWidget* widget, GdkEventButton* ev, gpoint
     return TRUE;
 }
 
-// Mouse motion handler for cursor changes
+// Mouse motion handler for cursor changes and hover state
 static gboolean on_draw_area_motion(GtkWidget* widget, GdkEventMotion* ev, gpointer data) {
     AppState* st = static_cast<AppState*>(data);
     TabState* tab = st->ct;
@@ -4256,6 +4353,26 @@ static gboolean on_draw_area_motion(GtkWidget* widget, GdkEventMotion* ev, gpoin
     float doc_y = (float)ev->y;
 
     HitTestResult hit = hit_test(tab->layout_root.get(), doc_x, doc_y);
+
+    // Update hover state
+    bool hover_changed = false;
+    {
+        DOMNode* root = tab->document ? tab->document->root.get() : nullptr;
+        // Clear all hover flags
+        std::function<void(DOMNode*)> clear = [&](DOMNode* n) {
+            if (!n) return;
+            if (n->is_hovered) { n->is_hovered = false; hover_changed = true; }
+            for (auto& c : n->children) clear(c.get());
+        };
+        if (root) clear(root);
+
+        // Set hover on hit node and all ancestors
+        DOMNode* n = hit.node;
+        while (n) {
+            if (!n->is_hovered) { n->is_hovered = true; hover_changed = true; }
+            n = n->parent;
+        }
+    }
 
     // Check if over a link
     bool over_link = false;
@@ -4285,6 +4402,11 @@ static gboolean on_draw_area_motion(GtkWidget* widget, GdkEventMotion* ev, gpoin
         tab->js_engine->dispatchEvent(hit.node->node_id, "mousemove",
                                        (int)doc_x, (int)doc_y,
                                        (int)hit.local_x, (int)hit.local_y);
+    }
+
+    // Restyle + repaint if hover changed
+    if (hover_changed) {
+        layout_and_paint(tab);
     }
 
     return FALSE;

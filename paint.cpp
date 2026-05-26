@@ -219,11 +219,172 @@ CairoColor parse_css_color(const std::string& color) {
     return c; // default black
 }
 
+// ---- Box shadow parsing ----
+
+struct ParsedBoxShadow {
+    float offset_x = 0, offset_y = 0, blur = 0, spread = 0;
+    CairoColor color;
+    bool inset = false;
+};
+
+static std::vector<ParsedBoxShadow> parse_box_shadow(const std::string& raw) {
+    std::vector<ParsedBoxShadow> shadows;
+    if (raw.empty() || raw == "none") return shadows;
+
+    // Split by comma (but not inside parens)
+    std::vector<std::string> parts;
+    int depth = 0;
+    std::string cur;
+    for (char c : raw) {
+        if (c == '(') depth++;
+        else if (c == ')') depth--;
+        if (c == ',' && depth == 0) {
+            parts.push_back(cur);
+            cur.clear();
+        } else {
+            cur += c;
+        }
+    }
+    if (!cur.empty()) parts.push_back(cur);
+
+    for (auto& part : parts) {
+        ParsedBoxShadow s;
+        s.color = {0, 0, 0, 0.5};
+
+        // Tokenize
+        std::vector<std::string> tokens;
+        std::string tok;
+        int d = 0;
+        for (char c : part) {
+            if (c == '(') d++;
+            else if (c == ')') d--;
+            if (c == ' ' && d == 0) {
+                if (!tok.empty()) tokens.push_back(tok);
+                tok.clear();
+            } else {
+                tok += c;
+            }
+        }
+        if (!tok.empty()) tokens.push_back(tok);
+
+        // Parse: [inset] offsetX offsetY [blur [spread]] [color]
+        std::vector<float> nums;
+        bool found_color = false;
+        for (auto& t : tokens) {
+            if (t == "inset") { s.inset = true; continue; }
+            // Try parse as number
+            bool is_num = false;
+            try {
+                size_t pos;
+                float v = std::stof(t, &pos);
+                // Check for px suffix
+                if (pos < t.size() && t[pos] == 'p') pos += 2;
+                if (pos >= t.size() - 1 || t.size() == pos) {
+                    nums.push_back(v);
+                    is_num = true;
+                }
+            } catch (...) {}
+            if (!is_num) {
+                // It's a color
+                s.color = parse_css_color(t);
+                found_color = true;
+            }
+        }
+        if (nums.size() >= 2) {
+            s.offset_x = nums[0];
+            s.offset_y = nums[1];
+            if (nums.size() >= 3) s.blur = nums[2];
+            if (nums.size() >= 4) s.spread = nums[3];
+        }
+        if (!found_color) s.color = {0, 0, 0, 0.3};
+        shadows.push_back(s);
+    }
+    return shadows;
+}
+
+// ---- Text shadow parsing ----
+
+struct ParsedTextShadow {
+    float offset_x = 0, offset_y = 0, blur = 0;
+    CairoColor color;
+};
+
+static std::vector<ParsedTextShadow> parse_text_shadow(const std::string& raw) {
+    std::vector<ParsedTextShadow> shadows;
+    if (raw.empty() || raw == "none") return shadows;
+
+    std::vector<std::string> parts;
+    int depth = 0;
+    std::string cur;
+    for (char c : raw) {
+        if (c == '(') depth++;
+        else if (c == ')') depth--;
+        if (c == ',' && depth == 0) {
+            parts.push_back(cur);
+            cur.clear();
+        } else {
+            cur += c;
+        }
+    }
+    if (!cur.empty()) parts.push_back(cur);
+
+    for (auto& part : parts) {
+        ParsedTextShadow s;
+        s.color = {0, 0, 0, 0.5};
+
+        std::vector<std::string> tokens;
+        std::string tok;
+        int d = 0;
+        for (char c : part) {
+            if (c == '(') d++;
+            else if (c == ')') d--;
+            if (c == ' ' && d == 0) {
+                if (!tok.empty()) tokens.push_back(tok);
+                tok.clear();
+            } else {
+                tok += c;
+            }
+        }
+        if (!tok.empty()) tokens.push_back(tok);
+
+        std::vector<float> nums;
+        for (auto& t : tokens) {
+            bool is_num = false;
+            try {
+                size_t pos;
+                float v = std::stof(t, &pos);
+                if (pos < t.size() && t[pos] == 'p') pos += 2;
+                if (pos >= t.size() - 1 || t.size() == pos) {
+                    nums.push_back(v);
+                    is_num = true;
+                }
+            } catch (...) {}
+            if (!is_num) {
+                s.color = parse_css_color(t);
+            }
+        }
+        if (nums.size() >= 2) {
+            s.offset_x = nums[0];
+            s.offset_y = nums[1];
+            if (nums.size() >= 3) s.blur = nums[2];
+        }
+        shadows.push_back(s);
+    }
+    return shadows;
+}
+
 // ---- Display list generation ----
 
-static void paint_box(LayoutBox* box, DisplayList& dl, float offset_x, float offset_y) {
+static void paint_box(LayoutBox* box, DisplayList& dl, float offset_x, float offset_y,
+                       bool skip_fixed = false) {
     if (!box) return;
     if (box->type == LayoutBoxType::None) return;
+
+    // Skip fixed-position elements in normal paint pass (they're painted separately)
+    if (skip_fixed && box->position == 3) return;
+
+    // Visibility: hidden — skip painting but keep space (children still paint if they override)
+    bool hidden = (box->visibility == 1);
 
     DOMNode* node = box->dom_node;
     float cx = offset_x + box->content_rect.x;
@@ -237,94 +398,134 @@ static void paint_box(LayoutBox* box, DisplayList& dl, float offset_x, float off
             bb.x + offset_x, bb.y + offset_y, bb.w, bb.h, cx, cy, (int)box->type);
     }
 
-    // Background
-    std::string bg = box->bg_color;
-    if (!bg.empty() && bg != "transparent") {
-        CairoColor bgc = parse_css_color(bg);
-        Rect bb = box->border_box();
-        bb.x += offset_x;
-        bb.y += offset_y;
-        PaintCommand cmd;
-        cmd.type = PaintCmdType::FillRect;
-        cmd.rect = bb;
-        cmd.color = bgc;
-        cmd.border_radius = node ? node->border_radius : 0;
-        cmd.dom_node = node;
-        dl.push_back(cmd);
-    }
-
-    // List markers for <li> elements
-    if (node && node->tag_name == "li") {
-        // Determine marker type from parent
-        bool ordered = false;
-        int index = 1;
-        if (node->parent) {
-            ordered = (node->parent->tag_name == "ol");
-            // Count preceding <li> siblings for numbering
-            if (ordered) {
-                index = 0;
-                for (auto& sibling : node->parent->children) {
-                    if (sibling->tag_name == "li") index++;
-                    if (sibling.get() == node) break;
-                }
-            }
-        }
-
-        // Resolve text color for the marker
-        std::string mc;
-        LayoutBox* b = box;
-        while (b) {
-            if (!b->color.empty()) { mc = b->color; break; }
-            b = b->parent;
-        }
-        if (mc.empty()) mc = "black";
-        CairoColor marker_c = parse_css_color(mc);
-
-        PaintCommand cmd;
-        cmd.type = PaintCmdType::DrawText;
-        cmd.text_color = marker_c;
-        cmd.text_x = cx - 20; // position marker to the left
-        cmd.text_y = cy;
-        cmd.dom_node = node;
-
-        // Create a temporary pango layout for the marker
-        PangoLayout* marker_layout = pango_layout_copy(
-            box->pango_layout ? box->pango_layout :
-            (!box->children.empty() && box->children[0]->pango_layout ? box->children[0]->pango_layout : nullptr));
-        if (marker_layout) {
-            if (ordered) {
-                std::string num = std::to_string(index) + ".";
-                pango_layout_set_text(marker_layout, num.c_str(), -1);
-            } else {
-                pango_layout_set_text(marker_layout, "\xe2\x80\xa2", -1); // bullet •
-            }
-            pango_layout_set_width(marker_layout, -1); // no wrapping
-            cmd.pango_layout = marker_layout;
-            dl.push_back(cmd);
-            // Note: marker_layout leaked - TODO: track and free
-        }
-    }
-
-    // Border
-    bool has_border = box->border.top > 0 || box->border.right > 0 ||
-                      box->border.bottom > 0 || box->border.left > 0;
-    if (has_border) {
-        std::string bs = box->border_style;
-        if (bs.empty()) bs = "solid";
-        if (bs != "none" && bs != "hidden") {
+    if (!hidden) {
+        // Box shadow (rendered before background)
+        if (!box->box_shadow.empty()) {
+            auto shadows = parse_box_shadow(box->box_shadow);
             Rect bb = box->border_box();
             bb.x += offset_x;
             bb.y += offset_y;
-            CairoColor bc = parse_css_color(
-                box->border_color.empty() ? "black" : box->border_color);
+            for (auto& s : shadows) {
+                PaintCommand cmd;
+                cmd.type = PaintCmdType::DrawBoxShadow;
+                cmd.shadow_offset_x = s.offset_x;
+                cmd.shadow_offset_y = s.offset_y;
+                cmd.shadow_blur = s.blur;
+                cmd.shadow_spread = s.spread;
+                cmd.shadow_color = s.color;
+                cmd.shadow_inset = s.inset;
+                cmd.shadow_box_rect = bb;
+                cmd.shadow_border_radius = node ? node->border_radius : 0;
+                cmd.dom_node = node;
+                dl.push_back(cmd);
+            }
+        }
+
+        // Background
+        std::string bg = box->bg_color;
+        if (!bg.empty() && bg != "transparent") {
+            CairoColor bgc = parse_css_color(bg);
+            Rect bb = box->border_box();
+            bb.x += offset_x;
+            bb.y += offset_y;
             PaintCommand cmd;
-            cmd.type = PaintCmdType::DrawBorder;
-            cmd.border_rect = bb;
-            cmd.border_widths = box->border;
-            cmd.border_color_val = bc;
+            cmd.type = PaintCmdType::FillRect;
+            cmd.rect = bb;
+            cmd.color = bgc;
             cmd.border_radius = node ? node->border_radius : 0;
             cmd.dom_node = node;
             dl.push_back(cmd);
+        }
+
+        // Background image
+        if (!box->bg_image.empty() && node) {
+            Rect bb = box->border_box();
+            bb.x += offset_x;
+            bb.y += offset_y;
+            PaintCommand cmd;
+            cmd.type = PaintCmdType::DrawBackgroundImage;
+            cmd.bg_rect = bb;
+            cmd.border_radius = node ? node->border_radius : 0;
+            cmd.dom_node = node;
+            // bg_surface will be connected externally
+            // Store size/position/repeat info from style_props
+            auto it_sz = node->style_props.find("background-size");
+            if (it_sz != node->style_props.end()) cmd.bg_size_mode = it_sz->second;
+            auto it_pos = node->style_props.find("background-position");
+            if (it_pos != node->style_props.end()) cmd.bg_position_str = it_pos->second;
+            auto it_rep = node->style_props.find("background-repeat");
+            if (it_rep != node->style_props.end()) cmd.bg_repeat_mode = it_rep->second;
+            else cmd.bg_repeat_mode = "repeat";
+            dl.push_back(cmd);
+        }
+
+        // List markers for <li> elements
+        if (node && node->tag_name == "li") {
+            bool ordered = false;
+            int index = 1;
+            if (node->parent) {
+                ordered = (node->parent->tag_name == "ol");
+                if (ordered) {
+                    index = 0;
+                    for (auto& sibling : node->parent->children) {
+                        if (sibling->tag_name == "li") index++;
+                        if (sibling.get() == node) break;
+                    }
+                }
+            }
+            std::string mc;
+            LayoutBox* b = box;
+            while (b) {
+                if (!b->color.empty()) { mc = b->color; break; }
+                b = b->parent;
+            }
+            if (mc.empty()) mc = "black";
+            CairoColor marker_c = parse_css_color(mc);
+
+            PaintCommand cmd;
+            cmd.type = PaintCmdType::DrawText;
+            cmd.text_color = marker_c;
+            cmd.text_x = cx - 20;
+            cmd.text_y = cy;
+            cmd.dom_node = node;
+
+            PangoLayout* marker_layout = pango_layout_copy(
+                box->pango_layout ? box->pango_layout :
+                (!box->children.empty() && box->children[0]->pango_layout ? box->children[0]->pango_layout : nullptr));
+            if (marker_layout) {
+                if (ordered) {
+                    std::string num = std::to_string(index) + ".";
+                    pango_layout_set_text(marker_layout, num.c_str(), -1);
+                } else {
+                    pango_layout_set_text(marker_layout, "\xe2\x80\xa2", -1);
+                }
+                pango_layout_set_width(marker_layout, -1);
+                cmd.pango_layout = marker_layout;
+                dl.push_back(cmd);
+            }
+        }
+
+        // Border
+        bool has_border = box->border.top > 0 || box->border.right > 0 ||
+                          box->border.bottom > 0 || box->border.left > 0;
+        if (has_border) {
+            std::string bs = box->border_style;
+            if (bs.empty()) bs = "solid";
+            if (bs != "none" && bs != "hidden") {
+                Rect bb = box->border_box();
+                bb.x += offset_x;
+                bb.y += offset_y;
+                CairoColor bc = parse_css_color(
+                    box->border_color.empty() ? "black" : box->border_color);
+                PaintCommand cmd;
+                cmd.type = PaintCmdType::DrawBorder;
+                cmd.border_rect = bb;
+                cmd.border_widths = box->border;
+                cmd.border_color_val = bc;
+                cmd.border_radius = node ? node->border_radius : 0;
+                cmd.dom_node = node;
+                dl.push_back(cmd);
+            }
         }
     }
 
@@ -349,48 +550,82 @@ static void paint_box(LayoutBox* box, DisplayList& dl, float offset_x, float off
         dl.push_back(cmd);
     }
 
-    // Text content (inline formatting context)
-    if (box->pango_layout) {
-        std::string text_color_str;
-        LayoutBox* b = box;
-        while (b) {
-            if (!b->color.empty()) { text_color_str = b->color; break; }
-            b = b->parent;
+    if (!hidden) {
+        // Text content (inline formatting context)
+        if (box->pango_layout) {
+            std::string text_color_str;
+            LayoutBox* b = box;
+            while (b) {
+                if (!b->color.empty()) { text_color_str = b->color; break; }
+                b = b->parent;
+            }
+            if (text_color_str.empty()) text_color_str = "black";
+
+            CairoColor tc = parse_css_color(text_color_str);
+            PaintCommand cmd;
+            cmd.type = PaintCmdType::DrawText;
+            cmd.pango_layout = box->pango_layout;
+            cmd.text_x = cx;
+            cmd.text_y = cy;
+            cmd.text_color = tc;
+            cmd.dom_node = node;
+
+            // Text shadow
+            std::string ts_raw = box->text_shadow;
+            if (ts_raw.empty()) {
+                // Inherit from ancestors
+                LayoutBox* p = box->parent;
+                while (p) {
+                    if (!p->text_shadow.empty()) { ts_raw = p->text_shadow; break; }
+                    p = p->parent;
+                }
+            }
+            if (!ts_raw.empty() && ts_raw != "none") {
+                auto ts_list = parse_text_shadow(ts_raw);
+                if (!ts_list.empty()) {
+                    cmd.has_text_shadow = true;
+                    cmd.ts_offset_x = ts_list[0].offset_x;
+                    cmd.ts_offset_y = ts_list[0].offset_y;
+                    cmd.ts_blur = ts_list[0].blur;
+                    cmd.ts_color = ts_list[0].color;
+                }
+            }
+
+            dl.push_back(cmd);
         }
-        if (text_color_str.empty()) text_color_str = "black";
 
-        CairoColor tc = parse_css_color(text_color_str);
-        PaintCommand cmd;
-        cmd.type = PaintCmdType::DrawText;
-        cmd.pango_layout = box->pango_layout;
-        cmd.text_x = cx;
-        cmd.text_y = cy;
-        cmd.text_color = tc;
-        cmd.dom_node = node;
-        dl.push_back(cmd);
+        // Replaced elements
+        if (box->type == LayoutBoxType::Replaced && box->replaced_surface &&
+            box->content_rect.w > 0 && box->content_rect.h > 0) {
+            PaintCommand cmd;
+            cmd.type = PaintCmdType::DrawImage;
+            cmd.surface = box->replaced_surface;
+            cmd.dest_rect = {cx, cy, box->content_rect.w, box->content_rect.h};
+            cmd.natural_w = box->natural_width;
+            cmd.natural_h = box->natural_height;
+            cmd.object_fit = node ? node->object_fit : 0;
+            cmd.dom_node = node;
+            dl.push_back(cmd);
+        }
     }
 
-    // Replaced elements
-    if (box->type == LayoutBoxType::Replaced && box->replaced_surface &&
-        box->content_rect.w > 0 && box->content_rect.h > 0) {
-        PaintCommand cmd;
-        cmd.type = PaintCmdType::DrawImage;
-        cmd.surface = box->replaced_surface;
-        cmd.dest_rect = {cx, cy, box->content_rect.w, box->content_rect.h};
-        cmd.natural_w = box->natural_width;
-        cmd.natural_h = box->natural_height;
-        cmd.object_fit = node ? node->object_fit : 0;
-        cmd.dom_node = node;
-        dl.push_back(cmd);
-    }
-
-    // Children
-    // Apply scroll offset for overflow containers
+    // Children - sorted by z-index for paint order
     float child_offset_x = cx - box->scroll_x;
     float child_offset_y = cy - box->scroll_y;
 
-    for (auto& child : box->children) {
-        paint_box(child.get(), dl, child_offset_x, child_offset_y);
+    // Collect children indices and sort by z-index
+    std::vector<size_t> child_order;
+    for (size_t i = 0; i < box->children.size(); i++)
+        child_order.push_back(i);
+
+    // Sort: negative z-index first, then source order (z=0), then positive z-index
+    std::stable_sort(child_order.begin(), child_order.end(),
+        [&](size_t a, size_t b) {
+            return box->children[a]->z_index < box->children[b]->z_index;
+        });
+
+    for (size_t idx : child_order) {
+        paint_box(box->children[idx].get(), dl, child_offset_x, child_offset_y, skip_fixed);
     }
 
     // Pop clip
@@ -409,10 +644,29 @@ static void paint_box(LayoutBox* box, DisplayList& dl, float offset_x, float off
     }
 }
 
+// Collect fixed-position elements into a separate display list
+static void collect_fixed_boxes(LayoutBox* box, DisplayList& dl) {
+    if (!box) return;
+    if (box->position == 3) {
+        // Paint this fixed element at its absolute position
+        paint_box(box, dl, 0, 0, false);
+        return; // Don't recurse into children (already painted above)
+    }
+    for (auto& child : box->children)
+        collect_fixed_boxes(child.get(), dl);
+}
+
 DisplayList generate_display_list(LayoutBox* root) {
     DisplayList dl;
     if (!root) return dl;
-    paint_box(root, dl, 0, 0);
+    paint_box(root, dl, 0, 0, true); // skip fixed elements
+    return dl;
+}
+
+DisplayList generate_fixed_display_list(LayoutBox* root) {
+    DisplayList dl;
+    if (!root) return dl;
+    collect_fixed_boxes(root, dl);
     return dl;
 }
 
@@ -450,6 +704,36 @@ void render_display_list(cairo_t* cr, const DisplayList& dl, float scroll_x, flo
 
             case PaintCmdType::DrawText: {
                 if (!cmd.pango_layout) break;
+                // Text shadow (draw shadow copies first)
+                if (cmd.has_text_shadow) {
+                    cairo_save(cr);
+                    cairo_set_source_rgba(cr, cmd.ts_color.r, cmd.ts_color.g,
+                                           cmd.ts_color.b, cmd.ts_color.a);
+                    if (cmd.ts_blur > 0) {
+                        // Approximate blur by drawing multiple offset copies
+                        float blur = cmd.ts_blur;
+                        int steps = std::min(5, (int)(blur / 2) + 1);
+                        float alpha_per_step = cmd.ts_color.a / (steps * 2.0f + 1.0f);
+                        for (int dx = -steps; dx <= steps; dx++) {
+                            for (int dy = -steps; dy <= steps; dy++) {
+                                float d = sqrtf(dx*dx + dy*dy);
+                                if (d > steps) continue;
+                                float a = alpha_per_step * (1.0f - d / (steps + 1));
+                                cairo_set_source_rgba(cr, cmd.ts_color.r, cmd.ts_color.g,
+                                                       cmd.ts_color.b, a);
+                                cairo_move_to(cr, cmd.text_x + cmd.ts_offset_x + dx,
+                                                  cmd.text_y + cmd.ts_offset_y + dy);
+                                pango_cairo_show_layout(cr, cmd.pango_layout);
+                            }
+                        }
+                    } else {
+                        cairo_move_to(cr, cmd.text_x + cmd.ts_offset_x,
+                                          cmd.text_y + cmd.ts_offset_y);
+                        pango_cairo_show_layout(cr, cmd.pango_layout);
+                    }
+                    cairo_restore(cr);
+                }
+                // Normal text
                 cairo_set_source_rgba(cr, cmd.text_color.r, cmd.text_color.g,
                                        cmd.text_color.b, cmd.text_color.a);
                 cairo_move_to(cr, cmd.text_x, cmd.text_y);
@@ -609,6 +893,187 @@ void render_display_list(cairo_t* cr, const DisplayList& dl, float scroll_x, flo
             }
 
             case PaintCmdType::PopTranslate: {
+                cairo_restore(cr);
+                break;
+            }
+
+            case PaintCmdType::DrawBoxShadow: {
+                const auto& r = cmd.shadow_box_rect;
+                float ox = cmd.shadow_offset_x;
+                float oy = cmd.shadow_offset_y;
+                float blur = cmd.shadow_blur;
+                float spread = cmd.shadow_spread;
+                const auto& sc = cmd.shadow_color;
+                int radius = cmd.shadow_border_radius;
+
+                if (cmd.shadow_inset) {
+                    // Inset shadow: draw inside the box
+                    cairo_save(cr);
+                    // Clip to the box
+                    if (radius > 0) {
+                        float hr = std::min((float)radius, r.w / 2);
+                        float vr = std::min((float)radius, r.h / 2);
+                        cairo_new_path(cr);
+                        cairo_arc(cr, r.x + hr, r.y + vr, hr, M_PI, 1.5 * M_PI);
+                        cairo_arc(cr, r.x + r.w - hr, r.y + vr, hr, 1.5 * M_PI, 2 * M_PI);
+                        cairo_arc(cr, r.x + r.w - hr, r.y + r.h - vr, vr, 0, 0.5 * M_PI);
+                        cairo_arc(cr, r.x + hr, r.y + r.h - vr, vr, 0.5 * M_PI, M_PI);
+                        cairo_close_path(cr);
+                    } else {
+                        cairo_rectangle(cr, r.x, r.y, r.w, r.h);
+                    }
+                    cairo_clip(cr);
+
+                    // Draw a larger rectangle offset, creating inset shadow
+                    float pad = blur * 2 + spread;
+                    cairo_set_source_rgba(cr, sc.r, sc.g, sc.b, sc.a);
+                    cairo_rectangle(cr, r.x + ox - pad, r.y + oy - pad,
+                                    r.w + pad * 2, r.h + pad * 2);
+                    // Cut out the inner area
+                    cairo_rectangle(cr, r.x + spread + (ox > 0 ? ox : 0),
+                                    r.y + spread + (oy > 0 ? oy : 0),
+                                    r.w - spread * 2, r.h - spread * 2);
+                    cairo_set_fill_rule(cr, CAIRO_FILL_RULE_EVEN_ODD);
+                    cairo_fill(cr);
+                    cairo_set_fill_rule(cr, CAIRO_FILL_RULE_WINDING);
+                    cairo_restore(cr);
+                } else {
+                    // Outer shadow
+                    cairo_save(cr);
+                    float sr_x = r.x + ox - spread;
+                    float sr_y = r.y + oy - spread;
+                    float sr_w = r.w + spread * 2;
+                    float sr_h = r.h + spread * 2;
+
+                    if (blur > 0) {
+                        // Multi-pass blur approximation
+                        int steps = std::min(8, (int)(blur / 2) + 1);
+                        float step_alpha = sc.a / (float)(steps * 2 + 1);
+                        for (int i = steps; i >= 0; i--) {
+                            float expand = blur * i / steps;
+                            float a = step_alpha * (steps - i + 1) / steps;
+                            cairo_set_source_rgba(cr, sc.r, sc.g, sc.b, a);
+                            float ex = sr_x - expand;
+                            float ey = sr_y - expand;
+                            float ew = sr_w + expand * 2;
+                            float eh = sr_h + expand * 2;
+                            int er = radius + (int)expand;
+                            if (er > 0) {
+                                float hr = std::min((float)er, ew / 2);
+                                float vr = std::min((float)er, eh / 2);
+                                cairo_new_path(cr);
+                                cairo_arc(cr, ex + hr, ey + vr, hr, M_PI, 1.5 * M_PI);
+                                cairo_arc(cr, ex + ew - hr, ey + vr, hr, 1.5 * M_PI, 2 * M_PI);
+                                cairo_arc(cr, ex + ew - hr, ey + eh - vr, vr, 0, 0.5 * M_PI);
+                                cairo_arc(cr, ex + hr, ey + eh - vr, vr, 0.5 * M_PI, M_PI);
+                                cairo_close_path(cr);
+                                cairo_fill(cr);
+                            } else {
+                                cairo_rectangle(cr, ex, ey, ew, eh);
+                                cairo_fill(cr);
+                            }
+                        }
+                    } else {
+                        // Sharp shadow
+                        cairo_set_source_rgba(cr, sc.r, sc.g, sc.b, sc.a);
+                        if (radius > 0) {
+                            float hr = std::min((float)radius, sr_w / 2);
+                            float vr = std::min((float)radius, sr_h / 2);
+                            cairo_new_path(cr);
+                            cairo_arc(cr, sr_x + hr, sr_y + vr, hr, M_PI, 1.5 * M_PI);
+                            cairo_arc(cr, sr_x + sr_w - hr, sr_y + vr, hr, 1.5 * M_PI, 2 * M_PI);
+                            cairo_arc(cr, sr_x + sr_w - hr, sr_y + sr_h - vr, vr, 0, 0.5 * M_PI);
+                            cairo_arc(cr, sr_x + hr, sr_y + sr_h - vr, vr, 0.5 * M_PI, M_PI);
+                            cairo_close_path(cr);
+                            cairo_fill(cr);
+                        } else {
+                            cairo_rectangle(cr, sr_x, sr_y, sr_w, sr_h);
+                            cairo_fill(cr);
+                        }
+                    }
+                    cairo_restore(cr);
+                }
+                break;
+            }
+
+            case PaintCmdType::DrawBackgroundImage: {
+                if (!cmd.bg_surface) break;
+                const auto& r = cmd.bg_rect;
+                int sw = cairo_image_surface_get_width(cmd.bg_surface);
+                int sh = cairo_image_surface_get_height(cmd.bg_surface);
+                if (sw <= 0 || sh <= 0 || r.w <= 0 || r.h <= 0) break;
+
+                cairo_save(cr);
+                // Clip to the element box
+                if (cmd.border_radius > 0) {
+                    float hr = std::min((float)cmd.border_radius, r.w / 2);
+                    float vr = std::min((float)cmd.border_radius, r.h / 2);
+                    cairo_new_path(cr);
+                    cairo_arc(cr, r.x + hr, r.y + vr, hr, M_PI, 1.5 * M_PI);
+                    cairo_arc(cr, r.x + r.w - hr, r.y + vr, hr, 1.5 * M_PI, 2 * M_PI);
+                    cairo_arc(cr, r.x + r.w - hr, r.y + r.h - vr, vr, 0, 0.5 * M_PI);
+                    cairo_arc(cr, r.x + hr, r.y + r.h - vr, vr, 0.5 * M_PI, M_PI);
+                    cairo_close_path(cr);
+                    cairo_clip(cr);
+                } else {
+                    cairo_rectangle(cr, r.x, r.y, r.w, r.h);
+                    cairo_clip(cr);
+                }
+
+                // Determine draw size
+                float draw_w = (float)sw, draw_h = (float)sh;
+                if (cmd.bg_size_mode == "cover") {
+                    float scale = std::max(r.w / sw, r.h / sh);
+                    draw_w = sw * scale;
+                    draw_h = sh * scale;
+                } else if (cmd.bg_size_mode == "contain") {
+                    float scale = std::min(r.w / sw, r.h / sh);
+                    draw_w = sw * scale;
+                    draw_h = sh * scale;
+                } else if (!cmd.bg_size_mode.empty()) {
+                    // Try parse "Wpx Hpx" or percentage
+                    // Simple: just use natural size (already default)
+                }
+
+                // Position (default: top-left; center supported)
+                float px = r.x, py = r.y;
+                if (cmd.bg_position_str.find("center") != std::string::npos) {
+                    px = r.x + (r.w - draw_w) / 2;
+                    py = r.y + (r.h - draw_h) / 2;
+                }
+
+                // Repeat
+                bool repeat_x = (cmd.bg_repeat_mode != "no-repeat" && cmd.bg_repeat_mode != "repeat-y");
+                bool repeat_y = (cmd.bg_repeat_mode != "no-repeat" && cmd.bg_repeat_mode != "repeat-x");
+
+                float sx = draw_w / sw, sy = draw_h / sh;
+
+                if (!repeat_x && !repeat_y) {
+                    // Single image
+                    cairo_save(cr);
+                    cairo_translate(cr, px, py);
+                    cairo_scale(cr, sx, sy);
+                    cairo_set_source_surface(cr, cmd.bg_surface, 0, 0);
+                    cairo_paint(cr);
+                    cairo_restore(cr);
+                } else {
+                    // Tiled
+                    float start_x = repeat_x ? r.x - fmod(r.x - px, draw_w) - draw_w : px;
+                    float start_y = repeat_y ? r.y - fmod(r.y - py, draw_h) - draw_h : py;
+                    float end_x = repeat_x ? r.x + r.w : px + draw_w;
+                    float end_y = repeat_y ? r.y + r.h : py + draw_h;
+
+                    for (float ty = start_y; ty < end_y; ty += draw_h) {
+                        for (float tx = start_x; tx < end_x; tx += draw_w) {
+                            cairo_save(cr);
+                            cairo_translate(cr, tx, ty);
+                            cairo_scale(cr, sx, sy);
+                            cairo_set_source_surface(cr, cmd.bg_surface, 0, 0);
+                            cairo_paint(cr);
+                            cairo_restore(cr);
+                        }
+                    }
+                }
                 cairo_restore(cr);
                 break;
             }

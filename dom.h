@@ -78,6 +78,7 @@ struct DOMNode {
     int pos_right = INT_MIN;
     int pos_bottom = INT_MIN;
     int z_index = 0;
+    int visibility = 0;    // 0=visible, 1=hidden, 2=collapse
 
     // Box model (for block elements)
     int margin[4]  = {0,0,0,0};
