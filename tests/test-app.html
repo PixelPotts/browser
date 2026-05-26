@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>NoteSketch - Stage 10</title>
+<title>NoteSketch - Stage 11</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
@@ -82,8 +82,8 @@ body {
 .sidebar-footer {
   padding: 12px;
   border-top: 1px solid #334155;
-  font-size: 13px;
-  color: #94a3b8;
+  display: flex;
+  gap: 8px;
 }
 
 .main {
@@ -191,16 +191,39 @@ body {
   color: white;
 }
 
-.sidebar-footer {
-  display: flex;
-  gap: 8px;
-}
-
 .status-bar {
   padding: 6px 16px;
   background: #0ea5e9;
   color: white;
   font-size: 12px;
+}
+
+.tags {
+  display: flex;
+  gap: 4px;
+  margin-top: 4px;
+}
+.tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: #334155;
+  color: #94a3b8;
+  font-size: 11px;
+}
+
+.toast {
+  padding: 10px 20px;
+  background: #22c55e;
+  color: white;
+  border-radius: 6px;
+  font-size: 13px;
+  position: absolute;
+  bottom: 50px;
+  right: 20px;
+}
+.toast-error {
+  background: #ef4444;
 }
 </style>
 </head>
@@ -213,24 +236,24 @@ body {
 <div class="app-body">
   <div class="sidebar">
     <div class="sidebar-header">
-      <input type="text" placeholder="Search notes...">
+      <input type="text" id="searchInput" placeholder="Search notes...">
     </div>
     <div class="note-list" id="noteList">
     </div>
     <div class="sidebar-footer">
-      <span class="btn btn-primary">+ New Note</span>
-      <span class="btn">Export</span>
+      <span class="btn btn-primary" id="btnNew">+ New</span>
+      <span class="btn" id="btnExport">Export</span>
     </div>
   </div>
   <div class="main">
     <div class="toolbar">
-      <input type="text" placeholder="Note title...">
-      <span class="btn">+ Tag</span>
-      <span class="btn btn-danger">Delete</span>
+      <input type="text" id="titleInput" placeholder="Note title...">
+      <span class="btn" id="btnTag">+ Tag</span>
+      <span class="btn btn-danger" id="btnDelete">Delete</span>
     </div>
     <div class="editor-area">
       <div class="text-editor">
-        <textarea placeholder="Start typing your note..."></textarea>
+        <textarea id="editor" placeholder="Start typing your note..."></textarea>
       </div>
       <div class="canvas-panel">
         <div class="canvas-label">Sketch Pad</div>
@@ -242,54 +265,237 @@ body {
           <div class="swatch" style="background: #3b82f6;"></div>
           <div class="swatch" style="background: #eab308;"></div>
         </div>
+        <span class="btn" id="btnClearCanvas" style="margin-top: 8px;">Clear Canvas</span>
       </div>
     </div>
-    <div class="main-status">
+    <div class="main-status" id="statusBar">
       0 words, 0 chars
     </div>
   </div>
 </div>
 
 <div class="status-bar">
-  <span>Stage 10: Canvas drawing + color swatches</span>
+  <span id="globalStatus">Stage 11: Full interactivity</span>
 </div>
 
 <script>
+// ---- Data Model ----
 var notes = [
-  { title: "Welcome to NoteSketch", preview: "This is a demo app that exercises...", active: true },
-  { title: "Shopping List", preview: "Milk, Eggs, Bread, Coffee..." },
-  { title: "Meeting Notes", preview: "Q3 Planning - Review roadmap..." },
-  { title: "Ideas", preview: "Random thoughts and brainstorms..." },
-  { title: "Todo", preview: "Fix layout engine, add buttons..." }
+  { id: 1, title: "Welcome to NoteSketch", body: "This is a demo app that exercises the full layout engine.\n\nTry clicking notes, editing text, and drawing on the canvas!", tags: ["demo", "welcome"] },
+  { id: 2, title: "Shopping List", body: "Milk\nEggs\nBread\nCoffee\nButter", tags: ["personal"] },
+  { id: 3, title: "Meeting Notes", body: "Q3 Planning - Review roadmap\n- Discuss priorities\n- Assign tasks\n- Set deadlines", tags: ["work"] },
+  { id: 4, title: "Ideas", body: "Random thoughts and brainstorms...\n- New feature: dark mode toggle\n- Better search with fuzzy matching", tags: [] },
+  { id: 5, title: "Todo", body: "Fix layout engine\nAdd buttons\nCanvas drawing\nFull interactivity", tags: ["dev"] }
 ];
+var activeNoteId = 1;
+var nextId = 6;
+var searchTerm = "";
+
+// ---- DOM References ----
+var noteList = document.getElementById("noteList");
+var titleInput = document.getElementById("titleInput");
+var editor = document.getElementById("editor");
+var statusBar = document.getElementById("statusBar");
+var searchInput = document.getElementById("searchInput");
+var globalStatus = document.getElementById("globalStatus");
+
+// ---- Render Notes ----
+function getActiveNote() {
+  for (var i = 0; i < notes.length; i++) {
+    if (notes[i].id === activeNoteId) return notes[i];
+  }
+  return null;
+}
+
+function getFilteredNotes() {
+  if (!searchTerm) return notes;
+  var term = searchTerm.toLowerCase();
+  var result = [];
+  for (var i = 0; i < notes.length; i++) {
+    if (notes[i].title.toLowerCase().indexOf(term) >= 0 ||
+        notes[i].body.toLowerCase().indexOf(term) >= 0) {
+      result.push(notes[i]);
+    }
+  }
+  return result;
+}
 
 function renderNotes() {
-  var list = document.getElementById("noteList");
-  list.innerHTML = "";
-  for (var i = 0; i < notes.length; i++) {
+  noteList.innerHTML = "";
+  var filtered = getFilteredNotes();
+  for (var i = 0; i < filtered.length; i++) {
+    var note = filtered[i];
     var item = document.createElement("div");
-    item.className = "note-item";
-    if (notes[i].active) {
-      item.className = "note-item active";
-    }
+    item.className = note.id === activeNoteId ? "note-item active" : "note-item";
+    item.setAttribute("data-id", note.id);
 
     var title = document.createElement("div");
     title.className = "note-title";
-    title.innerText = notes[i].title;
+    title.innerText = note.title;
     item.appendChild(title);
 
     var preview = document.createElement("div");
     preview.className = "note-preview";
-    preview.innerText = notes[i].preview;
+    var previewText = note.body.substring(0, 40);
+    if (note.body.length > 40) previewText += "...";
+    preview.innerText = previewText;
     item.appendChild(preview);
 
-    list.appendChild(item);
+    // Tags
+    if (note.tags && note.tags.length > 0) {
+      var tagsDiv = document.createElement("div");
+      tagsDiv.className = "tags";
+      for (var t = 0; t < note.tags.length; t++) {
+        var tag = document.createElement("span");
+        tag.className = "tag";
+        tag.innerText = note.tags[t];
+        tagsDiv.appendChild(tag);
+      }
+      item.appendChild(tagsDiv);
+    }
+
+    noteList.appendChild(item);
   }
 }
 
-renderNotes();
+function loadNote(note) {
+  if (!note) return;
+  activeNoteId = note.id;
+  titleInput.value = note.title;
+  editor.value = note.body;
+  updateWordCount();
+  renderNotes();
+}
 
-// Canvas drawing
+function updateWordCount() {
+  var text = editor.value || "";
+  var chars = text.length;
+  var words = text.trim() ? text.trim().split(/\s+/).length : 0;
+  statusBar.innerText = words + " words, " + chars + " chars";
+}
+
+// ---- Auto-save ----
+var saveTimer = null;
+function scheduleSave() {
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(function() {
+    var note = getActiveNote();
+    if (note) {
+      note.title = titleInput.value;
+      note.body = editor.value;
+      renderNotes();
+      showToast("Saved");
+    }
+  }, 1000);
+}
+
+// ---- Toast Notifications ----
+function showToast(msg, isError) {
+  var existing = document.getElementById("toast");
+  if (existing) existing.parentNode.removeChild(existing);
+
+  var toast = document.createElement("div");
+  toast.id = "toast";
+  toast.className = isError ? "toast toast-error" : "toast";
+  toast.innerText = msg;
+  document.body.appendChild(toast);
+
+  setTimeout(function() {
+    var el = document.getElementById("toast");
+    if (el) el.parentNode.removeChild(el);
+  }, 2000);
+}
+
+// ---- Event Handlers ----
+
+// Note selection
+noteList.addEventListener("click", function(e) {
+  var target = e.target;
+  while (target && !target.getAttribute("data-id")) {
+    target = target.parentNode;
+    if (target === noteList) { target = null; break; }
+  }
+  if (target) {
+    var id = parseInt(target.getAttribute("data-id"));
+    for (var i = 0; i < notes.length; i++) {
+      if (notes[i].id === id) {
+        loadNote(notes[i]);
+        break;
+      }
+    }
+  }
+});
+
+// New note
+document.getElementById("btnNew").addEventListener("click", function() {
+  var newNote = {
+    id: nextId++,
+    title: "Untitled Note",
+    body: "",
+    tags: []
+  };
+  notes.unshift(newNote);
+  loadNote(newNote);
+  showToast("New note created");
+});
+
+// Delete note
+document.getElementById("btnDelete").addEventListener("click", function() {
+  if (notes.length <= 1) {
+    showToast("Cannot delete last note", true);
+    return;
+  }
+  for (var i = 0; i < notes.length; i++) {
+    if (notes[i].id === activeNoteId) {
+      notes.splice(i, 1);
+      break;
+    }
+  }
+  loadNote(notes[0]);
+  showToast("Note deleted");
+});
+
+// Add tag
+document.getElementById("btnTag").addEventListener("click", function() {
+  var note = getActiveNote();
+  if (!note) return;
+  var tagNames = ["work", "personal", "dev", "urgent", "idea"];
+  var newTag = tagNames[Math.floor(Math.random() * tagNames.length)];
+  if (note.tags.indexOf(newTag) < 0) {
+    note.tags.push(newTag);
+    renderNotes();
+    showToast("Tag '" + newTag + "' added");
+  }
+});
+
+// Export
+document.getElementById("btnExport").addEventListener("click", function() {
+  var text = "";
+  for (var i = 0; i < notes.length; i++) {
+    text += "# " + notes[i].title + "\n" + notes[i].body + "\n\n";
+  }
+  console.log("EXPORT:\n" + text);
+  showToast("Exported " + notes.length + " notes to console");
+});
+
+// Search
+searchInput.addEventListener("input", function() {
+  searchTerm = searchInput.value;
+  renderNotes();
+});
+
+// Title edit
+titleInput.addEventListener("input", function() {
+  scheduleSave();
+});
+
+// Editor
+editor.addEventListener("input", function() {
+  updateWordCount();
+  scheduleSave();
+});
+
+// ---- Canvas Drawing ----
 var canvas = document.getElementById("sketchCanvas");
 var ctx = canvas.getContext("2d");
 var drawing = false;
@@ -315,6 +521,12 @@ canvas.addEventListener("mouseup", function() {
   drawing = false;
 });
 
+// Clear canvas
+document.getElementById("btnClearCanvas").addEventListener("click", function() {
+  ctx.clearRect(0, 0, 288, 200);
+  showToast("Canvas cleared");
+});
+
 // Color swatch selection
 var swatches = document.getElementById("swatches");
 var swatchEls = swatches.children;
@@ -332,6 +544,10 @@ for (var i = 0; i < swatchEls.length; i++) {
     });
   })(i);
 }
+
+// ---- Initialize ----
+loadNote(getActiveNote());
+globalStatus.innerText = "Stage 11: Ready — " + notes.length + " notes";
 </script>
 
 </body>

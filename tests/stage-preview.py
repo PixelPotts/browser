@@ -2,9 +2,9 @@
 """Stage wireframe preview - shows what the browser SHOULD render."""
 import tkinter as tk
 
-def draw_stage_10():
+def draw_stage_11():
     root = tk.Tk()
-    root.title("EXPECTED: Stage 10 - Canvas Drawing + Color Swatches")
+    root.title("EXPECTED: Stage 11 - Full Interactivity")
     root.geometry("800x600")
     root.configure(bg="#222")
 
@@ -23,12 +23,12 @@ def draw_stage_10():
     # Status bar
     S_TOP = VB - 28
     c.create_rectangle(VL, S_TOP, VR, VB, fill="#0ea5e9", outline="")
-    c.create_text(VL+16, S_TOP+14, text="Stage 10: Canvas drawing + color swatches", anchor="w", fill="white", font=("sans-serif", 9))
+    c.create_text(VL+16, S_TOP+14, text="Stage 11: Ready - 5 notes", anchor="w", fill="white", font=("sans-serif", 9))
 
     BODY_TOP = H_BOTTOM
     BODY_BOTTOM = S_TOP
 
-    # === Sidebar (same as stage 9) ===
+    # === Sidebar ===
     SH_H = 44
     SF_H = 44
     c.create_rectangle(VL, BODY_TOP, SB_RIGHT, BODY_TOP + SH_H, fill="#1e293b", outline="#334155")
@@ -40,28 +40,36 @@ def draw_stage_10():
     c.create_rectangle(VL, LIST_TOP, SB_RIGHT, LIST_BOTTOM, fill="#1e293b", outline="")
 
     notes = [
-        ("Welcome to NoteSketch", True),
-        ("Shopping List", False),
-        ("Meeting Notes", False),
-        ("Ideas", False),
-        ("Todo", False),
+        ("Welcome to NoteSketch", ["demo", "welcome"], True),
+        ("Shopping List", ["personal"], False),
+        ("Meeting Notes", ["work"], False),
+        ("Ideas", [], False),
+        ("Todo", ["dev"], False),
     ]
     ni_y = LIST_TOP + 8
-    ni_h = 34
-    for title, active in notes:
+    for title, tags, active in notes:
         bg = "#0ea5e9" if active else "#1e293b"
         tc = "white" if active else "#e2e8f0"
+        ni_h = 46 if tags else 34
         c.create_rectangle(VL+8, ni_y, SB_RIGHT-8, ni_y+ni_h, fill=bg, outline="")
-        c.create_text(VL+18, ni_y+ni_h//2, text=title, anchor="w", fill=tc, font=("sans-serif", 8))
+        c.create_text(VL+18, ni_y+12, text=title, anchor="w", fill=tc, font=("sans-serif", 8))
+        c.create_text(VL+18, ni_y+24, text="Preview text...", anchor="w", fill="#e0f2fe" if active else "#94a3b8", font=("sans-serif", 7))
+        if tags:
+            tx = VL + 18
+            for tag in tags:
+                tw = len(tag) * 6 + 12
+                c.create_rectangle(tx, ni_y+32, tx+tw, ni_y+44, fill="#334155" if not active else "#0284c7", outline="")
+                c.create_text(tx+tw//2, ni_y+38, text=tag, fill="#94a3b8" if not active else "#e0f2fe", font=("sans-serif", 6))
+                tx += tw + 4
         ni_y += ni_h + 4
 
     c.create_rectangle(VL, BODY_BOTTOM - SF_H, SB_RIGHT, BODY_BOTTOM, fill="#1e293b", outline="#334155")
     btn_y = BODY_BOTTOM - SF_H + 10
     btn_h = 24
-    c.create_rectangle(VL+12, btn_y, VL+95, btn_y+btn_h, fill="#0ea5e9", outline="#0284c7")
-    c.create_text(VL+53, btn_y+btn_h//2, text="+ New Note", fill="white", font=("sans-serif", 8))
-    c.create_rectangle(VL+103, btn_y, VL+160, btn_y+btn_h, fill="#334155", outline="#475569")
-    c.create_text(VL+131, btn_y+btn_h//2, text="Export", fill="#e2e8f0", font=("sans-serif", 8))
+    c.create_rectangle(VL+12, btn_y, VL+78, btn_y+btn_h, fill="#0ea5e9", outline="#0284c7")
+    c.create_text(VL+45, btn_y+btn_h//2, text="+ New", fill="white", font=("sans-serif", 8))
+    c.create_rectangle(VL+86, btn_y, VL+143, btn_y+btn_h, fill="#334155", outline="#475569")
+    c.create_text(VL+114, btn_y+btn_h//2, text="Export", fill="#e2e8f0", font=("sans-serif", 8))
 
     c.create_line(SB_RIGHT, BODY_TOP, SB_RIGHT, BODY_BOTTOM, fill="#334155", width=1)
 
@@ -73,7 +81,7 @@ def draw_stage_10():
     inp_left = SB_RIGHT + 16
     inp_right = VR - 170
     c.create_rectangle(inp_left, BODY_TOP+8, inp_right, BODY_TOP+TB_H-8, fill="#0f172a", outline="#475569")
-    c.create_text(inp_left+12, BODY_TOP+TB_H//2, text="Note title...", anchor="w", fill="#64748b", font=("sans-serif", 9))
+    c.create_text(inp_left+12, BODY_TOP+TB_H//2, text="Welcome to NoteSketch", anchor="w", fill="#e2e8f0", font=("sans-serif", 9))
     bx = inp_right + 12
     c.create_rectangle(bx, BODY_TOP+8, bx+50, BODY_TOP+TB_H-8, fill="#334155", outline="#475569")
     c.create_text(bx+25, BODY_TOP+TB_H//2, text="+ Tag", fill="#e2e8f0", font=("sans-serif", 8))
@@ -90,23 +98,19 @@ def draw_stage_10():
     c.create_rectangle(SB_RIGHT, ED_TOP, CP_LEFT, ED_BOTTOM, fill="#0f172a", outline="")
     ta_m = 16
     c.create_rectangle(SB_RIGHT+ta_m, ED_TOP+ta_m, CP_LEFT-ta_m, ED_BOTTOM-ta_m, fill="#1e293b", outline="#475569")
-    c.create_text(SB_RIGHT+ta_m+12, ED_TOP+ta_m+14, text="Start typing your note...", anchor="w", fill="#64748b", font=("sans-serif", 9))
+    c.create_text(SB_RIGHT+ta_m+12, ED_TOP+ta_m+14, text="This is a demo app that exercises", anchor="w", fill="#e2e8f0", font=("sans-serif", 9))
+    c.create_text(SB_RIGHT+ta_m+12, ED_TOP+ta_m+30, text="the full layout engine.", anchor="w", fill="#e2e8f0", font=("sans-serif", 9))
 
     # Canvas panel
     c.create_rectangle(CP_LEFT, ED_TOP, VR, ED_BOTTOM, fill="#1e293b", outline="")
     c.create_line(CP_LEFT, ED_TOP, CP_LEFT, ED_BOTTOM, fill="#334155", width=1)
     c.create_text(CP_LEFT+16, ED_TOP+16, text="Sketch Pad", anchor="w", fill="#94a3b8", font=("sans-serif", 9))
 
-    # Canvas with sample drawing
     cv_top = ED_TOP + 36
-    cv_h = min(180, ED_BOTTOM - cv_top - 60)
+    cv_h = min(180, ED_BOTTOM - cv_top - 80)
     c.create_rectangle(CP_LEFT+16, cv_top, VR-16, cv_top+cv_h, fill="#0f172a", outline="#475569")
-    # Sample squiggle to show it's drawable
-    pts = [CP_LEFT+40, cv_top+30, CP_LEFT+60, cv_top+60, CP_LEFT+90, cv_top+40,
-           CP_LEFT+110, cv_top+80, CP_LEFT+130, cv_top+50]
-    c.create_line(*pts, fill="#e2e8f0", width=3, smooth=True)
 
-    # Color swatches below canvas
+    # Color swatches
     sw_y = cv_top + cv_h + 12
     sw_size = 20
     colors = ["#e2e8f0", "#ef4444", "#22c55e", "#3b82f6", "#eab308"]
@@ -116,13 +120,22 @@ def draw_stage_10():
         c.create_rectangle(sx, sw_y, sx+sw_size, sw_y+sw_size, fill=col, outline=outline, width=2)
         sx += sw_size + 6
 
+    # Clear canvas button
+    clr_y = sw_y + sw_size + 8
+    c.create_rectangle(CP_LEFT+16, clr_y, CP_LEFT+120, clr_y+24, fill="#334155", outline="#475569")
+    c.create_text(CP_LEFT+68, clr_y+12, text="Clear Canvas", fill="#e2e8f0", font=("sans-serif", 8))
+
     # Main status
     c.create_rectangle(SB_RIGHT, BODY_BOTTOM - MS_H, VR, BODY_BOTTOM, fill="#1e293b", outline="#334155")
-    c.create_text(SB_RIGHT+16, BODY_BOTTOM - MS_H//2, text="0 words, 0 chars", anchor="w", fill="#94a3b8", font=("sans-serif", 8))
+    c.create_text(SB_RIGHT+16, BODY_BOTTOM - MS_H//2, text="22 words, 115 chars", anchor="w", fill="#94a3b8", font=("sans-serif", 8))
 
-    c.create_text(400, 595, text="NEW: Canvas drawing (mouse events) + clickable color swatches (inline-block, fixed size)", fill="#aaa", font=("sans-serif", 8))
+    # Toast notification (semi-transparent overlay indicator)
+    c.create_rectangle(VR-140, BODY_BOTTOM-50, VR-10, BODY_BOTTOM-22, fill="#22c55e", outline="")
+    c.create_text(VR-75, BODY_BOTTOM-36, text="Saved", fill="white", font=("sans-serif", 9))
+
+    c.create_text(400, 595, text="FULL: Note select, new/delete, search, auto-save, tags, toast, word count, canvas clear", fill="#aaa", font=("sans-serif", 8))
 
     root.mainloop()
 
 if __name__ == "__main__":
-    draw_stage_10()
+    draw_stage_11()
