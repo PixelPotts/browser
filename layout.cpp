@@ -1614,10 +1614,15 @@ static void layout_absolute_children(LayoutBox* box, float viewport_width, float
                         - child->border.horizontal();
                     if (w < 0) w = 0;
                 } else {
-                    // Shrink-to-fit: use containing width
-                    w = cb_w - child->margin.horizontal() - child->padding.horizontal()
+                    // Shrink-to-fit: measure intrinsic width, capped by available
+                    float avail = cb_w - child->margin.horizontal() - child->padding.horizontal()
                         - child->border.horizontal();
-                    if (w < 0) w = 0;
+                    if (avail < 0) avail = 0;
+                    float intrinsic = measure_intrinsic_width(child.get(), pango_ctx);
+                    // intrinsic includes padding+border, remove them for content width
+                    intrinsic -= child->padding.horizontal() + child->border.horizontal();
+                    if (intrinsic < 0) intrinsic = 0;
+                    w = std::min(intrinsic, avail);
                 }
             }
             child->content_rect.w = w;
