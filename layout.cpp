@@ -1583,6 +1583,10 @@ static void layout_absolute_children(LayoutBox* box, float viewport_width, float
 
     for (auto& child : box->children) {
         if (child->position == 2 || child->position == 3) {
+            // CSS spec: absolute/fixed elements are blockified
+            if (child->type == LayoutBoxType::Inline || child->type == LayoutBoxType::InlineBlock)
+                child->type = LayoutBoxType::Block;
+
             // Determine containing block
             float cb_w, cb_h, cb_x, cb_y;
             if (child->position == 3) {
