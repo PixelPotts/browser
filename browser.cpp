@@ -2040,6 +2040,7 @@ struct TabState {
     float scroll_x = 0, scroll_y = 0;           // viewport scroll position
     float content_height = 0;                    // total page height for scrollbar
     float viewport_width = 1100;                 // current viewport width
+    float viewport_height = 800;                 // current viewport height
     std::vector<CSSRule> css_rules;              // parsed CSS rules for re-cascade
 
     // Inspector panel
@@ -3991,9 +3992,10 @@ static void layout_and_paint(TabState* tab) {
     if (tab->scroll && gtk_widget_get_realized(tab->scroll)) {
         GtkAllocation alloc;
         gtk_widget_get_allocation(tab->scroll, &alloc);
-        if (alloc.height > 10) g_viewport_h = (float)alloc.height;
+        if (alloc.height > 10) { g_viewport_h = (float)alloc.height; tab->viewport_height = (float)alloc.height; }
     }
     if (g_viewport_h <= 10) g_viewport_h = 800.0f;
+    if (tab->viewport_height <= 10) tab->viewport_height = g_viewport_h;
 
     // Update root font-size for rem units (from <html> or body element)
     if (start && start->parent && start->parent->fs_computed > 0)
@@ -4045,7 +4047,7 @@ static void layout_and_paint(TabState* tab) {
     }
 
     // Perform layout
-    perform_layout(tab->layout_root.get(), tab->viewport_width, 0, tab->pango_ctx);
+    perform_layout(tab->layout_root.get(), tab->viewport_width, tab->viewport_height, tab->pango_ctx);
 
     fprintf(stderr, "[LAYOUT] Layout done: content_rect=(%.0f, %.0f, %.0f, %.0f)\n",
             tab->layout_root->content_rect.x, tab->layout_root->content_rect.y,
