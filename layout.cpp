@@ -105,6 +105,10 @@ static void copy_style(LayoutBox* box, DOMNode* node) {
     box->line_height_factor = node->lh_computed > 0 ? node->lh_computed : 1.2;
     box->overflow = node->overflow >= 0 ? node->overflow : 0;
     box->z_index = node->z_index;
+    box->pos_top = node->pos_top;
+    box->pos_left = node->pos_left;
+    box->pos_right = node->pos_right;
+    box->pos_bottom = node->pos_bottom;
     box->border_color = node->border_color;
     box->border_style = node->border_style;
     box->text_decoration = node->text_decoration > 0 ? node->text_decoration : 0;
@@ -1564,6 +1568,24 @@ static void layout_flex(LayoutBox* box, float containing_width, float containing
     box->scroll_height = box->content_rect.h;
 }
 
+// ---- Apply position: relative offsets (visual shift, element keeps its flow space) ----
+
+static void apply_relative_offsets(LayoutBox* box) {
+    if (!box) return;
+    if (box->position == 1) { // relative
+        if (box->pos_left != INT_MIN)
+            box->content_rect.x += box->pos_left;
+        else if (box->pos_right != INT_MIN)
+            box->content_rect.x -= box->pos_right;
+        if (box->pos_top != INT_MIN)
+            box->content_rect.y += box->pos_top;
+        else if (box->pos_bottom != INT_MIN)
+            box->content_rect.y -= box->pos_bottom;
+    }
+    for (auto& child : box->children)
+        apply_relative_offsets(child.get());
+}
+
 // ---- Top-level layout ----
 
 void perform_layout(LayoutBox* root, float viewport_width, float viewport_height,
@@ -1580,6 +1602,9 @@ void perform_layout(LayoutBox* root, float viewport_width, float viewport_height
     // Re-set root position after margin:auto may have updated margins
     root->content_rect.x = root->margin.left + root->padding.left + root->border.left;
     root->content_rect.y = root->margin.top + root->padding.top + root->border.top;
+
+    // Apply position: relative offsets (visual shift only)
+    apply_relative_offsets(root);
 
     // Compute absolute positions
     root->compute_abs_positions(0, 0);

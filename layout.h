@@ -4,6 +4,7 @@
 #include <memory>
 #include <cstdint>
 #include <cmath>
+#include <climits>
 #include <functional>
 #include <gtk/gtk.h>
 #include <pango/pango.h>
@@ -117,6 +118,7 @@ struct LayoutBox {
     std::string border_style;
     int z_index = 0;
     int text_decoration = 0;  // bitmask: 1=underline, 2=overline, 4=line-through
+    int pos_top = INT_MIN, pos_left = INT_MIN, pos_right = INT_MIN, pos_bottom = INT_MIN;
 
     // Cleanup
     ~LayoutBox();

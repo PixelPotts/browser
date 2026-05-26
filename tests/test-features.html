@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Feature Tests</title>
+<style>
+body { font-family: sans-serif; margin: 20px; background: #f5f5f5; }
+h2 { color: #333; margin-top: 30px; }
+.section { background: white; border: 1px solid #ddd; border-radius: 8px; padding: 20px; margin: 15px 0; }
+.box { padding: 10px; width: 150px; text-align: center; color: white; }
+
+/* Feature 1: position: relative */
+.rel-normal { background: #3498db; }
+.rel-shifted { position: relative; top: 10px; left: 20px; background: #e74c3c; }
+.rel-after { background: #2ecc71; }
+</style>
+</head>
+<body>
+
+<h2>Feature 1: position: relative</h2>
+<div class="section">
+    <p>Red box should be shifted 10px down and 20px right from its normal position.</p>
+    <p>Green box should be in its normal position (as if red box was NOT shifted).</p>
+    <div class="box rel-normal">Normal (blue)</div>
+    <div class="box rel-shifted">Shifted (red)</div>
+    <div class="box rel-after">After (green)</div>
+</div>
+
+</body>
+</html>
