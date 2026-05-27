@@ -389,7 +389,17 @@ static void paint_box(LayoutBox* box, DisplayList& dl, float offset_x, float off
     float child_offset_x = cx - box->scroll_x;
     float child_offset_y = cy - box->scroll_y;
 
-    for (auto& child : box->children) {
+    // Build sorted index list by z-index for correct paint order
+    // CSS paint order: negative z-index, then z-index 0/auto (tree order), then positive z-index
+    std::vector<size_t> paint_order(box->children.size());
+    for (size_t i = 0; i < paint_order.size(); i++) paint_order[i] = i;
+    std::stable_sort(paint_order.begin(), paint_order.end(),
+        [&](size_t a, size_t b) {
+            return box->children[a]->z_index < box->children[b]->z_index;
+        });
+
+    for (size_t idx : paint_order) {
+        auto& child = box->children[idx];
         // Skip position:fixed children — they go into a separate display list
         if (child->position == 3) continue;
         paint_box(child.get(), dl, child_offset_x, child_offset_y);
