@@ -228,6 +228,26 @@ std::unique_ptr<LayoutBox> build_layout_tree(DOMNode* node, PangoContext* pango_
         }
     }
 
+    // ::before pseudo-element: inject content as first inline child
+    if (!node->before_content.empty()) {
+        auto pseudo = std::make_unique<LayoutBox>();
+        pseudo->type = LayoutBoxType::Text;
+        pseudo->dom_node = node;  // inherit styles from parent
+        pseudo->text = node->before_content;
+        pseudo->parent = box.get();
+        box->children.insert(box->children.begin(), std::move(pseudo));
+    }
+
+    // ::after pseudo-element: inject content as last inline child
+    if (!node->after_content.empty()) {
+        auto pseudo = std::make_unique<LayoutBox>();
+        pseudo->type = LayoutBoxType::Text;
+        pseudo->dom_node = node;  // inherit styles from parent
+        pseudo->text = node->after_content;
+        pseudo->parent = box.get();
+        box->children.push_back(std::move(pseudo));
+    }
+
     // Form controls: synthesize text box from value/placeholder for rendering
     if (box->children.empty() && (tag == "input" || tag == "textarea")) {
         std::string display_text;

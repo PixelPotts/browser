@@ -38,6 +38,17 @@ h2 { color: #333; margin-top: 30px; }
     padding: 5px 10px;
     border-radius: 4px;
 }
+/* Feature 5: ::before / ::after */
+.quote-box::before {
+    content: ">> ";
+}
+.quote-box::after {
+    content: " <<";
+}
+.required-label::after {
+    content: " *";
+}
+
 /* Feature 4: z-index */
 .z-container {
     position: relative;
@@ -90,6 +101,13 @@ h2 { color: #333; margin-top: 30px; }
         <span class="abs-bottom-left">Bottom Left</span>
         <p style="padding: 10px;">Container content</p>
     </div>
+</div>
+
+<h2>Feature 5: ::before / ::after</h2>
+<div class="section">
+    <p>The blockquote should have >> before and << after. The label should have an asterisk.</p>
+    <blockquote class="quote-box" style="font-style: italic; font-size: 18px; color: #555; margin: 10px 40px;">To be or not to be, that is the question</blockquote>
+    <p class="required-label" style="font-weight: bold;">Email Address</p>
 </div>
 
 <h2>Feature 4: z-index</h2>
