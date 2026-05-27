@@ -38,6 +38,17 @@ h2 { color: #333; margin-top: 30px; }
     padding: 5px 10px;
     border-radius: 4px;
 }
+/* Feature 3: position: fixed */
+.fixed-header {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    background: rgba(52, 73, 94, 0.95);
+    color: white;
+    padding: 10px 20px;
+    z-index: 100;
+}
 </style>
 </head>
 <body>
@@ -60,6 +71,19 @@ h2 { color: #333; margin-top: 30px; }
         <p style="padding: 10px;">Container content</p>
     </div>
 </div>
+
+<h2>Feature 3: position: fixed</h2>
+<div class="section">
+    <p>The dark header bar at the top of the page should stay visible when you scroll down.</p>
+    <p>Scroll down to verify it remains fixed at the top of the viewport.</p>
+    <div style="height: 800px; background: linear-gradient(to bottom, #ecf0f1, #bdc3c7); padding: 20px;">
+        <p>Tall content area to enable scrolling. The fixed header should stay visible above.</p>
+        <p style="margin-top: 300px;">Mid-point of scroll area.</p>
+        <p style="margin-top: 300px;">Near the bottom of scroll area.</p>
+    </div>
+</div>
+
+<div class="fixed-header">Fixed Header - Should Stay At Top When Scrolling</div>
 
 </body>
 </html>

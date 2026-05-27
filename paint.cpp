@@ -390,6 +390,8 @@ static void paint_box(LayoutBox* box, DisplayList& dl, float offset_x, float off
     float child_offset_y = cy - box->scroll_y;
 
     for (auto& child : box->children) {
+        // Skip position:fixed children — they go into a separate display list
+        if (child->position == 3) continue;
         paint_box(child.get(), dl, child_offset_x, child_offset_y);
     }
 
@@ -413,6 +415,31 @@ DisplayList generate_display_list(LayoutBox* root) {
     DisplayList dl;
     if (!root) return dl;
     paint_box(root, dl, 0, 0);
+    return dl;
+}
+
+// Collect fixed-position elements into a separate display list
+static void collect_fixed_boxes(LayoutBox* box, DisplayList& dl, float offset_x, float offset_y) {
+    if (!box) return;
+    float cx = box->content_rect.x + offset_x;
+    float cy = box->content_rect.y + offset_y;
+    float child_offset_x = cx - box->scroll_x;
+    float child_offset_y = cy - box->scroll_y;
+
+    for (auto& child : box->children) {
+        if (child->position == 3) {
+            // Paint at viewport-relative position (content_rect was set relative to viewport)
+            paint_box(child.get(), dl, 0, 0);
+        } else {
+            collect_fixed_boxes(child.get(), dl, child_offset_x, child_offset_y);
+        }
+    }
+}
+
+DisplayList generate_fixed_display_list(LayoutBox* root) {
+    DisplayList dl;
+    if (!root) return dl;
+    collect_fixed_boxes(root, dl, 0, 0);
     return dl;
 }
 

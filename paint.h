@@ -67,6 +67,9 @@ using DisplayList = std::vector<PaintCommand>;
 // Generate display list from layout tree
 DisplayList generate_display_list(LayoutBox* root);
 
+// Generate display list for position:fixed elements (rendered without scroll)
+DisplayList generate_fixed_display_list(LayoutBox* root);
+
 // Render display list to cairo context
 void render_display_list(cairo_t* cr, const DisplayList& dl, float scroll_x, float scroll_y,
                           float viewport_width, float viewport_height);

@@ -2036,6 +2036,7 @@ struct TabState {
     GtkWidget* drawing_area = nullptr;           // single Cairo surface for rendering
     std::unique_ptr<LayoutBox> layout_root;      // layout tree
     DisplayList display_list;                    // paint commands
+    DisplayList fixed_display_list;              // position:fixed paint commands
     PangoContext* pango_ctx = nullptr;           // shared Pango context
     float scroll_x = 0, scroll_y = 0;           // viewport scroll position
     float content_height = 0;                    // total page height for scrollbar
@@ -4119,8 +4120,10 @@ static void layout_and_paint(TabState* tab) {
 
     // Generate display list
     tab->display_list = generate_display_list(tab->layout_root.get());
+    tab->fixed_display_list = generate_fixed_display_list(tab->layout_root.get());
 
-    fprintf(stderr, "[LAYOUT] Display list: %zu commands\n", tab->display_list.size());
+    fprintf(stderr, "[LAYOUT] Display list: %zu commands, %zu fixed\n",
+            tab->display_list.size(), tab->fixed_display_list.size());
 
     // Update content height for scrollbar
     tab->content_height = get_content_height(tab->layout_root.get());
@@ -4165,6 +4168,18 @@ static gboolean on_draw_content(GtkWidget* widget, cairo_t* cr, gpointer data) {
 
     render_display_list(cr, tab->display_list, sx, sy,
                         (float)alloc.width, (float)alloc.height);
+
+    // Render position:fixed elements on top, compensating for GTK scroll
+    if (!tab->fixed_display_list.empty() && tab->viewport) {
+        GtkAdjustment* vadj = gtk_scrollable_get_vadjustment(GTK_SCROLLABLE(tab->viewport));
+        float scroll_offset = vadj ? (float)gtk_adjustment_get_value(vadj) : 0;
+        cairo_save(cr);
+        cairo_translate(cr, 0, scroll_offset);  // cancel GTK viewport scroll
+        render_display_list(cr, tab->fixed_display_list, 0, 0,
+                            (float)alloc.width, (float)alloc.height);
+        cairo_restore(cr);
+    }
+
     return FALSE;
 }
 
@@ -4340,6 +4355,17 @@ static void create_tab_widgets(AppState* st, std::shared_ptr<TabState> tab) {
                 layout_and_paint(tab);
             }
         }), tab.get());
+
+    // Redraw on scroll so position:fixed elements update
+    GtkAdjustment* vadj = gtk_scrollable_get_vadjustment(GTK_SCROLLABLE(tab->viewport));
+    if (vadj) {
+        g_signal_connect(vadj, "value-changed",
+            G_CALLBACK(+[](GtkAdjustment* adj, gpointer data) {
+                TabState* tab = static_cast<TabState*>(data);
+                if (tab && tab->drawing_area && !tab->fixed_display_list.empty())
+                    gtk_widget_queue_draw(tab->drawing_area);
+            }), tab.get());
+    }
 
     // Add to content stack
     gtk_stack_add_named(GTK_STACK(st->content_stack), tab->paned,
