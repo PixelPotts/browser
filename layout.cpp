@@ -288,7 +288,14 @@ std::unique_ptr<LayoutBox> build_layout_tree(DOMNode* node, PangoContext* pango_
             };
 
             for (auto& child : box->children) {
-                if (is_block_level(child->type)) {
+                // Absolute/fixed children should NOT be wrapped in anonymous boxes —
+                // they must stay as direct children so layout_absolute_children
+                // finds them with the correct positioned ancestor
+                if (child->position == 2 || child->position == 3) {
+                    flush_inline();
+                    child->parent = box.get();
+                    new_children.push_back(std::move(child));
+                } else if (is_block_level(child->type)) {
                     flush_inline();
                     child->parent = box.get();
                     new_children.push_back(std::move(child));
@@ -1596,11 +1603,13 @@ static void layout_absolute_children(LayoutBox* box, float viewport_width, float
                 cb_x = 0;
                 cb_y = 0;
             } else {
-                // Absolute: containing block is nearest positioned ancestor's padding box
+                // Absolute: containing block is this box's padding box
+                // Coordinates are relative to box's content area, so padding box
+                // starts at (-padding.left, -padding.top) in child coordinate space
                 cb_w = box->content_rect.w + box->padding.horizontal();
                 cb_h = box->content_rect.h + box->padding.vertical();
-                cb_x = box->content_rect.x - box->padding.left;
-                cb_y = box->content_rect.y - box->padding.top;
+                cb_x = -box->padding.left;
+                cb_y = -box->padding.top;
             }
 
             // Resolve width
@@ -1632,7 +1641,11 @@ static void layout_absolute_children(LayoutBox* box, float viewport_width, float
             child->content_rect.w = w;
 
             // Layout the child's contents
-            layout_box(child.get(), w, cb_h, pango_ctx);
+            // Pass containing_width that will yield correct content width after
+            // layout_block subtracts margin/padding/border
+            float child_containing_w = w + child->margin.horizontal()
+                + child->padding.horizontal() + child->border.horizontal();
+            layout_box(child.get(), child_containing_w, cb_h, pango_ctx);
 
             // Resolve height after layout (may have been set by content)
             float h = resolve_height(node, cb_h);
@@ -1671,6 +1684,7 @@ static void layout_absolute_children(LayoutBox* box, float viewport_width, float
                 child->content_rect.y = cb_y + child->margin.top + child->border.top
                     + child->padding.top;
             }
+
         }
 
         // Recurse into all children to find nested absolute elements
