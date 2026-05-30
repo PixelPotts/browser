@@ -10,6 +10,7 @@ struct HitTestResult {
 
 // Find the deepest element at document coordinates (x, y)
 HitTestResult hit_test(LayoutBox* root, float x, float y);
+extern bool g_hit_debug;
 
 // Find the element at viewport coordinates, accounting for scroll
 HitTestResult hit_test_viewport(LayoutBox* root, float vx, float vy,

@@ -4262,6 +4262,12 @@ static gboolean on_draw_area_click(GtkWidget* widget, GdkEventButton* ev, gpoint
         fprintf(stderr, "[CLICK] ev=%d on <%s> class=%s\n",
             ev->type, hit.node->tag_name.c_str(),
             hit.node->class_list.empty() ? "" : hit.node->class_list[0].c_str());
+    // Re-run hit_test with debug enabled to trace the tree walk
+    if (ev->type == GDK_BUTTON_PRESS) {
+        g_hit_debug = true;
+        hit_test(tab->layout_root.get(), doc_x, doc_y);
+        g_hit_debug = false;
+    }
         if (ev->type == GDK_BUTTON_PRESS) {
             // Set :active on hit node + ancestors
             clear_flags(root, false, true);

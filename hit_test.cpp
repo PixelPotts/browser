@@ -2,6 +2,8 @@
 #include "hit_test.h"
 #include <pango/pango.h>
 
+static bool g_hit_debug = false;  // set to true from click handler
+
 static void hit_test_box(LayoutBox* box, float x, float y,
                           float offset_x, float offset_y, HitTestResult& result) {
     if (!box || box->type == LayoutBoxType::None) return;
@@ -13,6 +15,14 @@ static void hit_test_box(LayoutBox* box, float x, float y,
     Rect bb = box->border_box();
     bb.x += offset_x;
     bb.y += offset_y;
+
+    if (g_hit_debug && box->dom_node && box->dom_node->node_type == DOMNode::ELEMENT) {
+        const char* tag = box->dom_node->tag_name.c_str();
+        if (strcmp(tag,"input")==0 || strcmp(tag,"div")==0 || strcmp(tag,"body")==0) {
+            fprintf(stderr, "[HTDBG] <%s> bb=(%.0f,%.0f,%.0f,%.0f) pt=(%.0f,%.0f) %s\n",
+                tag, bb.x, bb.y, bb.w, bb.h, x, y, bb.contains(x,y)?"HIT":"miss");
+        }
+    }
 
     if (bb.contains(x, y)) {
         // This box contains the point
