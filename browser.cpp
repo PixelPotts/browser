@@ -4185,6 +4185,14 @@ static gboolean on_draw_content(GtkWidget* widget, cairo_t* cr, gpointer data) {
 }
 
 // Mouse click handler for the drawing area
+// Clear hover/active flags from entire tree
+static void clear_flags(DOMNode* node, bool hover, bool active) {
+    if (!node) return;
+    if (hover) node->is_hovered = false;
+    if (active) node->is_active = false;
+    for (auto& c : node->children) clear_flags(c.get(), hover, active);
+}
+
 static gboolean on_draw_area_click(GtkWidget* widget, GdkEventButton* ev, gpointer data) {
     fprintf(stderr, "[CLICK-EVENT] button=%d x=%.0f y=%.0f type=%d\n",
             ev->button, ev->x, ev->y, ev->type);
@@ -4243,6 +4251,47 @@ static gboolean on_draw_area_click(GtkWidget* widget, GdkEventButton* ev, gpoint
         link_node = link_node->parent;
     }
 
+    // Update :active and :focus state
+    if (tab->document) {
+        DOMNode* root = tab->document->body ? tab->document->body : tab->document->root.get();
+        bool needs_repaint = false;
+
+        if (ev->type == GDK_BUTTON_PRESS) {
+            // Set :active on hit node + ancestors
+            clear_flags(root, false, true);
+            DOMNode* a = hit.node;
+            while (a) { a->is_active = true; a = a->parent; }
+
+            // Set :focus — clear old focus, focus the hit element
+            // Walk up to find a focusable element
+            DOMNode* focusable = hit.node;
+            while (focusable) {
+                if (focusable->tag_name == "input" || focusable->tag_name == "textarea" ||
+                    focusable->tag_name == "select" || focusable->tag_name == "button" ||
+                    focusable->tag_name == "a" || focusable->attributes.count("tabindex"))
+                    break;
+                focusable = focusable->parent;
+            }
+            // Clear old focus
+            std::function<void(DOMNode*)> clear_focus = [&](DOMNode* n) {
+                if (n->is_focused) { n->is_focused = false; needs_repaint = true; }
+                for (auto& c : n->children) clear_focus(c.get());
+            };
+            clear_focus(root);
+            if (focusable) { focusable->is_focused = true; needs_repaint = true; }
+
+            needs_repaint = true;
+        } else if (ev->type == GDK_BUTTON_RELEASE) {
+            clear_flags(root, false, true);
+            needs_repaint = true;
+        }
+
+        if (needs_repaint) {
+            restyle_tree(root, tab->css_rules);
+            layout_and_paint(tab);
+        }
+    }
+
     // Dispatch JS mousedown then click on press, mouseup on release
     if (tab->js_engine && tab->document) {
         if (ev->type == GDK_BUTTON_PRESS) {
@@ -4294,6 +4343,23 @@ static gboolean on_draw_area_motion(GtkWidget* widget, GdkEventMotion* ev, gpoin
             over_link ? "pointer" : "default");
         gdk_window_set_cursor(win, cursor);
         if (cursor) g_object_unref(cursor);
+    }
+
+    // Update :hover state
+    if (tab->document) {
+        DOMNode* root = tab->document->body ? tab->document->body : tab->document->root.get();
+        // Clear all hover flags, then set on hit node + ancestors
+        clear_flags(root, true, false);
+        bool changed = false;
+        DOMNode* h = hit.node;
+        while (h) {
+            if (!h->is_hovered) { h->is_hovered = true; changed = true; }
+            h = h->parent;
+        }
+        if (changed) {
+            restyle_tree(root, tab->css_rules);
+            layout_and_paint(tab);
+        }
     }
 
     // Dispatch mousemove to JS

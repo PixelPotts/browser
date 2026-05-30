@@ -38,6 +38,34 @@ h2 { color: #333; margin-top: 30px; }
     padding: 5px 10px;
     border-radius: 4px;
 }
+/* Feature 7: :hover / :focus / :active */
+.hover-btn {
+    display: inline-block;
+    padding: 10px 20px;
+    margin: 5px;
+    background: #3498db;
+    color: white;
+    border-radius: 4px;
+    cursor: pointer;
+}
+.hover-btn:hover {
+    background: #2980b9;
+}
+.hover-btn:active {
+    background: #1a5276;
+}
+.focus-input {
+    padding: 8px 12px;
+    border: 2px solid #bdc3c7;
+    border-radius: 4px;
+    font-size: 16px;
+    width: 200px;
+}
+.focus-input:focus {
+    border-color: #3498db;
+    box-shadow: 0 0 6px rgba(52,152,219,0.4);
+}
+
 /* Feature 6: box-shadow */
 .shadow-card {
     background: white;
@@ -114,6 +142,15 @@ h2 { color: #333; margin-top: 30px; }
         <span class="abs-bottom-left">Bottom Left</span>
         <p style="padding: 10px;">Container content</p>
     </div>
+</div>
+
+<h2>Feature 7: :hover / :focus / :active</h2>
+<div class="section">
+    <p>Buttons should darken on hover and get even darker when clicked. Input should get blue border on focus.</p>
+    <div class="hover-btn">Hover Me</div>
+    <div class="hover-btn">Click Me</div>
+    <br><br>
+    <input class="focus-input" type="text" placeholder="Click to focus">
 </div>
 
 <h2>Feature 6: box-shadow</h2>
