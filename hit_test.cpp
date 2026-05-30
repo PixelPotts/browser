@@ -2,7 +2,7 @@
 #include "hit_test.h"
 #include <pango/pango.h>
 
-static bool g_hit_debug = false;  // set to true from click handler
+bool g_hit_debug = false;  // set to true from click handler
 
 static void hit_test_box(LayoutBox* box, float x, float y,
                           float offset_x, float offset_y, HitTestResult& result) {
@@ -16,18 +16,21 @@ static void hit_test_box(LayoutBox* box, float x, float y,
     bb.x += offset_x;
     bb.y += offset_y;
 
-    if (g_hit_debug && box->dom_node && box->dom_node->node_type == DOMNode::ELEMENT) {
-        const char* tag = box->dom_node->tag_name.c_str();
-        if (strcmp(tag,"input")==0 || strcmp(tag,"div")==0 || strcmp(tag,"body")==0) {
-            fprintf(stderr, "[HTDBG] <%s> bb=(%.0f,%.0f,%.0f,%.0f) pt=(%.0f,%.0f) %s\n",
-                tag, bb.x, bb.y, bb.w, bb.h, x, y, bb.contains(x,y)?"HIT":"miss");
-        }
+    if (g_hit_debug) {
+        const char* tag = box->dom_node ? box->dom_node->tag_name.c_str() : "(anon)";
+        fprintf(stderr, "[HTDBG] <%s> bb=(%.0f,%.0f,%.0f,%.0f) pt=(%.0f,%.0f) %s\n",
+            tag, bb.x, bb.y, bb.w, bb.h, x, y, bb.contains(x,y)?"HIT":"miss");
     }
 
     if (bb.contains(x, y)) {
         // This box contains the point
-        if (box->dom_node && box->dom_node->node_type == DOMNode::ELEMENT)
+        if (box->dom_node && box->dom_node->node_type == DOMNode::ELEMENT) {
+            fprintf(stderr, "[HT-SET] result = <%s> class=%s (bb=(%.0f,%.0f,%.0f,%.0f))\n",
+                box->dom_node->tag_name.c_str(),
+                box->dom_node->class_list.empty() ? "" : box->dom_node->class_list[0].c_str(),
+                bb.x, bb.y, bb.w, bb.h);
             result = {box->dom_node, x - bb.x, y - bb.y};
+        }
 
         // If this box has inline text, check which text run the click falls in
         if (box->pango_layout && !box->text_runs.empty() && !box->text.empty()) {
@@ -79,6 +82,10 @@ HitTestResult hit_test(LayoutBox* root, float x, float y) {
     HitTestResult result;
     if (!root) return result;
     hit_test_box(root, x, y, 0, 0, result);
+    if (result.node)
+        fprintf(stderr, "[HIT-RESULT] hit_test returning <%s> class=%s\n",
+            result.node->tag_name.c_str(),
+            result.node->class_list.empty() ? "" : result.node->class_list[0].c_str());
     return result;
 }
 

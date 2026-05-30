@@ -4262,11 +4262,22 @@ static gboolean on_draw_area_click(GtkWidget* widget, GdkEventButton* ev, gpoint
         fprintf(stderr, "[CLICK] ev=%d on <%s> class=%s\n",
             ev->type, hit.node->tag_name.c_str(),
             hit.node->class_list.empty() ? "" : hit.node->class_list[0].c_str());
-    // Re-run hit_test with debug enabled to trace the tree walk
+    // Debug: print input element positions from layout tree
     if (ev->type == GDK_BUTTON_PRESS) {
-        g_hit_debug = true;
-        hit_test(tab->layout_root.get(), doc_x, doc_y);
-        g_hit_debug = false;
+        std::function<void(LayoutBox*, float, float)> dump_inputs = [&](LayoutBox* b, float ox, float oy) {
+            if (!b) return;
+            float cx = ox + b->content_rect.x;
+            float cy = oy + b->content_rect.y;
+            auto bb = b->border_box();
+            bb.x += ox; bb.y += oy;
+            fprintf(stderr, "[HTDBG2] <%s> bb=(%.0f,%.0f,%.0f,%.0f) pt=(%.0f,%.0f) %s\n",
+                b->dom_node ? b->dom_node->tag_name.c_str() : "(anon)",
+                bb.x, bb.y, bb.w, bb.h, doc_x, doc_y,
+                bb.contains(doc_x, doc_y) ? "HIT" : "miss");
+            for (auto& c : b->children)
+                dump_inputs(c.get(), cx - b->scroll_x, cy - b->scroll_y);
+        };
+        dump_inputs(tab->layout_root.get(), 0, 0);
     }
         if (ev->type == GDK_BUTTON_PRESS) {
             // Set :active on hit node + ancestors
