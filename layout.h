@@ -116,6 +116,7 @@ struct LayoutBox {
     int overflow = 0;     // 0=visible, 1=hidden, 2=scroll, 3=auto
     std::string border_color;
     std::string border_style;
+    std::string box_shadow;
     int z_index = 0;
     int text_decoration = 0;  // bitmask: 1=underline, 2=overline, 4=line-through
     int pos_top = INT_MIN, pos_left = INT_MIN, pos_right = INT_MIN, pos_bottom = INT_MIN;

@@ -219,6 +219,84 @@ CairoColor parse_css_color(const std::string& color) {
     return c; // default black
 }
 
+// ---- Box shadow parsing ----
+
+struct BoxShadow {
+    float offset_x = 0, offset_y = 0, blur = 0, spread = 0;
+    CairoColor color = {0, 0, 0, 0.3};
+    bool inset = false;
+};
+
+static std::vector<BoxShadow> parse_box_shadow(const std::string& raw) {
+    std::vector<BoxShadow> shadows;
+    if (raw.empty() || raw == "none") return shadows;
+
+    // Split by comma (respecting parentheses for rgba)
+    std::vector<std::string> parts;
+    int paren = 0;
+    size_t start = 0;
+    for (size_t i = 0; i <= raw.size(); i++) {
+        if (i < raw.size() && raw[i] == '(') paren++;
+        else if (i < raw.size() && raw[i] == ')') paren--;
+        else if ((i == raw.size() || raw[i] == ',') && paren == 0) {
+            std::string part = raw.substr(start, i - start);
+            while (!part.empty() && part.front() == ' ') part.erase(part.begin());
+            while (!part.empty() && part.back() == ' ') part.pop_back();
+            if (!part.empty()) parts.push_back(part);
+            start = i + 1;
+        }
+    }
+
+    for (const auto& part : parts) {
+        BoxShadow s;
+        // Tokenize
+        std::vector<std::string> tokens;
+        size_t ti = 0;
+        while (ti < part.size()) {
+            while (ti < part.size() && part[ti] == ' ') ti++;
+            if (ti >= part.size()) break;
+            size_t ts = ti;
+            if (part[ti] == '(') {
+                while (ti < part.size() && part[ti] != ')') ti++;
+                if (ti < part.size()) ti++;
+            } else {
+                while (ti < part.size() && part[ti] != ' ') {
+                    if (part[ti] == '(') { while (ti < part.size() && part[ti] != ')') ti++; if (ti < part.size()) ti++; }
+                    else ti++;
+                }
+            }
+            tokens.push_back(part.substr(ts, ti - ts));
+        }
+
+        // Parse tokens: [inset] <offset-x> <offset-y> [blur] [spread] [color]
+        std::vector<float> nums;
+        std::string color_str;
+        for (const auto& tok : tokens) {
+            if (tok == "inset") { s.inset = true; continue; }
+            // Try as number (px value)
+            char* end = nullptr;
+            float val = strtof(tok.c_str(), &end);
+            if (end != tok.c_str() && (*end == 'p' || *end == 'e' || *end == 'r' || *end == '\0')) {
+                nums.push_back(val);
+            } else {
+                // Accumulate as color
+                if (!color_str.empty()) color_str += " ";
+                color_str += tok;
+            }
+        }
+
+        if (nums.size() >= 2) {
+            s.offset_x = nums[0];
+            s.offset_y = nums[1];
+            if (nums.size() >= 3) s.blur = nums[2];
+            if (nums.size() >= 4) s.spread = nums[3];
+        }
+        if (!color_str.empty()) s.color = parse_css_color(color_str);
+        shadows.push_back(s);
+    }
+    return shadows;
+}
+
 // ---- Display list generation ----
 
 static void paint_box(LayoutBox* box, DisplayList& dl, float offset_x, float offset_y) {
@@ -235,6 +313,43 @@ static void paint_box(LayoutBox* box, DisplayList& dl, float offset_x, float off
         fprintf(stderr, "[PAINT-FORM] tag=%s bg='%s' border_box=(%.0f,%.0f,%.0f,%.0f) cx=%.0f cy=%.0f type=%d\n",
             node->tag_name.c_str(), box->bg_color.c_str(),
             bb.x + offset_x, bb.y + offset_y, bb.w, bb.h, cx, cy, (int)box->type);
+    }
+
+    // Box shadow (rendered before background)
+    if (!box->box_shadow.empty() && box->box_shadow != "none") {
+        auto shadows = parse_box_shadow(box->box_shadow);
+        Rect bb = box->border_box();
+        bb.x += offset_x;
+        bb.y += offset_y;
+        int br = node ? node->border_radius : 0;
+
+        for (const auto& s : shadows) {
+            if (s.inset) continue; // TODO: inset shadows
+            // Approximate Gaussian blur with concentric layers
+            float blur = std::max(s.blur, 0.0f);
+            int steps = std::max(1, (int)(blur / 2));
+            if (steps > 10) steps = 10;
+            float step_size = blur / steps;
+
+            for (int i = steps; i >= 0; i--) {
+                float expand = s.spread + i * step_size;
+                float alpha = s.color.a / (steps + 1) * (steps + 1 - i) / (steps + 1);
+                // Outer layers are more transparent
+                if (i > 0) alpha = s.color.a / (steps * 2.0f);
+                PaintCommand cmd;
+                cmd.type = PaintCmdType::FillRect;
+                cmd.rect = {
+                    bb.x + s.offset_x - expand,
+                    bb.y + s.offset_y - expand,
+                    bb.w + expand * 2,
+                    bb.h + expand * 2
+                };
+                cmd.color = {s.color.r, s.color.g, s.color.b, alpha};
+                cmd.border_radius = br + (int)expand;
+                cmd.dom_node = node;
+                dl.push_back(cmd);
+            }
+        }
     }
 
     // Background

@@ -105,6 +105,7 @@ static void copy_style(LayoutBox* box, DOMNode* node) {
     box->line_height_factor = node->lh_computed > 0 ? node->lh_computed : 1.2;
     box->overflow = node->overflow >= 0 ? node->overflow : 0;
     box->z_index = node->z_index;
+    box->box_shadow = node->box_shadow;
     box->pos_top = node->pos_top;
     box->pos_left = node->pos_left;
     box->pos_right = node->pos_right;

@@ -38,6 +38,19 @@ h2 { color: #333; margin-top: 30px; }
     padding: 5px 10px;
     border-radius: 4px;
 }
+/* Feature 6: box-shadow */
+.shadow-card {
+    background: white;
+    border-radius: 8px;
+    padding: 20px;
+    margin: 10px;
+    width: 200px;
+    display: inline-block;
+}
+.shadow-soft { box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+.shadow-hard { box-shadow: 4px 4px 0 #333; }
+.shadow-colored { box-shadow: 0 6px 20px rgba(52,152,219,0.4); }
+
 /* Feature 5: ::before / ::after */
 .quote-box::before {
     content: ">> ";
@@ -101,6 +114,14 @@ h2 { color: #333; margin-top: 30px; }
         <span class="abs-bottom-left">Bottom Left</span>
         <p style="padding: 10px;">Container content</p>
     </div>
+</div>
+
+<h2>Feature 6: box-shadow</h2>
+<div class="section">
+    <p>Three cards with different shadow styles:</p>
+    <div class="shadow-card shadow-soft">Soft Shadow</div>
+    <div class="shadow-card shadow-hard">Hard Shadow</div>
+    <div class="shadow-card shadow-colored">Blue Shadow</div>
 </div>
 
 <h2>Feature 5: ::before / ::after</h2>
