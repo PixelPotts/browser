@@ -3564,6 +3564,9 @@ static void apply_css_to_node(DOMNode* node, const std::vector<CSSRule>& css) {
     BoxModel bm;
     for (const auto& r : css) {
         if (!dom_sel_matches(r.sel, node)) continue;
+        if (node->is_focused && r.sel.find("focus") != std::string::npos)
+            fprintf(stderr, "[CSS-FOCUS] matched sel='%s' on <%s> decls='%.80s'\n",
+                r.sel.c_str(), node->tag_name.c_str(), r.decls.c_str());
         if (r.fw != -1) node->fw_computed = r.fw;
         if (!r.fs_raw.empty()) { int px = parse_fs(r.fs_raw, parent_fs); if (px > 0) node->fs_computed = px; }
         if (!r.lh_raw.empty()) { double f = parse_lh(r.lh_raw, node->fs_computed); if (f >= 0) node->lh_computed = f; }
@@ -4256,6 +4259,9 @@ static gboolean on_draw_area_click(GtkWidget* widget, GdkEventButton* ev, gpoint
         DOMNode* root = tab->document->body ? tab->document->body : tab->document->root.get();
         bool needs_repaint = false;
 
+        fprintf(stderr, "[CLICK] ev=%d on <%s> class=%s\n",
+            ev->type, hit.node->tag_name.c_str(),
+            hit.node->class_list.empty() ? "" : hit.node->class_list[0].c_str());
         if (ev->type == GDK_BUTTON_PRESS) {
             // Set :active on hit node + ancestors
             clear_flags(root, false, true);
@@ -4278,7 +4284,12 @@ static gboolean on_draw_area_click(GtkWidget* widget, GdkEventButton* ev, gpoint
                 for (auto& c : n->children) clear_focus(c.get());
             };
             clear_focus(root);
-            if (focusable) { focusable->is_focused = true; needs_repaint = true; }
+            if (focusable) {
+                focusable->is_focused = true; needs_repaint = true;
+                fprintf(stderr, "[FOCUS] focused <%s> class=%s\n",
+                    focusable->tag_name.c_str(),
+                    focusable->class_list.empty() ? "" : focusable->class_list[0].c_str());
+            }
 
             needs_repaint = true;
         } else if (ev->type == GDK_BUTTON_RELEASE) {
@@ -4288,6 +4299,16 @@ static gboolean on_draw_area_click(GtkWidget* widget, GdkEventButton* ev, gpoint
 
         if (needs_repaint) {
             restyle_tree(root, tab->css_rules);
+            // Debug: check if focused input got styled
+            std::function<void(DOMNode*)> dbg_focus = [&](DOMNode* n) {
+                if (n->is_focused)
+                    fprintf(stderr, "[FOCUS-DBG] <%s> class=%s border_color='%s' bg='%s' box_shadow='%s'\n",
+                        n->tag_name.c_str(),
+                        n->class_list.empty() ? "" : n->class_list[0].c_str(),
+                        n->border_color.c_str(), n->bg_color.c_str(), n->box_shadow.c_str());
+                for (auto& c : n->children) dbg_focus(c.get());
+            };
+            dbg_focus(root);
             layout_and_paint(tab);
         }
     }
