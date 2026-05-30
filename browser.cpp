@@ -4227,7 +4227,9 @@ static gboolean on_draw_area_click(GtkWidget* widget, GdkEventButton* ev, gpoint
     float doc_x = (float)ev->x;
     float doc_y = (float)ev->y;
 
+    g_hit_debug = (ev->type == GDK_BUTTON_PRESS);
     HitTestResult hit = hit_test(tab->layout_root.get(), doc_x, doc_y);
+    g_hit_debug = false;
 
     if (!hit.node) return FALSE;
 
