@@ -398,5 +398,133 @@ h2 { color: #333; margin-top: 30px; }
     </div>
 </div>
 
+
+<h2>Round 4 - Feature A: CSS Gradients</h2>
+<div class="section">
+    <style>
+        .grad-box { display: inline-block; width: 180px; height: 80px; margin: 8px; border-radius: 6px; vertical-align: top; }
+        .grad-lr  { background: linear-gradient(to right, #e74c3c, #3498db); }
+        .grad-diag { background: linear-gradient(135deg, #f39c12, #8e44ad); }
+        .grad-3stop { background: linear-gradient(to bottom, #27ae60, #f1c40f, #e74c3c); }
+        .grad-radial { background: radial-gradient(circle, #3498db 20%, #8e44ad 80%); }
+        .grad-pct { background: linear-gradient(to right, red 0%, yellow 50%, green 100%); }
+    </style>
+    <p>Linear and radial gradients:</p>
+    <div class="grad-box grad-lr"></div>
+    <div class="grad-box grad-diag"></div>
+    <div class="grad-box grad-3stop"></div>
+    <div class="grad-box grad-radial"></div>
+    <div class="grad-box grad-pct"></div>
+</div>
+
+<h2>Round 4 - Feature B: background-size / position / repeat</h2>
+<div class="section">
+    <style>
+        .bg-demo { display: inline-block; width: 200px; height: 120px; margin: 8px;
+                   border: 1px solid #ccc; vertical-align: top; }
+        .bg-cover    { background: url('https://picsum.photos/80/60'); background-size: cover; background-repeat: no-repeat; }
+        .bg-contain  { background: #eee url('https://picsum.photos/80/60'); background-size: contain; background-repeat: no-repeat; background-position: center; }
+        .bg-repeat   { background: url('https://picsum.photos/40/40'); background-repeat: repeat; }
+        .bg-pos      { background: url('https://picsum.photos/80/60'); background-size: 80px 60px; background-repeat: no-repeat; background-position: bottom right; }
+    </style>
+    <p>Background image: cover, contain (centered), repeat, bottom-right:</p>
+    <div class="bg-demo bg-cover"></div>
+    <div class="bg-demo bg-contain"></div>
+    <div class="bg-demo bg-repeat"></div>
+    <div class="bg-demo bg-pos"></div>
+</div>
+
+<h2>Round 4 - Feature C: text-overflow: ellipsis</h2>
+<div class="section">
+    <style>
+        .ellip-box {
+            width: 200px; overflow: hidden; white-space: nowrap;
+            text-overflow: ellipsis; border: 1px solid #ccc;
+            padding: 6px; margin: 6px; display: inline-block;
+        }
+        .no-ellip {
+            width: 200px; overflow: hidden; white-space: nowrap;
+            border: 1px solid #ccc; padding: 6px; margin: 6px; display: inline-block;
+        }
+    </style>
+    <p>Long text should show ellipsis (top) vs plain clip (bottom):</p>
+    <div class="ellip-box">This is very long text that should be truncated with an ellipsis at the end</div>
+    <div class="no-ellip">This is very long text that should be clipped without any ellipsis at all</div>
+</div>
+
+<h2>Round 4 - Feature D: CSS filter</h2>
+<div class="section">
+    <style>
+        .filter-box { display: inline-block; width: 120px; height: 80px; margin: 8px;
+                      background: linear-gradient(135deg, #e74c3c, #3498db);
+                      border-radius: 6px; text-align: center; line-height: 80px;
+                      color: white; font-weight: bold; vertical-align: top; }
+        .f-none      { }
+        .f-blur      { filter: blur(3px); }
+        .f-bright    { filter: brightness(1.6); }
+        .f-gray      { filter: grayscale(1); }
+        .f-contrast  { filter: contrast(2); }
+        .f-invert    { filter: invert(1); }
+        .f-sepia     { filter: sepia(1); }
+        .f-opacity   { filter: opacity(0.4); }
+        .f-combined  { filter: brightness(1.2) saturate(1.5); }
+    </style>
+    <p>CSS filters (original, blur, brightness, grayscale, contrast, invert, sepia, opacity, combined):</p>
+    <div class="filter-box f-none">Original</div>
+    <div class="filter-box f-blur">Blur</div>
+    <div class="filter-box f-bright">Bright</div>
+    <div class="filter-box f-gray">Gray</div>
+    <div class="filter-box f-contrast">Contrast</div>
+    <div class="filter-box f-invert">Invert</div>
+    <div class="filter-box f-sepia">Sepia</div>
+    <div class="filter-box f-opacity">Opacity</div>
+    <div class="filter-box f-combined">Bright+Sat</div>
+</div>
+
+<h2>Round 4 - Feature E: @keyframes animation</h2>
+<div class="section">
+    <style>
+        @keyframes pulse {
+            0%   { background-color: #3498db; }
+            50%  { background-color: #e74c3c; }
+            100% { background-color: #3498db; }
+        }
+        @keyframes fadeInOut {
+            from { opacity: 0; }
+            to   { opacity: 1; }
+        }
+        .anim-pulse {
+            display: inline-block; padding: 16px 32px; margin: 8px;
+            border-radius: 8px; color: white; font-weight: bold;
+            animation: pulse 2s infinite;
+        }
+        .anim-fade {
+            display: inline-block; padding: 16px 32px; margin: 8px;
+            border-radius: 8px; background: #27ae60; color: white; font-weight: bold;
+            animation: fadeInOut 1.5s ease;
+        }
+    </style>
+    <p>Animating boxes (pulse blue↔red, fade in):</p>
+    <div class="anim-pulse">Pulse Color</div>
+    <div class="anim-fade">Fade In</div>
+</div>
+
+<h2>Round 4 - Feature F: word-break / overflow-wrap</h2>
+<div class="section">
+    <style>
+        .wb-box { display: inline-block; width: 160px; border: 1px solid #ccc;
+                  padding: 8px; margin: 6px; vertical-align: top; font-size: 13px; }
+        .wb-normal  { word-break: normal; }
+        .wb-break   { word-break: break-all; }
+        .wb-keep    { word-break: keep-all; }
+        .wb-wrap    { overflow-wrap: break-word; }
+    </style>
+    <p>Word break: normal / break-all / keep-all / overflow-wrap:break-word</p>
+    <div class="wb-box wb-normal">Superlongwordthatdoesntfit and some normal text here</div>
+    <div class="wb-box wb-break">Superlongwordthatdoesntfit and some normal text here</div>
+    <div class="wb-box wb-keep">한국어텍스트가길어질때어떻게되나요</div>
+    <div class="wb-box wb-wrap">Superlongwordthatdoesntfit and some normal text here</div>
+</div>
+
 </body>
 </html>

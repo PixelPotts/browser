@@ -135,6 +135,16 @@ struct LayoutBox {
     // letter-spacing (Pango units, 0=normal)
     int letter_spacing = 0;
 
+    // Round 4 features
+    std::string bg_gradient;    // CSS gradient string
+    std::string bg_size;        // background-size (cover/contain/auto/explicit)
+    std::string bg_position;    // background-position
+    int bg_repeat = 0;          // 0=repeat, 1=repeat-x, 2=repeat-y, 3=no-repeat
+    std::string css_filter;     // CSS filter string
+    int word_break = 0;         // 0=normal, 1=break-all, 2=keep-all
+    int overflow_wrap = 0;      // 0=normal, 1=break-word
+    int text_overflow = 0;      // 0=clip, 1=ellipsis
+
     // Cleanup
     ~LayoutBox();
 

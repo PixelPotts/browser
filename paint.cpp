@@ -8,6 +8,380 @@
 #include <unordered_map>
 #include <sstream>
 
+// ---- Gradient helpers ----
+
+// Split a CSS function arg string by commas, respecting nested parens
+static std::vector<std::string> split_css_args(const std::string& s) {
+    std::vector<std::string> out;
+    int depth = 0;
+    size_t start = 0;
+    for (size_t i = 0; i <= s.size(); ++i) {
+        char c = i < s.size() ? s[i] : ',';
+        if (c == '(') ++depth;
+        else if (c == ')') --depth;
+        else if (c == ',' && depth == 0) {
+            std::string tok = s.substr(start, i - start);
+            size_t a = tok.find_first_not_of(" \t\r\n");
+            size_t b = tok.find_last_not_of(" \t\r\n");
+            out.push_back(a == std::string::npos ? "" : tok.substr(a, b-a+1));
+            start = i + 1;
+        }
+    }
+    return out;
+}
+
+// Parse a CSS gradient color stop: "red", "#ff0000 50%", "rgba(0,0,0,0) 0px"
+// Returns position (-1 = unset) and fills color
+static float parse_gradient_stop(const std::string& tok, CairoColor& color) {
+    float pos = -1.0f;
+    // Find where position starts: last space before a number or %
+    size_t sep = std::string::npos;
+    for (size_t i = tok.size(); i > 0; --i) {
+        if (tok[i-1] == ' ' || tok[i-1] == '\t') {
+            // check if rest is a number/percentage
+            std::string rest = tok.substr(i);
+            if (!rest.empty() && (std::isdigit((unsigned char)rest[0]) || rest[0] == '-' || rest[0] == '.')) {
+                sep = i - 1;
+                try { pos = std::stof(rest) / 100.0f; } catch(...) {}
+                break;
+            }
+        }
+    }
+    std::string color_part = sep == std::string::npos ? tok : tok.substr(0, sep);
+    size_t ca = color_part.find_first_not_of(" \t\r\n");
+    size_t cb = color_part.find_last_not_of(" \t\r\n");
+    if (ca != std::string::npos) color_part = color_part.substr(ca, cb-ca+1);
+    color = parse_css_color(color_part);
+    return pos;
+}
+
+// Parse linear-gradient(...) → fills stops, x0/y0/x1/y1
+static void parse_linear_gradient(const std::string& raw, const Rect& dest,
+                                   std::vector<GradientStop>& stops,
+                                   float& x0, float& y0, float& x1, float& y1) {
+    // Strip "linear-gradient(" prefix and ")" suffix
+    size_t p = raw.find('(');
+    if (p == std::string::npos) return;
+    size_t q = raw.rfind(')');
+    std::string inner = raw.substr(p + 1, q == std::string::npos ? std::string::npos : q - p - 1);
+    auto args = split_css_args(inner);
+    if (args.empty()) return;
+
+    float angle = 180.0f; // default: to bottom
+    size_t stop_start = 0;
+    std::string first = args[0];
+    size_t fa = first.find_first_not_of(" \t\r\n");
+    if (fa != std::string::npos) first = first.substr(fa);
+
+    // Detect direction/angle token
+    bool is_dir = false;
+    if (first.substr(0, 3) == "to ") {
+        is_dir = true;
+        std::string dir = first.substr(3);
+        bool has_right = dir.find("right") != std::string::npos;
+        bool has_left  = dir.find("left")  != std::string::npos;
+        bool has_top   = dir.find("top")   != std::string::npos;
+        bool has_bottom= dir.find("bottom")!= std::string::npos;
+        if (has_right && !has_top && !has_bottom)      angle = 90;
+        else if (has_left && !has_top && !has_bottom)  angle = 270;
+        else if (has_top && !has_left && !has_right)   angle = 0;
+        else if (has_bottom && !has_left && !has_right) angle = 180;
+        else if (has_right && has_bottom) angle = 135;
+        else if (has_right && has_top)    angle = 45;
+        else if (has_left && has_bottom)  angle = 225;
+        else if (has_left && has_top)     angle = 315;
+    } else if (first.find("deg") != std::string::npos) {
+        is_dir = true;
+        try { angle = std::stof(first); } catch(...) {}
+    } else if (first.find("turn") != std::string::npos) {
+        is_dir = true;
+        try { angle = std::stof(first) * 360.0f; } catch(...) {}
+    }
+    if (is_dir) stop_start = 1;
+
+    // Compute gradient line endpoints from angle + dest rect
+    float rad = angle * (float)M_PI / 180.0f;
+    float W = dest.w, H = dest.h;
+    float half_len = std::abs(W * std::sin(rad)) + std::abs(H * std::cos(rad));
+    float cx2 = dest.x + W / 2, cy2 = dest.y + H / 2;
+    x0 = cx2 - std::sin(rad) * half_len / 2;
+    y0 = cy2 + std::cos(rad) * half_len / 2;
+    x1 = cx2 + std::sin(rad) * half_len / 2;
+    y1 = cy2 - std::cos(rad) * half_len / 2;
+
+    // Parse color stops
+    for (size_t i = stop_start; i < args.size(); ++i) {
+        GradientStop gs;
+        float p2 = parse_gradient_stop(args[i], gs.color);
+        gs.pos = p2; // may be -1 (auto)
+        stops.push_back(gs);
+    }
+    // Auto-assign positions
+    if (!stops.empty()) {
+        if (stops.front().pos < 0) stops.front().pos = 0.0f;
+        if (stops.back().pos < 0) stops.back().pos = 1.0f;
+        // Fill in intermediate positions
+        for (size_t i = 1; i < stops.size(); ++i) {
+            if (stops[i].pos < 0) {
+                // find next explicit
+                size_t j = i + 1;
+                while (j < stops.size() && stops[j].pos < 0) ++j;
+                float end_pos = j < stops.size() ? stops[j].pos : 1.0f;
+                float count = (float)(j - i + 1);
+                for (size_t k = i; k < j && k < stops.size(); ++k)
+                    stops[k].pos = stops[i-1].pos + (end_pos - stops[i-1].pos) * (float)(k-i+1) / count;
+            }
+        }
+    }
+}
+
+// Parse radial-gradient(...) → fills stops, cx/cy/r
+static void parse_radial_gradient(const std::string& raw, const Rect& dest,
+                                   std::vector<GradientStop>& stops,
+                                   float& gcx, float& gcy, float& gr) {
+    size_t p = raw.find('(');
+    if (p == std::string::npos) return;
+    size_t q = raw.rfind(')');
+    std::string inner = raw.substr(p + 1, q == std::string::npos ? std::string::npos : q - p - 1);
+    auto args = split_css_args(inner);
+    gcx = dest.x + dest.w / 2;
+    gcy = dest.y + dest.h / 2;
+    gr = std::min(dest.w, dest.h) / 2;
+
+    size_t stop_start = 0;
+    if (!args.empty()) {
+        std::string first = args[0];
+        size_t fa = first.find_first_not_of(" \t\r\n");
+        if (fa != std::string::npos) first = first.substr(fa);
+        // Check if first arg is a shape/size/position descriptor (not a color)
+        bool is_desc = first.find("circle") != std::string::npos ||
+                       first.find("ellipse") != std::string::npos ||
+                       first.find("closest") != std::string::npos ||
+                       first.find("farthest") != std::string::npos ||
+                       first.find(" at ") != std::string::npos;
+        if (is_desc) {
+            stop_start = 1;
+            if (first.find("farthest-corner") != std::string::npos ||
+                first.find("farthest-side") != std::string::npos)
+                gr = std::sqrt(dest.w*dest.w + dest.h*dest.h) / 2;
+        }
+    }
+    for (size_t i = stop_start; i < args.size(); ++i) {
+        GradientStop gs;
+        float pos = parse_gradient_stop(args[i], gs.color);
+        gs.pos = pos;
+        stops.push_back(gs);
+    }
+    if (!stops.empty()) {
+        if (stops.front().pos < 0) stops.front().pos = 0.0f;
+        if (stops.back().pos < 0) stops.back().pos = 1.0f;
+        for (size_t i = 1; i < stops.size(); ++i) {
+            if (stops[i].pos < 0) {
+                size_t j = i + 1;
+                while (j < stops.size() && stops[j].pos < 0) ++j;
+                float end_pos = j < stops.size() ? stops[j].pos : 1.0f;
+                float count = (float)(j - i + 1);
+                for (size_t k = i; k < j && k < stops.size(); ++k)
+                    stops[k].pos = stops[i-1].pos + (end_pos - stops[i-1].pos) * (float)(k-i+1) / count;
+            }
+        }
+    }
+}
+
+// ---- CSS filter helpers ----
+
+static std::vector<FilterDef> parse_css_filter_list(const std::string& raw) {
+    std::vector<FilterDef> out;
+    if (raw.empty() || raw == "none") return out;
+    size_t i = 0;
+    while (i < raw.size()) {
+        while (i < raw.size() && std::isspace((unsigned char)raw[i])) ++i;
+        size_t name_start = i;
+        while (i < raw.size() && raw[i] != '(') ++i;
+        if (i >= raw.size()) break;
+        std::string name = raw.substr(name_start, i - name_start);
+        // trim name
+        size_t na = name.find_first_not_of(" \t");
+        size_t nb = name.find_last_not_of(" \t");
+        if (na != std::string::npos) name = name.substr(na, nb-na+1);
+        ++i; // skip '('
+        size_t val_start = i;
+        while (i < raw.size() && raw[i] != ')') ++i;
+        std::string val_str = raw.substr(val_start, i - val_start);
+        if (i < raw.size()) ++i; // skip ')'
+        // Remove px/%
+        std::string clean;
+        for (char c : val_str) if (c != 'p' && c != 'x' && c != '%') clean += c;
+        float val = 1.0f;
+        try { val = std::stof(clean); } catch(...) {}
+        // Convert percentage to 0-1 for filters that expect it
+        if (val_str.find('%') != std::string::npos && name != "blur") val /= 100.0f;
+
+        FilterDef fd;
+        if      (name == "blur")       { fd.type = FilterDef::Blur;       fd.value = val; }
+        else if (name == "brightness") { fd.type = FilterDef::Brightness;  fd.value = val; }
+        else if (name == "grayscale")  { fd.type = FilterDef::Grayscale;   fd.value = val; }
+        else if (name == "opacity")    { fd.type = FilterDef::Opacity;     fd.value = val; }
+        else if (name == "contrast")   { fd.type = FilterDef::Contrast;    fd.value = val; }
+        else if (name == "invert")     { fd.type = FilterDef::Invert;      fd.value = val; }
+        else if (name == "saturate")   { fd.type = FilterDef::Saturate;    fd.value = val; }
+        else if (name == "sepia")      { fd.type = FilterDef::Sepia;       fd.value = val; }
+        else continue;
+        out.push_back(fd);
+    }
+    return out;
+}
+
+// Box blur: single horizontal pass (src → dst, width w, height h, stride in uint32_t)
+static void box_blur_h(uint32_t* src, uint32_t* dst, int w, int h, int r) {
+    for (int y = 0; y < h; ++y) {
+        int rA=0, rR=0, rG=0, rB=0;
+        // Fill initial window
+        for (int x = -r; x <= r; ++x) {
+            int sx = std::max(0, std::min(w-1, x));
+            uint32_t px = src[y*w+sx];
+            rA += (px>>24)&0xff; rR += (px>>16)&0xff;
+            rG += (px>>8)&0xff;  rB += px&0xff;
+        }
+        for (int x = 0; x < w; ++x) {
+            dst[y*w+x] = (std::min(255,rA/(2*r+1))<<24)|
+                         (std::min(255,rR/(2*r+1))<<16)|
+                         (std::min(255,rG/(2*r+1))<<8)|
+                          std::min(255,rB/(2*r+1));
+            // slide window
+            int remove_x = std::max(0, std::min(w-1, x-r));
+            int add_x = std::max(0, std::min(w-1, x+r+1));
+            uint32_t rem = src[y*w+remove_x], add = src[y*w+add_x];
+            rA += ((add>>24)&0xff) - ((rem>>24)&0xff);
+            rR += ((add>>16)&0xff) - ((rem>>16)&0xff);
+            rG += ((add>>8)&0xff)  - ((rem>>8)&0xff);
+            rB += (add&0xff) - (rem&0xff);
+        }
+    }
+}
+
+static void box_blur_v(uint32_t* src, uint32_t* dst, int w, int h, int r) {
+    for (int x = 0; x < w; ++x) {
+        int rA=0, rR=0, rG=0, rB=0;
+        for (int y = -r; y <= r; ++y) {
+            int sy = std::max(0, std::min(h-1, y));
+            uint32_t px = src[sy*w+x];
+            rA += (px>>24)&0xff; rR += (px>>16)&0xff;
+            rG += (px>>8)&0xff;  rB += px&0xff;
+        }
+        for (int y = 0; y < h; ++y) {
+            dst[y*w+x] = (std::min(255,rA/(2*r+1))<<24)|
+                         (std::min(255,rR/(2*r+1))<<16)|
+                         (std::min(255,rG/(2*r+1))<<8)|
+                          std::min(255,rB/(2*r+1));
+            int remove_y = std::max(0, std::min(h-1, y-r));
+            int add_y = std::max(0, std::min(h-1, y+r+1));
+            uint32_t rem = src[remove_y*w+x], add = src[add_y*w+x];
+            rA += ((add>>24)&0xff) - ((rem>>24)&0xff);
+            rR += ((add>>16)&0xff) - ((rem>>16)&0xff);
+            rG += ((add>>8)&0xff)  - ((rem>>8)&0xff);
+            rB += (add&0xff) - (rem&0xff);
+        }
+    }
+}
+
+static void apply_filter_to_surface(cairo_surface_t* surf, const FilterDef& f) {
+    if (!surf || cairo_surface_get_type(surf) != CAIRO_SURFACE_TYPE_IMAGE) return;
+    cairo_surface_flush(surf);
+    int w = cairo_image_surface_get_width(surf);
+    int h = cairo_image_surface_get_height(surf);
+    int stride = cairo_image_surface_get_stride(surf);
+    unsigned char* data = cairo_image_surface_get_data(surf);
+    if (!data || w <= 0 || h <= 0) return;
+
+    if (f.type == FilterDef::Blur) {
+        int r = std::max(1, std::min(30, (int)(f.value * 1.5f)));
+        int pixels = w * h;
+        std::vector<uint32_t> tmp1(pixels), tmp2(pixels);
+        // Copy surface data (stride may differ from w*4)
+        for (int y = 0; y < h; ++y)
+            memcpy(&tmp1[y*w], data + y*stride, w*4);
+        // 3-pass box blur approximation of Gaussian
+        for (int pass = 0; pass < 3; ++pass) {
+            box_blur_h(tmp1.data(), tmp2.data(), w, h, r);
+            box_blur_v(tmp2.data(), tmp1.data(), w, h, r);
+        }
+        // Write back
+        for (int y = 0; y < h; ++y)
+            memcpy(data + y*stride, &tmp1[y*w], w*4);
+    } else {
+        // Pixel-level filters on CAIRO_FORMAT_ARGB32 (premultiplied)
+        for (int y = 0; y < h; ++y) {
+            uint32_t* row = (uint32_t*)(data + y * stride);
+            for (int x = 0; x < w; ++x) {
+                uint32_t px = row[x];
+                int A = (px>>24)&0xff, R = (px>>16)&0xff, G = (px>>8)&0xff, B = px&0xff;
+                // Un-premultiply
+                int uR = A ? R*255/A : 0;
+                int uG = A ? G*255/A : 0;
+                int uB = A ? B*255/A : 0;
+                float v = f.value;
+                switch (f.type) {
+                case FilterDef::Brightness:
+                    uR = std::min(255, (int)(uR * v));
+                    uG = std::min(255, (int)(uG * v));
+                    uB = std::min(255, (int)(uB * v));
+                    break;
+                case FilterDef::Grayscale: {
+                    int luma = (int)(0.2126f*uR + 0.7152f*uG + 0.0722f*uB);
+                    uR = (int)(uR + v*(luma-uR));
+                    uG = (int)(uG + v*(luma-uG));
+                    uB = (int)(uB + v*(luma-uB));
+                    break;
+                }
+                case FilterDef::Contrast: {
+                    uR = std::max(0,std::min(255,(int)((uR-128)*v+128)));
+                    uG = std::max(0,std::min(255,(int)((uG-128)*v+128)));
+                    uB = std::max(0,std::min(255,(int)((uB-128)*v+128)));
+                    break;
+                }
+                case FilterDef::Invert:
+                    uR = (int)(uR + v*(255-uR-uR));
+                    uG = (int)(uG + v*(255-uG-uG));
+                    uB = (int)(uB + v*(255-uB-uB));
+                    break;
+                case FilterDef::Saturate: {
+                    int luma2 = (int)(0.2126f*uR + 0.7152f*uG + 0.0722f*uB);
+                    uR = std::max(0,std::min(255,(int)(luma2 + v*(uR-luma2))));
+                    uG = std::max(0,std::min(255,(int)(luma2 + v*(uG-luma2))));
+                    uB = std::max(0,std::min(255,(int)(luma2 + v*(uB-luma2))));
+                    break;
+                }
+                case FilterDef::Sepia: {
+                    float t = v;
+                    int sR = std::min(255,(int)(uR*(1-t) + uR*0.393f*t + uG*0.769f*t + uB*0.189f*t));
+                    int sG = std::min(255,(int)(uG*(1-t) + uR*0.349f*t + uG*0.686f*t + uB*0.168f*t));
+                    int sB = std::min(255,(int)(uB*(1-t) + uR*0.272f*t + uG*0.534f*t + uB*0.131f*t));
+                    uR=sR; uG=sG; uB=sB;
+                    break;
+                }
+                case FilterDef::Opacity:
+                    A = std::min(255, (int)(A * v));
+                    break;
+                default: break;
+                }
+                // Re-premultiply
+                if (f.type != FilterDef::Opacity) {
+                    R = A ? std::min(255, uR*A/255) : 0;
+                    G = A ? std::min(255, uG*A/255) : 0;
+                    B = A ? std::min(255, uB*A/255) : 0;
+                } else {
+                    R = A ? std::min(255, uR*A/255) : 0;
+                    G = A ? std::min(255, uG*A/255) : 0;
+                    B = A ? std::min(255, uB*A/255) : 0;
+                }
+                row[x] = ((uint32_t)A<<24)|((uint32_t)R<<16)|((uint32_t)G<<8)|(uint32_t)B;
+            }
+        }
+    }
+    cairo_surface_mark_dirty(surf);
+}
+
 // CSS transform parser helper
 static cairo_matrix_t parse_css_transform_matrix(const std::string& val, float cx, float cy) {
     cairo_matrix_t m;
@@ -382,6 +756,15 @@ static void paint_box(LayoutBox* box, DisplayList& dl, float offset_x, float off
     float cx = offset_x + box->content_rect.x;
     float cy = offset_y + box->content_rect.y;
 
+    // CSS filter: push group BEFORE transform so filter wraps transformed content
+    bool has_filter = !box->css_filter.empty() && box->css_filter != "none";
+    if (has_filter) {
+        PaintCommand fcmd;
+        fcmd.type = PaintCmdType::PushFilter;
+        fcmd.filters = parse_css_filter_list(box->css_filter);
+        dl.push_back(fcmd);
+    }
+
     // CSS transform: push BEFORE anything else so the whole element is transformed
     bool do_transform = node && !box->css_transform.empty();
     if (do_transform) {
@@ -494,7 +877,31 @@ static void paint_box(LayoutBox* box, DisplayList& dl, float offset_x, float off
         cmd.dest_rect = bb;
         cmd.natural_w = cairo_image_surface_get_width(box->bg_surface);
         cmd.natural_h = cairo_image_surface_get_height(box->bg_surface);
-        cmd.object_fit = 2;  // cover
+        cmd.object_fit = 2;  // cover (default; overridden by bg_size_raw below)
+        cmd.border_radius = node ? node->border_radius : 0;
+        cmd.bg_size_raw = box->bg_size;
+        cmd.bg_position_raw = box->bg_position;
+        cmd.bg_repeat_mode = box->bg_repeat;
+        cmd.dom_node = node;
+        dl.push_back(cmd);
+    }
+
+    // CSS gradient as background
+    if (!box->bg_gradient.empty() && box->content_rect.w > 0 && box->content_rect.h > 0) {
+        Rect bb = box->border_box();
+        bb.x += offset_x;
+        bb.y += offset_y;
+        PaintCommand cmd;
+        const std::string& gr = box->bg_gradient;
+        bool is_radial = gr.find("radial-gradient(") != std::string::npos;
+        if (is_radial) {
+            cmd.type = PaintCmdType::DrawRadialGradient;
+            parse_radial_gradient(gr, bb, cmd.gradient_stops, cmd.grad_cx, cmd.grad_cy, cmd.grad_r);
+        } else {
+            cmd.type = PaintCmdType::DrawLinearGradient;
+            parse_linear_gradient(gr, bb, cmd.gradient_stops, cmd.grad_x0, cmd.grad_y0, cmd.grad_x1, cmd.grad_y1);
+        }
+        cmd.dest_rect = bb;
         cmd.border_radius = node ? node->border_radius : 0;
         cmd.dom_node = node;
         dl.push_back(cmd);
@@ -732,6 +1139,14 @@ static void paint_box(LayoutBox* box, DisplayList& dl, float offset_x, float off
         cmd.type = PaintCmdType::PopTransform;
         dl.push_back(cmd);
     }
+
+    // Pop CSS filter (outermost)
+    if (has_filter) {
+        PaintCommand fcmd;
+        fcmd.type = PaintCmdType::PopFilter;
+        fcmd.filters = parse_css_filter_list(box->css_filter);
+        dl.push_back(fcmd);
+    }
 }
 
 DisplayList generate_display_list(LayoutBox* root) {
@@ -956,24 +1371,185 @@ void render_display_list(cairo_t* cr, const DisplayList& dl, float scroll_x, flo
 
             case PaintCmdType::DrawBackgroundImage: {
                 if (!cmd.surface) break;
-                int sw = cairo_image_surface_get_width(cmd.surface);
-                int sh = cairo_image_surface_get_height(cmd.surface);
-                if (sw <= 0 || sh <= 0) break;
+                int sw2 = cairo_image_surface_get_width(cmd.surface);
+                int sh2 = cairo_image_surface_get_height(cmd.surface);
+                if (sw2 <= 0 || sh2 <= 0) break;
                 float dw = cmd.dest_rect.w, dh = cmd.dest_rect.h;
                 float dx = cmd.dest_rect.x, dy = cmd.dest_rect.y;
                 if (dw <= 0 || dh <= 0) break;
-                // Cover: fill destination preserving aspect ratio
-                float scale = std::max(dw / sw, dh / sh);
-                float rw = sw * scale, rh = sh * scale;
-                float ox = (dw - rw) / 2, oy = (dh - rh) / 2;
+
+                // Resolve bg-size
+                float tile_w = sw2, tile_h = sh2;
+                const std::string& bsz = cmd.bg_size_raw;
+                if (bsz == "cover") {
+                    float sc = std::max(dw/sw2, dh/sh2);
+                    tile_w = sw2*sc; tile_h = sh2*sc;
+                } else if (bsz == "contain") {
+                    float sc = std::min(dw/sw2, dh/sh2);
+                    tile_w = sw2*sc; tile_h = sh2*sc;
+                } else if (!bsz.empty() && bsz != "auto") {
+                    // try "Wpx Hpx" or "W% H%"
+                    float v1 = sw2, v2 = sh2;
+                    size_t sp = bsz.find(' ');
+                    std::string p1 = sp == std::string::npos ? bsz : bsz.substr(0, sp);
+                    std::string p2 = sp == std::string::npos ? "" : bsz.substr(sp+1);
+                    try {
+                        if (p1.back()=='%') v1 = std::stof(p1)*dw/100.0f;
+                        else v1 = std::stof(p1);
+                        if (!p2.empty()) {
+                            if (p2.back()=='%') v2 = std::stof(p2)*dh/100.0f;
+                            else v2 = std::stof(p2);
+                        } else v2 = v1/sw2*sh2; // auto height
+                    } catch(...) {}
+                    tile_w = v1; tile_h = v2;
+                }
+
+                // Resolve bg-position
+                float ox = 0, oy = 0;
+                const std::string& bpos = cmd.bg_position_raw;
+                if (!bpos.empty()) {
+                    // split by space
+                    size_t sp2 = bpos.find(' ');
+                    std::string px_s = sp2==std::string::npos?bpos:bpos.substr(0,sp2);
+                    std::string py_s = sp2==std::string::npos?"":bpos.substr(sp2+1);
+                    auto parse_pos = [](const std::string& s, float avail, float tile) -> float {
+                        if (s=="center") return (avail-tile)/2;
+                        if (s=="left"||s=="top") return 0;
+                        if (s=="right"||s=="bottom") return avail-tile;
+                        try {
+                            if (!s.empty()&&s.back()=='%') return (avail-tile)*std::stof(s)/100.0f;
+                            return std::stof(s);
+                        } catch(...) { return 0; }
+                    };
+                    ox = parse_pos(px_s, dw, tile_w);
+                    oy = parse_pos(py_s.empty()?"center":py_s, dh, tile_h);
+                } else {
+                    // default position for cover/contain: center
+                    ox = (dw - tile_w) / 2;
+                    oy = (dh - tile_h) / 2;
+                }
+
                 cairo_save(cr);
                 cairo_rectangle(cr, dx, dy, dw, dh);
                 cairo_clip(cr);
-                cairo_translate(cr, dx + ox, dy + oy);
-                cairo_scale(cr, scale, scale);
-                cairo_set_source_surface(cr, cmd.surface, 0, 0);
+
+                if (cmd.bg_repeat_mode == 3 || bsz == "cover" || bsz == "contain") {
+                    // no-repeat or cover/contain: single tile
+                    float scx = tile_w / sw2, scy = tile_h / sh2;
+                    cairo_translate(cr, dx+ox, dy+oy);
+                    cairo_scale(cr, scx, scy);
+                    cairo_set_source_surface(cr, cmd.surface, 0, 0);
+                    cairo_paint(cr);
+                } else {
+                    // Repeat using Cairo pattern
+                    float scx = tile_w / sw2, scy = tile_h / sh2;
+                    cairo_pattern_t* pat = cairo_pattern_create_for_surface(cmd.surface);
+                    cairo_matrix_t mat;
+                    cairo_matrix_init_scale(&mat, 1.0/scx, 1.0/scy);
+                    cairo_matrix_translate(&mat, -(dx+ox)/scx, -(dy+oy)/scy);
+                    // But pattern matrix transforms pattern→user, we need user→pattern:
+                    // pattern_x = (user_x - (dx+ox)) / scx  → scale by 1/scx, translate by -(dx+ox)
+                    cairo_matrix_init(&mat, 1.0/scx, 0, 0, 1.0/scy, -(dx+ox)/scx, -(dy+oy)/scy);
+                    cairo_pattern_set_matrix(pat, &mat);
+                    if (cmd.bg_repeat_mode == 1) {  // repeat-x
+                        cairo_pattern_set_extend(pat, CAIRO_EXTEND_REPEAT);
+                        // clip to a single tile height
+                        cairo_rectangle(cr, dx, dy+oy, dw, tile_h);
+                        cairo_clip(cr);
+                    } else if (cmd.bg_repeat_mode == 2) {  // repeat-y
+                        cairo_pattern_set_extend(pat, CAIRO_EXTEND_REPEAT);
+                        cairo_rectangle(cr, dx+ox, dy, tile_w, dh);
+                        cairo_clip(cr);
+                    } else {
+                        cairo_pattern_set_extend(pat, CAIRO_EXTEND_REPEAT);
+                    }
+                    cairo_set_source(cr, pat);
+                    cairo_paint(cr);
+                    cairo_pattern_destroy(pat);
+                }
+                cairo_restore(cr);
+                break;
+            }
+
+            case PaintCmdType::DrawLinearGradient: {
+                if (cmd.gradient_stops.size() < 2) break;
+                float dw2 = cmd.dest_rect.w, dh2 = cmd.dest_rect.h;
+                if (dw2 <= 0 || dh2 <= 0) break;
+                cairo_pattern_t* pat = cairo_pattern_create_linear(
+                    cmd.grad_x0, cmd.grad_y0, cmd.grad_x1, cmd.grad_y1);
+                for (const auto& s : cmd.gradient_stops)
+                    cairo_pattern_add_color_stop_rgba(pat, s.pos, s.color.r, s.color.g, s.color.b, s.color.a);
+                cairo_save(cr);
+                // Clip to dest_rect with optional border-radius
+                if (cmd.border_radius > 0) {
+                    float rx=cmd.dest_rect.x, ry=cmd.dest_rect.y, rw2=dw2, rh2=dh2;
+                    float hr=std::min((float)cmd.border_radius,rw2/2), vr=std::min((float)cmd.border_radius,rh2/2);
+                    cairo_new_path(cr);
+                    cairo_arc(cr,rx+hr,ry+vr,hr,M_PI,1.5*M_PI);
+                    cairo_arc(cr,rx+rw2-hr,ry+vr,hr,1.5*M_PI,2*M_PI);
+                    cairo_arc(cr,rx+rw2-hr,ry+rh2-vr,vr,0,0.5*M_PI);
+                    cairo_arc(cr,rx+hr,ry+rh2-vr,vr,0.5*M_PI,M_PI);
+                    cairo_close_path(cr);
+                    cairo_clip(cr);
+                } else {
+                    cairo_rectangle(cr, cmd.dest_rect.x, cmd.dest_rect.y, dw2, dh2);
+                    cairo_clip(cr);
+                }
+                cairo_set_source(cr, pat);
                 cairo_paint(cr);
                 cairo_restore(cr);
+                cairo_pattern_destroy(pat);
+                break;
+            }
+
+            case PaintCmdType::DrawRadialGradient: {
+                if (cmd.gradient_stops.size() < 2) break;
+                float dw3 = cmd.dest_rect.w, dh3 = cmd.dest_rect.h;
+                if (dw3 <= 0 || dh3 <= 0) break;
+                cairo_pattern_t* pat = cairo_pattern_create_radial(
+                    cmd.grad_cx, cmd.grad_cy, 0,
+                    cmd.grad_cx, cmd.grad_cy, cmd.grad_r);
+                for (const auto& s : cmd.gradient_stops)
+                    cairo_pattern_add_color_stop_rgba(pat, s.pos, s.color.r, s.color.g, s.color.b, s.color.a);
+                cairo_save(cr);
+                if (cmd.border_radius > 0) {
+                    float rx=cmd.dest_rect.x, ry=cmd.dest_rect.y, rw3=dw3, rh3=dh3;
+                    float hr=std::min((float)cmd.border_radius,rw3/2), vr=std::min((float)cmd.border_radius,rh3/2);
+                    cairo_new_path(cr);
+                    cairo_arc(cr,rx+hr,ry+vr,hr,M_PI,1.5*M_PI);
+                    cairo_arc(cr,rx+rw3-hr,ry+vr,hr,1.5*M_PI,2*M_PI);
+                    cairo_arc(cr,rx+rw3-hr,ry+rh3-vr,vr,0,0.5*M_PI);
+                    cairo_arc(cr,rx+hr,ry+rh3-vr,vr,0.5*M_PI,M_PI);
+                    cairo_close_path(cr);
+                    cairo_clip(cr);
+                } else {
+                    cairo_rectangle(cr, cmd.dest_rect.x, cmd.dest_rect.y, dw3, dh3);
+                    cairo_clip(cr);
+                }
+                cairo_set_source(cr, pat);
+                cairo_paint(cr);
+                cairo_restore(cr);
+                cairo_pattern_destroy(pat);
+                break;
+            }
+
+            case PaintCmdType::PushFilter: {
+                cairo_push_group(cr);
+                break;
+            }
+
+            case PaintCmdType::PopFilter: {
+                cairo_pattern_t* pat = cairo_pop_group(cr);
+                if (pat) {
+                    cairo_surface_t* surf = nullptr;
+                    if (cairo_pattern_get_surface(pat, &surf) == CAIRO_STATUS_SUCCESS && surf) {
+                        for (const auto& f : cmd.filters)
+                            apply_filter_to_surface(surf, f);
+                    }
+                    cairo_set_source(cr, pat);
+                    cairo_paint(cr);
+                    cairo_pattern_destroy(pat);
+                }
                 break;
             }
 

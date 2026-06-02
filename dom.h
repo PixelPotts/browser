@@ -145,6 +145,12 @@ struct DOMNode {
     // CSS custom properties (var())
     std::unordered_map<std::string, std::string> custom_props;
 
+    // CSS gradients / filter / text
+    std::string bg_gradient;    // CSS gradient (linear-gradient/radial-gradient)
+    std::string css_filter;     // CSS filter value (blur, brightness, etc.)
+    int word_break = 0;         // 0=normal, 1=break-all, 2=keep-all
+    int overflow_wrap = 0;      // 0=normal, 1=break-word, 2=anywhere
+
     // Interactive state
     bool is_hovered = false;
     bool is_focused = false;

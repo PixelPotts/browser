@@ -1,6 +1,7 @@
 CXX      = g++
 CC       = gcc
 CXXFLAGS = -std=c++17 -O2 -g -Wall -Wno-unused-result -rdynamic -fno-strict-aliasing \
+           -MMD -MP \
            $(shell pkg-config --cflags gtk+-3.0) \
            -I quickjs
 CFLAGS   = -std=gnu11 -O2 -Wall -Wno-unused-result \
@@ -31,6 +32,8 @@ quickjs/%.o: quickjs/%.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 clean:
-	rm -f $(CXX_OBJS) $(QJS_OBJS) $(TARGET)
+	rm -f $(CXX_OBJS) $(QJS_OBJS) $(TARGET) $(CXX_SRCS:.cpp=.d)
+
+-include $(CXX_SRCS:.cpp=.d)
 
 .PHONY: all clean

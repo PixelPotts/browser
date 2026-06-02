@@ -14,11 +14,23 @@ struct CairoColor {
 
 // ---- Paint commands (display list) ----
 
+struct GradientStop {
+    float pos;       // 0.0 – 1.0
+    CairoColor color;
+};
+
+struct FilterDef {
+    enum Type { Blur, Brightness, Grayscale, Opacity, Contrast, Invert, Saturate, Sepia } type;
+    float value = 1.0f;  // amount (blur = pixels, others = multiplier)
+};
+
 enum class PaintCmdType {
     FillRect,
     DrawText,
     DrawBorder,
     DrawOutline,
+    DrawLinearGradient,
+    DrawRadialGradient,
     DrawImage,
     DrawBackgroundImage,
     PushClip,
@@ -28,7 +40,9 @@ enum class PaintCmdType {
     Translate,
     PopTranslate,
     PushTransform,
-    PopTransform
+    PopTransform,
+    PushFilter,
+    PopFilter
 };
 
 struct PaintCommand {
@@ -70,6 +84,19 @@ struct PaintCommand {
     // Translate / PushTransform
     float tx = 0, ty = 0;
     cairo_matrix_t transform_matrix = {1,0,0,1,0,0};  // identity by default
+
+    // Gradient (DrawLinearGradient, DrawRadialGradient)
+    std::vector<GradientStop> gradient_stops;
+    float grad_x0=0, grad_y0=0, grad_x1=0, grad_y1=0;  // linear endpoints
+    float grad_cx=0, grad_cy=0, grad_r=0;               // radial center+radius
+
+    // DrawBackgroundImage extras
+    std::string bg_size_raw;
+    std::string bg_position_raw;
+    int bg_repeat_mode = 0;  // 0=repeat, 1=repeat-x, 2=repeat-y, 3=no-repeat
+
+    // Filter (PushFilter / PopFilter)
+    std::vector<FilterDef> filters;
 
     // Back-pointer for hit testing
     DOMNode* dom_node = nullptr;

@@ -121,6 +121,29 @@ static void copy_style(LayoutBox* box, DOMNode* node) {
     box->outline_offset = node->outline_offset;
     box->outline_color = node->outline_color;
     box->pointer_events = node->pointer_events;
+    box->bg_gradient = node->bg_gradient;
+    box->css_filter = node->css_filter;
+    box->word_break = node->word_break;
+    box->overflow_wrap = node->overflow_wrap;
+    box->text_overflow = node->text_overflow;
+    {
+        auto it = node->style_props.find("background-repeat");
+        if (it != node->style_props.end()) {
+            std::string r = it->second;
+            if (r == "no-repeat") box->bg_repeat = 3;
+            else if (r == "repeat-x") box->bg_repeat = 1;
+            else if (r == "repeat-y") box->bg_repeat = 2;
+            else box->bg_repeat = 0;
+        }
+    }
+    {
+        auto it = node->style_props.find("background-size");
+        if (it != node->style_props.end()) box->bg_size = it->second;
+    }
+    {
+        auto it = node->style_props.find("background-position");
+        if (it != node->style_props.end()) box->bg_position = it->second;
+    }
     // letter-spacing: resolve inheritance
     {
         int ls = node->letter_spacing;
@@ -479,7 +502,17 @@ static PangoLayout* create_pango_layout_for_text(PangoContext* pango_ctx, Layout
     if (ws != 1 && ws != 2) { // not nowrap, not pre
         if (max_width > 0)
             pango_layout_set_width(layout, (int)(max_width * PANGO_SCALE));
-        pango_layout_set_wrap(layout, PANGO_WRAP_WORD_CHAR);
+        // Choose wrap mode based on word-break / overflow-wrap
+        PangoWrapMode wrap = PANGO_WRAP_WORD_CHAR;
+        if (box->word_break == 1) wrap = PANGO_WRAP_CHAR;       // break-all
+        else if (box->word_break == 2) wrap = PANGO_WRAP_WORD;  // keep-all
+        else if (box->overflow_wrap == 0 && box->word_break == 0) wrap = PANGO_WRAP_WORD;
+        pango_layout_set_wrap(layout, wrap);
+    }
+    // text-overflow: ellipsis (requires overflow:hidden + max_width)
+    if (box->text_overflow == 1 && max_width > 0) {
+        pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_END);
+        pango_layout_set_width(layout, (int)(max_width * PANGO_SCALE));
     }
 
     return layout;
@@ -1267,7 +1300,14 @@ static void layout_inline(LayoutBox* box, float containing_width, PangoContext* 
 
     if (containing_width > 0) {
         pango_layout_set_width(layout, (int)(containing_width * PANGO_SCALE));
-        pango_layout_set_wrap(layout, PANGO_WRAP_WORD_CHAR);
+        PangoWrapMode wrap2 = PANGO_WRAP_WORD_CHAR;
+        if (box->word_break == 1) wrap2 = PANGO_WRAP_CHAR;
+        else if (box->word_break == 2) wrap2 = PANGO_WRAP_WORD;
+        else if (box->overflow_wrap == 0 && box->word_break == 0) wrap2 = PANGO_WRAP_WORD;
+        pango_layout_set_wrap(layout, wrap2);
+    }
+    if (box->text_overflow == 1 && containing_width > 0) {
+        pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_END);
     }
 
     // Text alignment

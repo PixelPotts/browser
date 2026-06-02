@@ -18,6 +18,7 @@
 #include "js_event.h"
 #include <unordered_map>
 #include <unordered_set>
+#include <sstream>
 #include "layout.h"
 #include "paint.h"
 #include "hit_test.h"
@@ -47,6 +48,24 @@ static int g_root_font_size = 16;
 std::unordered_map<uint32_t, AnimState> g_animations;
 bool g_anim_pending = false;
 guint g_anim_timer_id = 0;
+
+// ---- CSS @keyframes animation globals ----
+struct KeyframeStop {
+    float position;
+    std::unordered_map<std::string,std::string> props;
+};
+struct KeyframeSet { std::vector<KeyframeStop> stops; };
+struct NodeAnimation {
+    std::string anim_name;
+    int duration_ms = 300;
+    int delay_ms = 0;
+    int iteration_count = 1;  // 0 = infinite
+    bool alternate = false;
+    gint64 start_us = 0;
+    bool started = false;
+};
+static std::unordered_map<std::string, KeyframeSet> g_keyframes;
+static std::unordered_map<uint32_t, NodeAnimation> g_node_animations;
 
 static gboolean draw_canvas(GtkWidget* w, cairo_t* cr, gpointer data) {
     uint32_t node_id = GPOINTER_TO_UINT(data);
@@ -726,8 +745,50 @@ static std::vector<CSSRule> parse_css(const std::string& css) {
                         rules.push_back(std::move(r));
                     }
                 }
+            } else if (at_rule.substr(0,11) == "@keyframes " || at_rule.substr(0,12) == "@-webkit-keyframes ") {
+                // Parse @keyframes name { from{} to{} N%{} }
+                size_t name_start = at_rule.find(' ') + 1;
+                size_t name_end = at_rule.find_last_not_of(" \t\r\n");
+                std::string anim_name = (name_start < at_rule.size()) ?
+                    at_rule.substr(name_start, name_end - name_start + 1) : "";
+                // trim again for -webkit- variant
+                size_t ns2 = anim_name.find(' ');
+                if (ns2 != std::string::npos) anim_name = anim_name.substr(ns2+1);
+                int depth=1; size_t bs=ob+1; i=ob+1;
+                while (i<n && depth>0) { if(css[i]=='{')++depth; else if(css[i]=='}')--depth; ++i; }
+                std::string inner = css.substr(bs, i-1-bs);
+                KeyframeSet kf;
+                size_t ki = 0;
+                while (ki < inner.size()) {
+                    while (ki<inner.size() && std::isspace((unsigned char)inner[ki])) ++ki;
+                    size_t ob2 = inner.find('{', ki);
+                    if (ob2 == std::string::npos) break;
+                    std::string ksel_raw = inner.substr(ki, ob2-ki);
+                    size_t cb2 = inner.find('}', ob2);
+                    if (cb2 == std::string::npos) break;
+                    std::string kdecls = inner.substr(ob2+1, cb2-ob2-1);
+                    // parse selector(s): "from", "to", "0%", "50%,75%" (comma separated)
+                    // For simplicity handle one selector per block
+                    size_t a2=ksel_raw.find_first_not_of(" \t\r\n"), b2=ksel_raw.find_last_not_of(" \t\r\n");
+                    std::string ksel = (a2!=std::string::npos) ? ksel_raw.substr(a2,b2-a2+1) : "";
+                    float pos = 0;
+                    if (ksel=="from"||ksel=="0%") pos=0;
+                    else if (ksel=="to"||ksel=="100%") pos=1.0f;
+                    else try { pos=std::stof(ksel)/100.0f; } catch(...){}
+                    KeyframeStop ks;
+                    ks.position = pos;
+                    // Extract animatable properties
+                    for (const char* pname : {"background-color","color","opacity","transform","width","height","border-color","border-radius"}) {
+                        std::string v = prop_val(kdecls, pname);
+                        if (!v.empty()) ks.props[pname] = v;
+                    }
+                    kf.stops.push_back(ks);
+                    ki = cb2 + 1;
+                }
+                std::stable_sort(kf.stops.begin(), kf.stops.end(), [](const KeyframeStop& a, const KeyframeStop& b){ return a.position < b.position; });
+                if (!anim_name.empty()) g_keyframes[anim_name] = std::move(kf);
             } else {
-                // Skip other @rules (keyframes, font-face, etc.)
+                // Skip other @rules (font-face, etc.)
                 int depth=1; i=ob+1;
                 while (i<n && depth>0) { if(css[i]=='{')++depth; else if(css[i]=='}')--depth; ++i; }
             }
@@ -796,6 +857,12 @@ static std::vector<CSSRule> parse_css(const std::string& css) {
                     || !prop_val(decls,"outline").empty()
                     || !prop_val(decls,"cursor").empty()
                     || !prop_val(decls,"pointer-events").empty()
+                    || !prop_val(decls,"filter").empty()
+                    || !prop_val(decls,"word-break").empty()
+                    || !prop_val(decls,"overflow-wrap").empty()
+                    || !prop_val(decls,"word-wrap").empty()
+                    || !prop_val(decls,"animation").empty()
+                    || !prop_val(decls,"text-overflow").empty()
                     || decls.find("--") != std::string::npos;
         if (fw==-1 && fs_raw.empty() && lh_raw.empty() && !has_box) continue;
         // split comma-separated selectors
@@ -869,6 +936,7 @@ struct BoxModel {
     enum class Float   : uint8_t { None, Left, Right }                               floatdir = Float::None;
     std::string bg_image; // resolved URL
     std::string bg_color; // raw CSS color value
+    std::string bg_gradient; // CSS gradient value
     std::string box_shadow; // raw CSS box-shadow value
     double opacity = 1.0;   // CSS opacity
     int overflow = -1;      // -1=inherit, 0=visible, 1=hidden, 2=scroll, 3=auto
@@ -955,14 +1023,31 @@ static void apply_box(const std::string& decls, BoxModel& bm, int fs_ctx = 16) {
     {
         std::string s = prop_val(decls,"background-image");
         if (s.empty()) s = prop_val(decls,"background");
-        size_t p = s.find("url(");
-        if (p != std::string::npos) {
-            size_t q = s.find(')', p+4);
-            if (q != std::string::npos) {
-                std::string u = s.substr(p+4, q-p-4);
-                while (!u.empty()&&(u.front()=='"'||u.front()=='\''||u.front()==' ')) u.erase(u.begin());
-                while (!u.empty()&&(u.back() =='"'||u.back() =='\''||u.back() ==' ')) u.pop_back();
-                if (!u.empty()) bm.bg_image = u;
+        // Detect CSS gradient
+        size_t gpos = s.find("linear-gradient(");
+        if (gpos == std::string::npos) gpos = s.find("radial-gradient(");
+        if (gpos == std::string::npos) gpos = s.find("repeating-linear-gradient(");
+        if (gpos == std::string::npos) gpos = s.find("repeating-radial-gradient(");
+        if (gpos != std::string::npos) {
+            // Extract full gradient(...) value (may span multiple parens)
+            size_t start = gpos;
+            int depth2 = 0;
+            size_t end2 = start;
+            for (; end2 < s.size(); ++end2) {
+                if (s[end2]=='(') ++depth2;
+                else if (s[end2]==')') { --depth2; if (depth2==0) { ++end2; break; } }
+            }
+            bm.bg_gradient = s.substr(start, end2-start);
+        } else {
+            size_t p = s.find("url(");
+            if (p != std::string::npos) {
+                size_t q = s.find(')', p+4);
+                if (q != std::string::npos) {
+                    std::string u = s.substr(p+4, q-p-4);
+                    while (!u.empty()&&(u.front()=='"'||u.front()=='\''||u.front()==' ')) u.erase(u.begin());
+                    while (!u.empty()&&(u.back() =='"'||u.back() =='\''||u.back() ==' ')) u.pop_back();
+                    if (!u.empty()) bm.bg_image = u;
+                }
             }
         }
     }
@@ -1877,6 +1962,7 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
             elem->floatdir = static_cast<DOMNode::Float>(static_cast<int>(bm.floatdir));
             elem->bg_image = bm.bg_image;
             elem->bg_color = bm.bg_color;
+            if (!bm.bg_gradient.empty()) elem->bg_gradient = bm.bg_gradient;
             if (!bm.bg_repeat.empty()) elem->style_props["background-repeat"] = bm.bg_repeat;
             if (!bm.bg_size.empty()) elem->style_props["background-size"] = bm.bg_size;
             if (!bm.bg_position.empty()) {
@@ -3606,13 +3692,83 @@ static gboolean anim_tick(gpointer data) {
         }
     }
 
+    // Tick @keyframes animations
+    if (!g_node_animations.empty() && tab->document) {
+        DOMNode* root = tab->document->body ? tab->document->body : tab->document->root.get();
+        // Walk DOM to find animated nodes and apply interpolated values
+        std::function<void(DOMNode*)> tick_anim = [&](DOMNode* node) {
+            if (!node) return;
+            auto ait = g_node_animations.find(node->node_id);
+            if (ait != g_node_animations.end()) {
+                NodeAnimation& na = ait->second;
+                auto kit = g_keyframes.find(na.anim_name);
+                if (kit != g_keyframes.end()) {
+                    gint64 elapsed = now - na.start_us - (gint64)na.delay_ms * 1000;
+                    if (elapsed >= 0) {
+                        float t = (float)elapsed / (na.duration_ms * 1000.0f);
+                        if (na.iteration_count == 0) t = fmodf(t, 1.0f); // infinite
+                        else if (t > 1.0f) { t = 1.0f; g_node_animations.erase(ait); }
+                        else any_active = true;
+                        if (na.alternate) t = t < 0.5f ? 2.0f*t : 2.0f*(1.0f-t);
+                        // Find surrounding keyframe stops
+                        const auto& stops = kit->second.stops;
+                        size_t lo = 0, hi = 0;
+                        for (size_t si = 0; si < stops.size(); ++si) {
+                            if (stops[si].position <= t) lo = si;
+                            if (stops[si].position >= t && hi <= lo) hi = si;
+                        }
+                        // Interpolate properties between lo and hi
+                        float range = stops[hi].position - stops[lo].position;
+                        float frac = range > 0 ? (t - stops[lo].position) / range : 0;
+                        auto interp_color = [&](const std::string& pa) {
+                            auto alo = stops[lo].props.find(pa);
+                            auto ahi = stops[hi].props.find(pa);
+                            if (alo == stops[lo].props.end() || ahi == stops[hi].props.end()) return;
+                            CairoColor c0 = parse_css_color(alo->second);
+                            CairoColor c1 = parse_css_color(ahi->second);
+                            char buf[32];
+                            int R = (int)((c0.r + frac*(c1.r-c0.r))*255);
+                            int G = (int)((c0.g + frac*(c1.g-c0.g))*255);
+                            int B = (int)((c0.b + frac*(c1.b-c0.b))*255);
+                            snprintf(buf, sizeof(buf), "#%02x%02x%02x",
+                                std::max(0,std::min(255,R)), std::max(0,std::min(255,G)), std::max(0,std::min(255,B)));
+                            node->style_props[pa] = buf;
+                        };
+                        interp_color("background-color");
+                        interp_color("color");
+                        interp_color("border-color");
+                        // opacity
+                        auto opl = stops[lo].props.find("opacity");
+                        auto oph = stops[hi].props.find("opacity");
+                        if (opl != stops[lo].props.end() && oph != stops[hi].props.end()) {
+                            try {
+                                float v0 = std::stof(opl->second), v1 = std::stof(oph->second);
+                                node->opacity = v0 + frac*(v1-v0);
+                            } catch(...) {}
+                        }
+                        // transform: just use nearest keyframe
+                        auto trl = stops[lo].props.find("transform");
+                        if (trl != stops[lo].props.end()) node->css_transform = trl->second;
+                    }
+                }
+            }
+            for (auto& child : node->children) tick_anim(child.get());
+        };
+        tick_anim(root);
+        // Trigger layout+paint if any keyframe animation is active
+        if (any_active && tab->drawing_area) {
+            // Lightweight repaint via restyle for animated nodes
+            gtk_widget_queue_draw(tab->drawing_area);
+        }
+    }
+
     // Repaint with current animation state
     if (tab->layout_root) {
         auto* drawing_area = tab->drawing_area;
         if (drawing_area) gtk_widget_queue_draw(drawing_area);
     }
 
-    if (!any_active) {
+    if (!any_active && g_node_animations.empty()) {
         g_anim_timer_id = 0;
         return G_SOURCE_REMOVE;
     }
@@ -3661,6 +3817,9 @@ static void apply_css_to_node(DOMNode* node, const std::vector<CSSRule>& css) {
     node->css_cursor.clear();
     node->pointer_events = 1;
     node->custom_props.clear();
+    node->css_filter.clear();
+    node->word_break = 0;
+    node->overflow_wrap = 0;
     node->flex_direction = 0;
     node->justify_content = 0;
     node->align_items = 0;
@@ -3687,7 +3846,7 @@ static void apply_css_to_node(DOMNode* node, const std::vector<CSSRule>& css) {
     node->halign_center = false;
     node->display = DOMNode::Display::Inherit;
     node->floatdir = DOMNode::Float::None;
-    node->bg_image.clear(); node->bg_color.clear();
+    node->bg_image.clear(); node->bg_color.clear(); node->bg_gradient.clear();
     // Clear bg-related style_props
     node->style_props.erase("background-repeat");
     node->style_props.erase("background-size");
@@ -3894,6 +4053,51 @@ static void apply_css_to_node(DOMNode* node, const std::vector<CSSRule>& css) {
         { auto s = tolower_s(prop_val(r.decls, "pointer-events"));
           if      (s == "none") node->pointer_events = 0;
           else if (s == "auto" || s == "all") node->pointer_events = 1; }
+        // filter / word-break / overflow-wrap / animation / text-overflow
+        { auto s = prop_val(r.decls, "filter"); if (!s.empty() && s!="none") node->css_filter = s; }
+        { auto s = tolower_s(prop_val(r.decls, "word-break"));
+          if (s=="break-all") node->word_break=1; else if(s=="keep-all") node->word_break=2;
+          else if(s=="normal") node->word_break=0; }
+        { auto s = tolower_s(prop_val(r.decls, "overflow-wrap"));
+          if (s=="break-word"||s=="anywhere") node->overflow_wrap=1;
+          else if(s=="normal") node->overflow_wrap=0; }
+        { auto s = tolower_s(prop_val(r.decls, "word-wrap")); // legacy alias
+          if ((s=="break-word") && node->overflow_wrap==0) node->overflow_wrap=1; }
+        { auto s = tolower_s(prop_val(r.decls, "text-overflow"));
+          if (s=="ellipsis") node->text_overflow=1; else if(s=="clip") node->text_overflow=0; }
+        { auto s = prop_val(r.decls, "animation");
+          if (!s.empty() && s!="none") {
+              // parse: "name duration [timing-function] [delay] [iteration-count]"
+              NodeAnimation na;
+              // tokenize by spaces
+              std::istringstream iss(s);
+              std::vector<std::string> toks;
+              std::string tok;
+              while (iss>>tok) toks.push_back(tok);
+              for (size_t ti=0; ti<toks.size(); ++ti) {
+                  const std::string& t = toks[ti];
+                  // duration: ends with 'ms' or 's'
+                  if (!t.empty() && (t.back()=='s'||t.back()=='S')) {
+                      bool is_ms = t.size()>=2 && (t[t.size()-2]=='m'||t[t.size()-2]=='M');
+                      try {
+                          float dur = std::stof(t);
+                          if (is_ms) { if(na.duration_ms==300) na.duration_ms=(int)dur; }
+                          else { if(na.duration_ms==300) na.duration_ms=(int)(dur*1000); }
+                      } catch(...) {}
+                  } else if (t=="infinite") { na.iteration_count=0; }
+                  else if (t=="alternate") { na.alternate=true; }
+                  else if (g_keyframes.count(t)) { na.anim_name=t; }
+              }
+              if (!na.anim_name.empty()) {
+                  na.start_us = g_get_monotonic_time();
+                  na.started = true;
+                  g_node_animations[node->node_id] = na;
+                  g_anim_pending = true;
+              }
+          }
+        }
+        // bg_gradient from bm
+        if (!bm.bg_gradient.empty()) node->bg_gradient = bm.bg_gradient;
     }
 
     // --- 5. Anchor default underline ---
@@ -4071,6 +4275,16 @@ static void apply_css_to_node(DOMNode* node, const std::vector<CSSRule>& css) {
         { auto s = tolower_s(prop_val(ist, "pointer-events"));
           if      (s == "none") node->pointer_events = 0;
           else if (s == "auto" || s == "all") node->pointer_events = 1; }
+        { auto s = prop_val(ist, "filter"); if (!s.empty() && s!="none") node->css_filter = s; }
+        { auto s = tolower_s(prop_val(ist, "word-break"));
+          if (s=="break-all") node->word_break=1; else if(s=="keep-all") node->word_break=2;
+          else if(s=="normal") node->word_break=0; }
+        { auto s = tolower_s(prop_val(ist, "overflow-wrap"));
+          if (s=="break-word"||s=="anywhere") node->overflow_wrap=1;
+          else if(s=="normal") node->overflow_wrap=0; }
+        { auto s = tolower_s(prop_val(ist, "text-overflow"));
+          if (s=="ellipsis") node->text_overflow=1; else if(s=="clip") node->text_overflow=0; }
+        if (!bm.bg_gradient.empty()) node->bg_gradient = bm.bg_gradient;
     }
 
     // --- 6b. Resolve var() references in color/shadow/outline fields ---
@@ -4217,6 +4431,7 @@ static void apply_css_to_node(DOMNode* node, const std::vector<CSSRule>& css) {
     node->floatdir = static_cast<DOMNode::Float>(static_cast<int>(bm.floatdir));
     node->bg_image = bm.bg_image;
     node->bg_color = bm.bg_color;
+    if (!bm.bg_gradient.empty()) node->bg_gradient = bm.bg_gradient;
     if (!bm.bg_repeat.empty()) node->style_props["background-repeat"] = bm.bg_repeat;
     if (!bm.bg_size.empty()) node->style_props["background-size"] = bm.bg_size;
     if (!bm.bg_position.empty()) node->style_props["background-position"] = bm.bg_position;
