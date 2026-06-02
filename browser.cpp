@@ -43,6 +43,11 @@ static float g_viewport_h = 800.0f;
 // Root font-size for rem units (updated from <html> element)
 static int g_root_font_size = 16;
 
+// ---- CSS Transition animation globals ----
+std::unordered_map<uint32_t, AnimState> g_animations;
+bool g_anim_pending = false;
+guint g_anim_timer_id = 0;
+
 static gboolean draw_canvas(GtkWidget* w, cairo_t* cr, gpointer data) {
     uint32_t node_id = GPOINTER_TO_UINT(data);
     auto it = g_canvas_map.find(node_id);
@@ -785,7 +790,13 @@ static std::vector<CSSRule> parse_css(const std::string& css) {
                     || !prop_val(decls,"flex-basis").empty()
                     || !prop_val(decls,"flex").empty()
                     || !prop_val(decls,"content").empty()
-                    || !prop_val(decls,"visibility").empty();
+                    || !prop_val(decls,"visibility").empty()
+                    || !prop_val(decls,"transform").empty()
+                    || !prop_val(decls,"transition").empty()
+                    || !prop_val(decls,"outline").empty()
+                    || !prop_val(decls,"cursor").empty()
+                    || !prop_val(decls,"pointer-events").empty()
+                    || decls.find("--") != std::string::npos;
         if (fw==-1 && fs_raw.empty() && lh_raw.empty() && !has_box) continue;
         // split comma-separated selectors
         size_t j=0;
@@ -3470,12 +3481,154 @@ static void connect_replaced_surfaces(LayoutBox* box, TabState* tab) {
 }
 
 // ---------------------------------------------------------------------------
+// CSS custom property helpers
+// ---------------------------------------------------------------------------
+
+// Collect --name: value declarations from a raw CSS declarations string
+static void collect_custom_props(const std::string& decls,
+                                  std::unordered_map<std::string,std::string>& out) {
+    // decls is like "color: red; --primary: blue; margin: 0"
+    size_t pos = 0;
+    while (pos < decls.size()) {
+        size_t colon = decls.find(':', pos);
+        if (colon == std::string::npos) break;
+        std::string key = decls.substr(pos, colon - pos);
+        // trim key
+        size_t ks = key.find_first_not_of(" \t\r\n");
+        size_t ke = key.find_last_not_of(" \t\r\n");
+        if (ks == std::string::npos) { pos = colon + 1; continue; }
+        key = key.substr(ks, ke - ks + 1);
+
+        size_t semi = decls.find(';', colon + 1);
+        std::string val = decls.substr(colon + 1, (semi == std::string::npos ? decls.size() : semi) - colon - 1);
+        size_t vs = val.find_first_not_of(" \t\r\n");
+        size_t ve = val.find_last_not_of(" \t\r\n");
+        if (vs != std::string::npos) val = val.substr(vs, ve - vs + 1);
+
+        if (key.size() >= 2 && key[0] == '-' && key[1] == '-')
+            out[key] = val;
+
+        pos = (semi == std::string::npos) ? decls.size() : semi + 1;
+    }
+}
+
+// Resolve var(--name) references in a CSS value string by walking ancestor chain
+static std::string resolve_css_var(const std::string& val, DOMNode* node) {
+    if (val.find("var(") == std::string::npos) return val;
+    std::string result = val;
+    // Replace each var(--name) or var(--name, fallback)
+    size_t pos = 0;
+    while ((pos = result.find("var(", pos)) != std::string::npos) {
+        size_t close = result.find(')', pos);
+        if (close == std::string::npos) break;
+        std::string inner = result.substr(pos + 4, close - pos - 4);
+        // Split on comma for fallback
+        std::string prop_name, fallback;
+        size_t comma = inner.find(',');
+        if (comma != std::string::npos) {
+            prop_name = inner.substr(0, comma);
+            fallback = inner.substr(comma + 1);
+            size_t fs = fallback.find_first_not_of(" \t");
+            if (fs != std::string::npos) fallback = fallback.substr(fs);
+        } else {
+            prop_name = inner;
+        }
+        // Trim prop_name
+        size_t ps = prop_name.find_first_not_of(" \t");
+        size_t pe = prop_name.find_last_not_of(" \t");
+        if (ps != std::string::npos) prop_name = prop_name.substr(ps, pe - ps + 1);
+
+        // Walk ancestor chain to find custom property
+        std::string found;
+        DOMNode* n = node;
+        while (n) {
+            auto it = n->custom_props.find(prop_name);
+            if (it != n->custom_props.end()) { found = it->second; break; }
+            n = n->parent;
+        }
+        if (found.empty()) found = fallback;
+        result = result.substr(0, pos) + found + result.substr(close + 1);
+        pos += found.size();
+    }
+    return result;
+}
+
+// Parse "background-color 0.3s ease" → return duration_ms for a property (0=none)
+static int get_transition_duration(const std::string& trans, const std::string& prop) {
+    if (trans.empty()) return 0;
+    // Split by comma for multiple transitions
+    size_t start = 0;
+    while (start < trans.size()) {
+        size_t end = trans.find(',', start);
+        std::string tok = trans.substr(start, end == std::string::npos ? std::string::npos : end - start);
+        // trim
+        size_t ts = tok.find_first_not_of(" \t\r\n");
+        if (ts != std::string::npos) tok = tok.substr(ts);
+        // check if this token matches the property or "all"
+        if (tok.find(prop) == 0 || tok.substr(0, 3) == "all") {
+            // find duration: look for \d+(\.\d+)?s or \d+ms
+            size_t numpos = tok.find_first_of("0123456789");
+            if (numpos != std::string::npos) {
+                try {
+                    size_t after;
+                    float dur = std::stof(tok.substr(numpos), &after);
+                    std::string unit = tok.substr(numpos + after);
+                    size_t us = unit.find_first_not_of(" \t");
+                    if (us != std::string::npos) unit = unit.substr(us, 2);
+                    if (unit == "ms") return (int)dur;
+                    return (int)(dur * 1000.0f);
+                } catch(...) {}
+            }
+        }
+        if (end == std::string::npos) break;
+        start = end + 1;
+    }
+    return 0;
+}
+
+// Animation tick callback - called every ~16ms while animations are running
+static gboolean anim_tick(gpointer data) {
+    AppState* st = static_cast<AppState*>(data);
+    TabState* tab = st->ct;
+    if (!tab) { g_anim_timer_id = 0; return G_SOURCE_REMOVE; }
+
+    gint64 now = g_get_monotonic_time();
+    bool any_active = false;
+    for (auto it = g_animations.begin(); it != g_animations.end(); ) {
+        AnimState& anim = it->second;
+        gint64 elapsed_us = now - anim.start_us;
+        float t = (float)elapsed_us / (anim.duration_ms * 1000.0f);
+        if (t >= 1.0f) {
+            it = g_animations.erase(it);
+        } else {
+            any_active = true;
+            ++it;
+        }
+    }
+
+    // Repaint with current animation state
+    if (tab->layout_root) {
+        auto* drawing_area = tab->drawing_area;
+        if (drawing_area) gtk_widget_queue_draw(drawing_area);
+    }
+
+    if (!any_active) {
+        g_anim_timer_id = 0;
+        return G_SOURCE_REMOVE;
+    }
+    return G_SOURCE_CONTINUE;
+}
+
+// ---------------------------------------------------------------------------
 // CSS Re-cascade: apply stylesheet rules to all DOM nodes before each layout.
 // This ensures dynamically-created elements (via JS) get CSS classes applied.
 // ---------------------------------------------------------------------------
 static void apply_css_to_node(DOMNode* node, const std::vector<CSSRule>& css) {
     if (node->node_type != DOMNode::ELEMENT) return;
     const std::string& tname = node->tag_name;
+
+    // Save previous bg_color to detect transitions
+    std::string prev_bg_color = node->bg_color;
 
     // --- 1. Reset style fields to defaults ---
     node->fw_computed = -1;
@@ -3501,6 +3654,13 @@ static void apply_css_to_node(DOMNode* node, const std::vector<CSSRule>& css) {
     node->font_stretch = -1;
     node->text_shadow.clear();
     node->visibility = 0;
+    node->css_transform.clear();
+    node->css_transition.clear();
+    node->outline_width = 0; node->outline_offset = 0;
+    node->outline_color.clear(); node->outline_style.clear();
+    node->css_cursor.clear();
+    node->pointer_events = 1;
+    node->custom_props.clear();
     node->flex_direction = 0;
     node->justify_content = 0;
     node->align_items = 0;
@@ -3706,6 +3866,34 @@ static void apply_css_to_node(DOMNode* node, const std::vector<CSSRule>& css) {
           if (s == "hidden") node->visibility = 1;
           else if (s == "visible") node->visibility = 0;
           else if (s == "collapse") node->visibility = 2; }
+        // CSS custom properties
+        collect_custom_props(r.decls, node->custom_props);
+        // transform / transition / outline / cursor / pointer-events
+        { auto s = prop_val(r.decls, "transform"); if (!s.empty()) node->css_transform = s; }
+        { auto s = prop_val(r.decls, "transition"); if (!s.empty()) node->css_transition = s; }
+        { auto s = prop_val(r.decls, "outline"); if (!s.empty()) {
+            // shorthand: outline: <width> <style> <color>
+            auto parts = s; // parse minimal: find px number
+            size_t p = parts.find("px");
+            if (p != std::string::npos) { try { node->outline_width = std::stoi(parts.substr(0, p)); } catch(...){} }
+            if (s.find("none") != std::string::npos) node->outline_width = 0;
+            if (s.find('#') != std::string::npos) { size_t h = s.find('#'); node->outline_color = s.substr(h, 7); }
+            else if (s.find("rgb") != std::string::npos) {
+                size_t r2 = s.find("rgb");
+                size_t r3 = s.find(')', r2);
+                if (r3 != std::string::npos) node->outline_color = s.substr(r2, r3-r2+1);
+            }
+          } }
+        { auto s = prop_val(r.decls, "outline-width"); if (!s.empty()) {
+            try { node->outline_width = (int)std::stof(s); } catch(...){} } }
+        { auto s = prop_val(r.decls, "outline-color"); if (!s.empty()) node->outline_color = s; }
+        { auto s = prop_val(r.decls, "outline-offset"); if (!s.empty()) {
+            try { node->outline_offset = (int)std::stof(s); } catch(...){} } }
+        { auto s = prop_val(r.decls, "outline-style"); if (!s.empty()) node->outline_style = s; }
+        { auto s = tolower_s(prop_val(r.decls, "cursor")); if (!s.empty()) node->css_cursor = s; }
+        { auto s = tolower_s(prop_val(r.decls, "pointer-events"));
+          if      (s == "none") node->pointer_events = 0;
+          else if (s == "auto" || s == "all") node->pointer_events = 1; }
     }
 
     // --- 5. Anchor default underline ---
@@ -3864,6 +4052,39 @@ static void apply_css_to_node(DOMNode* node, const std::vector<CSSRule>& css) {
         { auto s = prop_val(ist, "visibility");
           if (s == "hidden") node->visibility = 1;
           else if (s == "visible") node->visibility = 0; }
+        // custom props, transform, transition, outline, cursor, pointer-events
+        collect_custom_props(ist, node->custom_props);
+        { auto s = prop_val(ist, "transform"); if (!s.empty()) node->css_transform = s; }
+        { auto s = prop_val(ist, "transition"); if (!s.empty()) node->css_transition = s; }
+        { auto s = prop_val(ist, "outline"); if (!s.empty()) {
+            size_t p = s.find("px");
+            if (p != std::string::npos) { try { node->outline_width = std::stoi(s.substr(0, p)); } catch(...){} }
+            if (s.find("none") != std::string::npos) node->outline_width = 0;
+            if (s.find('#') != std::string::npos) { size_t h = s.find('#'); node->outline_color = s.substr(h, 7); }
+          } }
+        { auto s = prop_val(ist, "outline-width"); if (!s.empty()) {
+            try { node->outline_width = (int)std::stof(s); } catch(...){} } }
+        { auto s = prop_val(ist, "outline-color"); if (!s.empty()) node->outline_color = s; }
+        { auto s = prop_val(ist, "outline-offset"); if (!s.empty()) {
+            try { node->outline_offset = (int)std::stof(s); } catch(...){} } }
+        { auto s = tolower_s(prop_val(ist, "cursor")); if (!s.empty()) node->css_cursor = s; }
+        { auto s = tolower_s(prop_val(ist, "pointer-events"));
+          if      (s == "none") node->pointer_events = 0;
+          else if (s == "auto" || s == "all") node->pointer_events = 1; }
+    }
+
+    // --- 6b. Resolve var() references in color/shadow/outline fields ---
+    if (!node->custom_props.empty() ||
+        node->color_computed.find("var(") != std::string::npos ||
+        bm.bg_color.find("var(") != std::string::npos ||
+        node->outline_color.find("var(") != std::string::npos ||
+        node->css_transform.find("var(") != std::string::npos) {
+        node->color_computed = resolve_css_var(node->color_computed, node);
+        bm.bg_color = resolve_css_var(bm.bg_color, node);
+        node->outline_color = resolve_css_var(node->outline_color, node);
+        node->box_shadow = resolve_css_var(node->box_shadow, node);
+        node->text_shadow = resolve_css_var(node->text_shadow, node);
+        node->border_color = resolve_css_var(node->border_color, node);
     }
 
     // --- 7. !important pass ---
@@ -4002,6 +4223,38 @@ static void apply_css_to_node(DOMNode* node, const std::vector<CSSRule>& css) {
     if (!bm.box_shadow.empty()) node->box_shadow = bm.box_shadow;
     if (bm.opacity < 1.0) node->opacity = bm.opacity;
     if (bm.overflow >= 0) node->overflow = bm.overflow;
+
+    // --- 11. CSS Transition detection ---
+    // If bg-color changed and transition is set, start an animation
+    if (!node->css_transition.empty() && !prev_bg_color.empty() &&
+        node->bg_color != prev_bg_color && !node->bg_color.empty()) {
+        int dur_ms = get_transition_duration(node->css_transition, "background-color");
+        if (dur_ms <= 0) dur_ms = get_transition_duration(node->css_transition, "all");
+        if (dur_ms > 0) {
+            // Parse from/to colors
+            auto parse_c = [](const std::string& cs) -> CairoColor {
+                CairoColor c; c.a = 1.0;
+                if (cs.size() == 7 && cs[0] == '#') {
+                    c.r = std::stoi(cs.substr(1,2),nullptr,16)/255.0;
+                    c.g = std::stoi(cs.substr(3,2),nullptr,16)/255.0;
+                    c.b = std::stoi(cs.substr(5,2),nullptr,16)/255.0;
+                } else if (cs.substr(0,4) == "rgb(") {
+                    float rv=0,gv=0,bv=0;
+                    sscanf(cs.c_str(),"rgb(%f,%f,%f)",&rv,&gv,&bv);
+                    c.r=rv/255.0f; c.g=gv/255.0f; c.b=bv/255.0f;
+                }
+                return c;
+            };
+            AnimState anim;
+            anim.node_id = node->node_id;
+            anim.from_color = parse_c(prev_bg_color);
+            anim.to_color = parse_c(node->bg_color);
+            anim.start_us = g_get_monotonic_time();
+            anim.duration_ms = dur_ms;
+            g_animations[node->node_id] = anim;
+            g_anim_pending = true;
+        }
+    }
 }
 
 // Recursively apply CSS to all nodes in the DOM tree
@@ -4371,6 +4624,10 @@ static gboolean on_draw_area_click(GtkWidget* widget, GdkEventButton* ev, gpoint
 
         if (needs_repaint) {
             restyle_tree(root, tab->css_rules);
+            if (g_anim_pending && g_anim_timer_id == 0) {
+                g_anim_timer_id = g_timeout_add(16, anim_tick, st);
+                g_anim_pending = false;
+            }
             // Debug: check if focused input got styled
             std::function<void(DOMNode*)> dbg_focus = [&](DOMNode* n) {
                 if (n->is_focused)
@@ -4415,10 +4672,13 @@ static gboolean on_draw_area_motion(GtkWidget* widget, GdkEventMotion* ev, gpoin
 
     HitTestResult hit = hit_test(tab->layout_root.get(), doc_x, doc_y);
 
-    // Check if over a link
+    // Check if over a link or CSS-cursored element
     bool over_link = false;
+    std::string css_cursor_name;
     DOMNode* n = hit.node;
     while (n) {
+        if (!n->css_cursor.empty() && css_cursor_name.empty())
+            css_cursor_name = n->css_cursor;
         if (n->tag_name == "a") {
             auto it = n->attributes.find("href");
             if (it != n->attributes.end() && !it->second.empty()) {
@@ -4431,9 +4691,12 @@ static gboolean on_draw_area_motion(GtkWidget* widget, GdkEventMotion* ev, gpoin
 
     GdkWindow* win = gtk_widget_get_window(widget);
     if (win) {
-        GdkCursor* cursor = gdk_cursor_new_from_name(
-            gdk_display_get_default(),
-            over_link ? "pointer" : "default");
+        const char* cursor_name = "default";
+        if (!css_cursor_name.empty() && css_cursor_name != "auto")
+            cursor_name = css_cursor_name.c_str();
+        else if (over_link)
+            cursor_name = "pointer";
+        GdkCursor* cursor = gdk_cursor_new_from_name(gdk_display_get_default(), cursor_name);
         gdk_window_set_cursor(win, cursor);
         if (cursor) g_object_unref(cursor);
     }
@@ -4451,6 +4714,10 @@ static gboolean on_draw_area_motion(GtkWidget* widget, GdkEventMotion* ev, gpoin
         }
         if (changed) {
             restyle_tree(root, tab->css_rules);
+            if (g_anim_pending && g_anim_timer_id == 0) {
+                g_anim_timer_id = g_timeout_add(16, anim_tick, st);
+                g_anim_pending = false;
+            }
             layout_and_paint(tab);
         }
     }

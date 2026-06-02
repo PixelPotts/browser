@@ -6,6 +6,80 @@
 #include <cmath>
 #include <algorithm>
 #include <unordered_map>
+#include <sstream>
+
+// CSS transform parser helper
+static cairo_matrix_t parse_css_transform_matrix(const std::string& val, float cx, float cy) {
+    cairo_matrix_t m;
+    cairo_matrix_init_identity(&m);
+    size_t i = 0, n = val.size();
+    while (i < n) {
+        while (i < n && (val[i]==' '||val[i]=='\t')) ++i;
+        if (i >= n) break;
+        // function name
+        size_t fs = i;
+        while (i < n && val[i] != '(' && val[i] != ' ') ++i;
+        if (i >= n || val[i] != '(') break;
+        std::string func;
+        for (size_t k = fs; k < i; ++k) func += (char)tolower((unsigned char)val[k]);
+        ++i; // skip '('
+        size_t arg_start = i;
+        while (i < n && val[i] != ')') ++i;
+        std::string args_str = val.substr(arg_start, i - arg_start);
+        if (i < n) ++i; // skip ')'
+        // Parse comma/space separated numbers
+        std::vector<double> args;
+        std::string tok;
+        for (char c : args_str + ",") {
+            if (c == ',' || c == ' ' || c == '\t') {
+                if (!tok.empty()) { try { args.push_back(std::stod(tok)); } catch(...){} tok.clear(); }
+            } else tok += c;
+        }
+        cairo_matrix_t step;
+        cairo_matrix_init_identity(&step);
+        if (func == "translate") {
+            double tx = args.size()>=1?args[0]:0, ty = args.size()>=2?args[1]:0;
+            cairo_matrix_translate(&step, tx, ty);
+        } else if (func == "translatex") {
+            cairo_matrix_translate(&step, args.size()>=1?args[0]:0, 0);
+        } else if (func == "translatey") {
+            cairo_matrix_translate(&step, 0, args.size()>=1?args[0]:0);
+        } else if (func == "rotate") {
+            double deg = args.size()>=1?args[0]:0;
+            double rad = deg * M_PI / 180.0;
+            cairo_matrix_translate(&step, cx, cy);
+            cairo_matrix_rotate(&step, rad);
+            cairo_matrix_translate(&step, -cx, -cy);
+        } else if (func == "scale") {
+            double sx = args.size()>=1?args[0]:1, sy = args.size()>=2?args[1]:sx;
+            cairo_matrix_translate(&step, cx, cy);
+            cairo_matrix_scale(&step, sx, sy);
+            cairo_matrix_translate(&step, -cx, -cy);
+        } else if (func == "scalex") {
+            cairo_matrix_translate(&step, cx, cy);
+            cairo_matrix_scale(&step, args.size()>=1?args[0]:1, 1);
+            cairo_matrix_translate(&step, -cx, -cy);
+        } else if (func == "scaley") {
+            cairo_matrix_translate(&step, cx, cy);
+            cairo_matrix_scale(&step, 1, args.size()>=1?args[0]:1);
+            cairo_matrix_translate(&step, -cx, -cy);
+        } else if (func == "skewx") {
+            double rad = (args.size()>=1?args[0]:0) * M_PI / 180.0;
+            cairo_matrix_t sk = {1, 0, std::tan(rad), 1, 0, 0};
+            step = sk;
+        } else if (func == "skewy") {
+            double rad = (args.size()>=1?args[0]:0) * M_PI / 180.0;
+            cairo_matrix_t sk = {1, std::tan(rad), 0, 1, 0, 0};
+            step = sk;
+        } else if (func == "matrix" && args.size()>=6) {
+            cairo_matrix_init(&step, args[0],args[1],args[2],args[3],args[4],args[5]);
+        }
+        cairo_matrix_t combined;
+        cairo_matrix_multiply(&combined, &m, &step);
+        m = combined;
+    }
+    return m;
+}
 
 // ---- Named CSS colors ----
 
@@ -353,9 +427,37 @@ static void paint_box(LayoutBox* box, DisplayList& dl, float offset_x, float off
         }
     }
 
-    // Background
+    // Background (with CSS transition animation support)
     std::string bg = box->bg_color;
-    if (!bg.empty() && bg != "transparent") {
+    bool has_anim_bg = false;
+    CairoColor anim_bg;
+    if (node && !g_animations.empty()) {
+        auto it = g_animations.find(node->node_id);
+        if (it != g_animations.end()) {
+            gint64 now = g_get_monotonic_time();
+            float t = (float)((now - it->second.start_us) / 1000.0 / it->second.duration_ms);
+            t = std::min(1.0f, t);
+            float te = t * t * (3 - 2*t);  // ease in-out
+            anim_bg = {
+                it->second.from_color.r + (it->second.to_color.r - it->second.from_color.r) * te,
+                it->second.from_color.g + (it->second.to_color.g - it->second.from_color.g) * te,
+                it->second.from_color.b + (it->second.to_color.b - it->second.from_color.b) * te,
+                it->second.from_color.a + (it->second.to_color.a - it->second.from_color.a) * te,
+            };
+            has_anim_bg = true;
+        }
+    }
+    if (has_anim_bg) {
+        Rect bb = box->border_box();
+        bb.x += offset_x; bb.y += offset_y;
+        PaintCommand cmd;
+        cmd.type = PaintCmdType::FillRect;
+        cmd.rect = bb;
+        cmd.color = anim_bg;
+        cmd.border_radius = node ? node->border_radius : 0;
+        cmd.dom_node = node;
+        dl.push_back(cmd);
+    } else if (!bg.empty() && bg != "transparent") {
         CairoColor bgc = parse_css_color(bg);
         Rect bb = box->border_box();
         bb.x += offset_x;
@@ -461,6 +563,25 @@ static void paint_box(LayoutBox* box, DisplayList& dl, float offset_x, float off
         }
     }
 
+    // Outline (drawn outside border box, doesn't affect layout)
+    if (box->outline_width > 0) {
+        CairoColor oc = parse_css_color(box->outline_color.empty() ? "#000" : box->outline_color);
+        Rect bb = box->border_box();
+        float expand = (float)(box->outline_offset + box->outline_width / 2);
+        bb.x += offset_x - expand;
+        bb.y += offset_y - expand;
+        bb.w += expand * 2;
+        bb.h += expand * 2;
+        PaintCommand cmd;
+        cmd.type = PaintCmdType::DrawOutline;
+        cmd.border_rect = bb;
+        cmd.border_color_val = oc;
+        cmd.outline_w = (float)box->outline_width;
+        cmd.border_radius = node ? (node->border_radius + box->outline_offset) : box->outline_offset;
+        cmd.dom_node = node;
+        dl.push_back(cmd);
+    }
+
     // Opacity
     bool has_opacity = box->opacity < 1.0 && box->opacity >= 0;
     if (has_opacity) {
@@ -557,6 +678,18 @@ static void paint_box(LayoutBox* box, DisplayList& dl, float offset_x, float off
         dl.push_back(cmd);
     }
 
+    // CSS transform: wrap children in PushTransform/PopTransform
+    bool do_transform = node && !box->css_transform.empty();
+    if (do_transform) {
+        Rect bb = box->border_box();
+        float tcx = offset_x + bb.x + bb.w / 2;
+        float tcy = offset_y + bb.y + bb.h / 2;
+        PaintCommand tcmd;
+        tcmd.type = PaintCmdType::PushTransform;
+        tcmd.transform_matrix = parse_css_transform_matrix(box->css_transform, tcx, tcy);
+        dl.push_back(tcmd);
+    }
+
     // Children
     // Apply scroll offset for overflow containers
     float child_offset_x = cx - box->scroll_x;
@@ -590,6 +723,13 @@ static void paint_box(LayoutBox* box, DisplayList& dl, float offset_x, float off
         PaintCommand cmd;
         cmd.type = PaintCmdType::PopOpacity;
         cmd.opacity = (float)box->opacity;
+        dl.push_back(cmd);
+    }
+
+    // Pop CSS transform
+    if (do_transform) {
+        PaintCommand cmd;
+        cmd.type = PaintCmdType::PopTransform;
         dl.push_back(cmd);
     }
 }
@@ -861,6 +1001,33 @@ void render_display_list(cairo_t* cr, const DisplayList& dl, float scroll_x, flo
                 break;
             }
 
+            case PaintCmdType::DrawOutline: {
+                // Draw as a stroked rect outside the border box
+                const auto& r = cmd.border_rect;
+                const auto& oc = cmd.border_color_val;
+                float lw = cmd.outline_w;
+                if (lw <= 0) break;
+                cairo_set_source_rgba(cr, oc.r, oc.g, oc.b, oc.a);
+                cairo_set_line_width(cr, lw);
+                int radius = cmd.border_radius;
+                if (radius > 0) {
+                    float hr = std::min((float)radius, r.w / 2);
+                    float vr = std::min((float)radius, r.h / 2);
+                    float x = r.x, y = r.y, w = r.w, h = r.h;
+                    cairo_new_path(cr);
+                    cairo_arc(cr, x + hr, y + vr, hr, M_PI, 1.5 * M_PI);
+                    cairo_arc(cr, x + w - hr, y + vr, hr, 1.5 * M_PI, 2 * M_PI);
+                    cairo_arc(cr, x + w - hr, y + h - vr, vr, 0, 0.5 * M_PI);
+                    cairo_arc(cr, x + hr, y + h - vr, vr, 0.5 * M_PI, M_PI);
+                    cairo_close_path(cr);
+                    cairo_stroke(cr);
+                } else {
+                    cairo_rectangle(cr, r.x, r.y, r.w, r.h);
+                    cairo_stroke(cr);
+                }
+                break;
+            }
+
             case PaintCmdType::Translate: {
                 cairo_save(cr);
                 cairo_translate(cr, cmd.tx, cmd.ty);
@@ -868,6 +1035,17 @@ void render_display_list(cairo_t* cr, const DisplayList& dl, float scroll_x, flo
             }
 
             case PaintCmdType::PopTranslate: {
+                cairo_restore(cr);
+                break;
+            }
+
+            case PaintCmdType::PushTransform: {
+                cairo_save(cr);
+                cairo_transform(cr, &cmd.transform_matrix);
+                break;
+            }
+
+            case PaintCmdType::PopTransform: {
                 cairo_restore(cr);
                 break;
             }

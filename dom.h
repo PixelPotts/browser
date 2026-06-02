@@ -128,6 +128,23 @@ struct DOMNode {
 
     int visibility = 0;  // 0=visible, 1=hidden, 2=collapse
 
+    // CSS transform / transition
+    std::string css_transform;   // raw CSS transform value
+    std::string css_transition;  // raw CSS transition value (e.g. "background-color 0.3s ease")
+
+    // outline (painted outside border, doesn't affect layout)
+    int outline_width = 0;
+    int outline_offset = 0;
+    std::string outline_color;
+    std::string outline_style;
+
+    // cursor / pointer-events
+    std::string css_cursor;      // CSS cursor keyword (pointer, text, crosshair, etc.)
+    int pointer_events = 1;      // 1=auto, 0=none
+
+    // CSS custom properties (var())
+    std::unordered_map<std::string, std::string> custom_props;
+
     // Interactive state
     bool is_hovered = false;
     bool is_focused = false;

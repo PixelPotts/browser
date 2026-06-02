@@ -124,6 +124,16 @@ struct LayoutBox {
     std::string text_shadow;   // raw CSS text-shadow value
     int text_decoration = 0;  // bitmask: 1=underline, 2=overline, 4=line-through
     int pos_top = INT_MIN, pos_left = INT_MIN, pos_right = INT_MIN, pos_bottom = INT_MIN;
+    // CSS transform / transition
+    std::string css_transform;
+    // outline (outside border, doesn't affect layout)
+    int outline_width = 0;
+    int outline_offset = 0;
+    std::string outline_color;
+    // pointer-events
+    int pointer_events = 1;   // 1=auto, 0=none
+    // letter-spacing (Pango units, 0=normal)
+    int letter_spacing = 0;
 
     // Cleanup
     ~LayoutBox();

@@ -227,5 +227,176 @@ h2 { color: #333; margin-top: 30px; }
     <div class="shadow-text-glow">Glowing Blue Text</div>
 </div>
 
+
+<!-- ===== ROUND 3 FEATURES ===== -->
+
+<h2>Round 3 - Feature A: CSS Custom Properties (var())</h2>
+<div class="section">
+    <style>
+        :root {
+            --brand: #8e44ad;
+            --accent: #f39c12;
+            --spacing: 12px;
+        }
+        .var-box {
+            background: var(--brand);
+            color: white;
+            padding: var(--spacing);
+            border-radius: 6px;
+            margin: 5px 0;
+            display: inline-block;
+        }
+        .var-accent {
+            background: var(--accent);
+            color: white;
+            padding: var(--spacing);
+            border-radius: 6px;
+            margin: 5px 0;
+            display: inline-block;
+        }
+        .var-nested {
+            --local: #27ae60;
+            background: var(--local);
+            color: white;
+            padding: var(--spacing);
+            border-radius: 6px;
+            display: inline-block;
+        }
+    </style>
+    <p>Purple (--brand), orange (--accent), green (--local). All spacing from --spacing.</p>
+    <div class="var-box">var(--brand)</div>
+    <div class="var-accent">var(--accent)</div>
+    <div class="var-nested">var(--local)</div>
+</div>
+
+<h2>Round 3 - Feature B: letter-spacing</h2>
+<div class="section">
+    <style>
+        .ls-tight   { letter-spacing: -2px; font-size: 20px; }
+        .ls-normal  { letter-spacing: 0; font-size: 20px; }
+        .ls-wide    { letter-spacing: 4px; font-size: 20px; }
+        .ls-extreme { letter-spacing: 10px; font-size: 20px; color: #e74c3c; }
+    </style>
+    <p class="ls-tight">Tight letter-spacing (-2px)</p>
+    <p class="ls-normal">Normal letter-spacing (0)</p>
+    <p class="ls-wide">Wide letter-spacing (4px)</p>
+    <p class="ls-extreme">Extreme spacing (10px)</p>
+</div>
+
+<h2>Round 3 - Feature C: outline</h2>
+<div class="section">
+    <style>
+        .outline-box {
+            display: inline-block;
+            padding: 10px 20px;
+            margin: 10px;
+            background: #ecf0f1;
+        }
+        .outline-solid { outline: 3px solid #e74c3c; }
+        .outline-blue  { outline: 2px solid #3498db; outline-offset: 4px; }
+        .outline-thick { outline: 5px solid #27ae60; outline-offset: 2px; }
+        .focus-outline:focus { outline: 3px solid #8e44ad; outline-offset: 3px; }
+    </style>
+    <p>Boxes should have colored outlines drawn OUTSIDE their border boxes:</p>
+    <div class="outline-box outline-solid">Red outline</div>
+    <div class="outline-box outline-blue">Blue + offset</div>
+    <div class="outline-box outline-thick">Green thick</div>
+    <br>
+    <input class="focus-outline" type="text" placeholder="Focus me for purple outline" style="margin-top:10px; padding:8px;">
+</div>
+
+<h2>Round 3 - Feature D: cursor CSS property</h2>
+<div class="section">
+    <style>
+        .cur-pointer    { cursor: pointer;    background: #3498db; color:white; padding:8px 15px; display:inline-block; margin:5px; border-radius:4px; }
+        .cur-text       { cursor: text;       background: #ecf0f1; padding:8px 15px; display:inline-block; margin:5px; border-radius:4px; }
+        .cur-crosshair  { cursor: crosshair;  background: #e74c3c; color:white; padding:8px 15px; display:inline-block; margin:5px; border-radius:4px; }
+        .cur-move       { cursor: move;       background: #27ae60; color:white; padding:8px 15px; display:inline-block; margin:5px; border-radius:4px; }
+        .cur-not-allowed{ cursor: not-allowed; background: #95a5a6; color:white; padding:8px 15px; display:inline-block; margin:5px; border-radius:4px; }
+        .cur-grab       { cursor: grab;       background: #8e44ad; color:white; padding:8px 15px; display:inline-block; margin:5px; border-radius:4px; }
+    </style>
+    <p>Hover each box - cursor should change:</p>
+    <div class="cur-pointer">pointer</div>
+    <div class="cur-text">text (I-beam)</div>
+    <div class="cur-crosshair">crosshair</div>
+    <div class="cur-move">move</div>
+    <div class="cur-not-allowed">not-allowed</div>
+    <div class="cur-grab">grab</div>
+</div>
+
+<h2>Round 3 - Feature E: CSS transform</h2>
+<div class="section">
+    <style>
+        .transform-demo { display: inline-block; margin: 30px; padding: 15px 25px; color: white; font-weight: bold; }
+        .tf-translate { background: #3498db; transform: translate(20px, 10px); }
+        .tf-rotate    { background: #e74c3c; transform: rotate(15deg); }
+        .tf-scale     { background: #27ae60; transform: scale(1.3); }
+        .tf-combined  { background: #8e44ad; transform: translate(10px, 5px) rotate(10deg) scale(1.1); }
+    </style>
+    <p>Transformed boxes (translate, rotate, scale, combined):</p>
+    <div>
+        <span class="transform-demo tf-translate">Translate</span>
+        <span class="transform-demo tf-rotate">Rotate 15°</span>
+        <span class="transform-demo tf-scale">Scale 1.3x</span>
+        <span class="transform-demo tf-combined">Combined</span>
+    </div>
+</div>
+
+<h2>Round 3 - Feature F: CSS transitions</h2>
+<div class="section">
+    <style>
+        .trans-btn {
+            display: inline-block;
+            padding: 12px 24px;
+            margin: 8px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: bold;
+            color: white;
+            background: #3498db;
+            transition: background-color 0.4s ease;
+        }
+        .trans-btn:hover { background: #e74c3c; }
+        .trans-btn2 {
+            display: inline-block;
+            padding: 12px 24px;
+            margin: 8px;
+            border-radius: 6px;
+            cursor: pointer;
+            color: white;
+            background: #27ae60;
+            transition: background-color 0.6s ease;
+        }
+        .trans-btn2:hover { background: #8e44ad; }
+    </style>
+    <p>Hover buttons - background color should animate smoothly:</p>
+    <div class="trans-btn">Blue → Red</div>
+    <div class="trans-btn2">Green → Purple</div>
+</div>
+
+<h2>Round 3 - Feature G: pointer-events: none</h2>
+<div class="section">
+    <style>
+        .pe-container { position: relative; height: 80px; }
+        .pe-base {
+            position: absolute; top: 0; left: 0;
+            background: #3498db; color: white;
+            padding: 20px 40px; border-radius: 6px; cursor: pointer;
+        }
+        .pe-base:hover { background: #e74c3c; }
+        .pe-overlay {
+            position: absolute; top: 0; left: 0;
+            background: rgba(0,0,0,0.3); color: white;
+            padding: 20px 40px; border-radius: 6px;
+            pointer-events: none;
+        }
+    </style>
+    <p>The blue box should change color on hover even though the dark overlay covers it (pointer-events: none on overlay):</p>
+    <div class="pe-container">
+        <div class="pe-base">Hover me (hover should work)</div>
+        <div class="pe-overlay">Overlay (no pointer events)</div>
+    </div>
+</div>
+
 </body>
 </html>

@@ -116,6 +116,21 @@ static void copy_style(LayoutBox* box, DOMNode* node) {
     box->visibility = node->visibility;
     box->bg_image = node->bg_image;
     box->text_shadow = node->text_shadow;
+    box->css_transform = node->css_transform;
+    box->outline_width = node->outline_width;
+    box->outline_offset = node->outline_offset;
+    box->outline_color = node->outline_color;
+    box->pointer_events = node->pointer_events;
+    // letter-spacing: resolve inheritance
+    {
+        int ls = node->letter_spacing;
+        if (ls == INT_MIN) {
+            DOMNode* p = node->parent;
+            while (p && p->letter_spacing == INT_MIN) p = p->parent;
+            ls = (p && p->letter_spacing != INT_MIN) ? p->letter_spacing : 0;
+        }
+        box->letter_spacing = ls;
+    }
 
     // Margins
     box->margin.top = std::max(0, node->margin[0]);
@@ -451,6 +466,13 @@ static PangoLayout* create_pango_layout_for_text(PangoContext* pango_ctx, Layout
             if (td & 1) pango_attr_list_insert(al, pango_attr_underline_new(PANGO_UNDERLINE_SINGLE));
             if (td & 4) pango_attr_list_insert(al, pango_attr_strikethrough_new(TRUE));
         }
+    }
+
+    // Letter spacing
+    if (box->letter_spacing != 0) {
+        PangoAttrList* al = pango_layout_get_attributes(layout);
+        if (!al) { al = pango_attr_list_new(); pango_layout_set_attributes(layout, al); pango_attr_list_unref(al); al = pango_layout_get_attributes(layout); }
+        pango_attr_list_insert(al, pango_attr_letter_spacing_new(box->letter_spacing));
     }
 
     // Set width for wrapping
@@ -1220,6 +1242,22 @@ static void layout_inline(LayoutBox* box, float containing_width, PangoContext* 
                 attr->start_index = run.start;
                 attr->end_index = run.start + run.length;
                 pango_attr_list_insert(al, attr);
+            }
+            // Per-run letter-spacing
+            {
+                int ls = elem->letter_spacing;
+                if (ls == INT_MIN) {
+                    DOMNode* p = elem->parent;
+                    while (p && p->letter_spacing == INT_MIN) p = p->parent;
+                    ls = (p && p->letter_spacing != INT_MIN) ? p->letter_spacing : 0;
+                }
+                if (ls != 0 && ls != INT_MIN) {
+                    has_attrs = true;
+                    PangoAttribute* attr = pango_attr_letter_spacing_new(ls);
+                    attr->start_index = run.start;
+                    attr->end_index = run.start + run.length;
+                    pango_attr_list_insert(al, attr);
+                }
             }
         }
         if (has_attrs)

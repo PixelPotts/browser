@@ -24,7 +24,8 @@ static void hit_test_box(LayoutBox* box, float x, float y,
 
     if (bb.contains(x, y)) {
         // This box contains the point
-        if (box->dom_node && box->dom_node->node_type == DOMNode::ELEMENT) {
+        if (box->dom_node && box->dom_node->node_type == DOMNode::ELEMENT
+            && box->dom_node->pointer_events != 0) {
             fprintf(stderr, "[HT-SET] result = <%s> class=%s (bb=(%.0f,%.0f,%.0f,%.0f))\n",
                 box->dom_node->tag_name.c_str(),
                 box->dom_node->class_list.empty() ? "" : box->dom_node->class_list[0].c_str(),
