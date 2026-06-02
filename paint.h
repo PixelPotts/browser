@@ -11,6 +11,7 @@ enum class PaintCmdType {
     DrawText,
     DrawBorder,
     DrawImage,
+    DrawBackgroundImage,
     PushClip,
     PopClip,
     PushOpacity,
@@ -34,6 +35,10 @@ struct PaintCommand {
     PangoLayout* pango_layout = nullptr;  // not owned
     float text_x = 0, text_y = 0;
     CairoColor text_color;
+    // text-shadow (applied before main text)
+    bool has_text_shadow = false;
+    float shadow_dx = 0, shadow_dy = 0, shadow_blur = 0;
+    CairoColor shadow_color;
 
     // DrawBorder
     Rect border_rect;

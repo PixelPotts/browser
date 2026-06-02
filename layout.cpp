@@ -113,6 +113,9 @@ static void copy_style(LayoutBox* box, DOMNode* node) {
     box->border_color = node->border_color;
     box->border_style = node->border_style;
     box->text_decoration = node->text_decoration > 0 ? node->text_decoration : 0;
+    box->visibility = node->visibility;
+    box->bg_image = node->bg_image;
+    box->text_shadow = node->text_shadow;
 
     // Margins
     box->margin.top = std::max(0, node->margin[0]);

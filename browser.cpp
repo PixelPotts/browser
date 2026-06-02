@@ -784,7 +784,8 @@ static std::vector<CSSRule> parse_css(const std::string& css) {
                     || !prop_val(decls,"flex-shrink").empty()
                     || !prop_val(decls,"flex-basis").empty()
                     || !prop_val(decls,"flex").empty()
-                    || !prop_val(decls,"content").empty();
+                    || !prop_val(decls,"content").empty()
+                    || !prop_val(decls,"visibility").empty();
         if (fw==-1 && fs_raw.empty() && lh_raw.empty() && !has_box) continue;
         // split comma-separated selectors
         size_t j=0;
@@ -3499,6 +3500,7 @@ static void apply_css_to_node(DOMNode* node, const std::vector<CSSRule>& css) {
     node->text_overflow = 0;
     node->font_stretch = -1;
     node->text_shadow.clear();
+    node->visibility = 0;
     node->flex_direction = 0;
     node->justify_content = 0;
     node->align_items = 0;
@@ -3700,6 +3702,10 @@ static void apply_css_to_node(DOMNode* node, const std::vector<CSSRule>& css) {
         { auto s = prop_val(r.decls, "font");
           if (!s.empty()) parse_font_shorthand(s, node, parent_fs); }
         if (!node->font_family.empty()) node->font_family = css_font_to_pango(node->font_family);
+        { auto s = prop_val(r.decls, "visibility");
+          if (s == "hidden") node->visibility = 1;
+          else if (s == "visible") node->visibility = 0;
+          else if (s == "collapse") node->visibility = 2; }
     }
 
     // --- 5. Anchor default underline ---
@@ -3855,6 +3861,9 @@ static void apply_css_to_node(DOMNode* node, const std::vector<CSSRule>& css) {
         { auto s = prop_val(ist, "text-shadow"); if (!s.empty()) node->text_shadow = s; }
         { auto s = prop_val(ist, "font"); if (!s.empty()) parse_font_shorthand(s, node, parent_fs); }
         if (!node->font_family.empty()) node->font_family = css_font_to_pango(node->font_family);
+        { auto s = prop_val(ist, "visibility");
+          if (s == "hidden") node->visibility = 1;
+          else if (s == "visible") node->visibility = 0; }
     }
 
     // --- 7. !important pass ---
@@ -4072,6 +4081,12 @@ static void layout_and_paint(TabState* tab) {
                     load_image_surface(tab, n->attributes.at("src"), n->node_id);
                 }
             }
+            if (!n->bg_image.empty()) {
+                // Use node_id | (1<<30) to avoid collisions with img src cache
+                uint32_t bg_key = n->node_id | 0x40000000u;
+                if (g_img_surfaces.find(bg_key) == g_img_surfaces.end())
+                    load_image_surface(tab, n->bg_image, bg_key);
+            }
             for (auto& c : n->children) preload(c.get());
         };
         preload(start);
@@ -4091,6 +4106,20 @@ static void layout_and_paint(TabState* tab) {
     if (start->bg_color.empty() || start->bg_color == "transparent") {
         // Default white background
         tab->layout_root->bg_color = "white";
+    }
+
+    // Populate bg_surface on layout boxes from image cache
+    {
+        std::function<void(LayoutBox*)> set_bg_surfaces = [&](LayoutBox* b) {
+            if (!b) return;
+            if (b->dom_node && !b->bg_image.empty()) {
+                uint32_t bg_key = b->dom_node->node_id | 0x40000000u;
+                auto it = g_img_surfaces.find(bg_key);
+                if (it != g_img_surfaces.end()) b->bg_surface = it->second.surface;
+            }
+            for (auto& c : b->children) set_bg_surfaces(c.get());
+        };
+        set_bg_surfaces(tab->layout_root.get());
     }
 
     // Perform layout

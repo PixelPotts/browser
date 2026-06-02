@@ -118,6 +118,10 @@ struct LayoutBox {
     std::string border_style;
     std::string box_shadow;
     int z_index = 0;
+    int visibility = 0;        // 0=visible, 1=hidden
+    std::string bg_image;      // background-image URL
+    cairo_surface_t* bg_surface = nullptr;  // loaded surface (not owned)
+    std::string text_shadow;   // raw CSS text-shadow value
     int text_decoration = 0;  // bitmask: 1=underline, 2=overline, 4=line-through
     int pos_top = INT_MIN, pos_left = INT_MIN, pos_right = INT_MIN, pos_bottom = INT_MIN;
 

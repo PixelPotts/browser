@@ -302,6 +302,7 @@ static std::vector<BoxShadow> parse_box_shadow(const std::string& raw) {
 static void paint_box(LayoutBox* box, DisplayList& dl, float offset_x, float offset_y) {
     if (!box) return;
     if (box->type == LayoutBoxType::None) return;
+    if (box->visibility == 1) return;  // visibility: hidden — skip painting, keep layout space
 
     DOMNode* node = box->dom_node;
     float cx = offset_x + box->content_rect.x;
@@ -363,6 +364,23 @@ static void paint_box(LayoutBox* box, DisplayList& dl, float offset_x, float off
         cmd.type = PaintCmdType::FillRect;
         cmd.rect = bb;
         cmd.color = bgc;
+        cmd.border_radius = node ? node->border_radius : 0;
+        cmd.dom_node = node;
+        dl.push_back(cmd);
+    }
+
+    // Background image (drawn over background color)
+    if (box->bg_surface && box->content_rect.w > 0 && box->content_rect.h > 0) {
+        Rect bb = box->border_box();
+        bb.x += offset_x;
+        bb.y += offset_y;
+        PaintCommand cmd;
+        cmd.type = PaintCmdType::DrawBackgroundImage;
+        cmd.surface = box->bg_surface;
+        cmd.dest_rect = bb;
+        cmd.natural_w = cairo_image_surface_get_width(box->bg_surface);
+        cmd.natural_h = cairo_image_surface_get_height(box->bg_surface);
+        cmd.object_fit = 2;  // cover
         cmd.border_radius = node ? node->border_radius : 0;
         cmd.dom_node = node;
         dl.push_back(cmd);
@@ -482,6 +500,46 @@ static void paint_box(LayoutBox* box, DisplayList& dl, float offset_x, float off
         cmd.text_y = cy;
         cmd.text_color = tc;
         cmd.dom_node = node;
+
+        // text-shadow: parse first shadow layer (offsetX offsetY [blur] [color])
+        const std::string& ts = box->text_shadow;
+        if (!ts.empty() && ts != "none") {
+            // Try to extract first shadow: color? dx dy [blur] [color?]
+            // Simple parser: tokenize by spaces/commas, look for length values
+            std::vector<std::string> tokens;
+            std::string tok;
+            for (char c : ts) {
+                if (c == ',' ) { if (!tok.empty()) { tokens.push_back(tok); tok.clear(); } break; } // first shadow only
+                if (c == ' ' || c == '\t') { if (!tok.empty()) { tokens.push_back(tok); tok.clear(); } }
+                else tok += c;
+            }
+            if (!tok.empty()) tokens.push_back(tok);
+
+            // Find numeric tokens (offsets/blur) and color token
+            float sdx = 0, sdy = 0, sblur = 0;
+            std::string scolor;
+            int numeric_count = 0;
+            for (const auto& t : tokens) {
+                bool is_num = !t.empty() && (t[0] == '-' || t[0] == '.' || isdigit(t[0]));
+                if (is_num) {
+                    float v = std::stof(t);
+                    if (numeric_count == 0) sdx = v;
+                    else if (numeric_count == 1) sdy = v;
+                    else if (numeric_count == 2) sblur = v;
+                    numeric_count++;
+                } else if (!t.empty()) {
+                    scolor = t;
+                }
+            }
+            if (numeric_count >= 2) {
+                cmd.has_text_shadow = true;
+                cmd.shadow_dx = sdx;
+                cmd.shadow_dy = sdy;
+                cmd.shadow_blur = sblur;
+                cmd.shadow_color = scolor.empty() ? CairoColor{0,0,0,0.5} : parse_css_color(scolor);
+            }
+        }
+
         dl.push_back(cmd);
     }
 
@@ -602,6 +660,32 @@ void render_display_list(cairo_t* cr, const DisplayList& dl, float scroll_x, flo
 
             case PaintCmdType::DrawText: {
                 if (!cmd.pango_layout) break;
+                // Draw text-shadow first (behind main text)
+                if (cmd.has_text_shadow) {
+                    float blur = cmd.shadow_blur;
+                    int steps = (blur > 0) ? std::min(5, (int)(blur / 2) + 1) : 0;
+                    // Core shadow pass
+                    cairo_set_source_rgba(cr, cmd.shadow_color.r, cmd.shadow_color.g,
+                                           cmd.shadow_color.b, cmd.shadow_color.a);
+                    cairo_move_to(cr, cmd.text_x + cmd.shadow_dx, cmd.text_y + cmd.shadow_dy);
+                    pango_cairo_show_layout(cr, cmd.pango_layout);
+                    // Additional blur passes (approx with offset copies at lower alpha)
+                    if (steps > 0) {
+                        double step_a = cmd.shadow_color.a * 0.5 / steps;
+                        float offsets[] = {-1,0, 1,0, 0,-1, 0,1};
+                        for (int s = 1; s <= steps; s++) {
+                            float r = s * (blur / steps);
+                            cairo_set_source_rgba(cr, cmd.shadow_color.r, cmd.shadow_color.g,
+                                                   cmd.shadow_color.b, step_a);
+                            for (int o = 0; o < 4; o++) {
+                                cairo_move_to(cr,
+                                    cmd.text_x + cmd.shadow_dx + offsets[o*2]*r,
+                                    cmd.text_y + cmd.shadow_dy + offsets[o*2+1]*r);
+                                pango_cairo_show_layout(cr, cmd.pango_layout);
+                            }
+                        }
+                    }
+                }
                 cairo_set_source_rgba(cr, cmd.text_color.r, cmd.text_color.g,
                                        cmd.text_color.b, cmd.text_color.a);
                 cairo_move_to(cr, cmd.text_x, cmd.text_y);
@@ -727,6 +811,29 @@ void render_display_list(cairo_t* cr, const DisplayList& dl, float scroll_x, flo
                     cairo_paint(cr);
                     cairo_restore(cr);
                 }
+                break;
+            }
+
+            case PaintCmdType::DrawBackgroundImage: {
+                if (!cmd.surface) break;
+                int sw = cairo_image_surface_get_width(cmd.surface);
+                int sh = cairo_image_surface_get_height(cmd.surface);
+                if (sw <= 0 || sh <= 0) break;
+                float dw = cmd.dest_rect.w, dh = cmd.dest_rect.h;
+                float dx = cmd.dest_rect.x, dy = cmd.dest_rect.y;
+                if (dw <= 0 || dh <= 0) break;
+                // Cover: fill destination preserving aspect ratio
+                float scale = std::max(dw / sw, dh / sh);
+                float rw = sw * scale, rh = sh * scale;
+                float ox = (dw - rw) / 2, oy = (dh - rh) / 2;
+                cairo_save(cr);
+                cairo_rectangle(cr, dx, dy, dw, dh);
+                cairo_clip(cr);
+                cairo_translate(cr, dx + ox, dy + oy);
+                cairo_scale(cr, scale, scale);
+                cairo_set_source_surface(cr, cmd.surface, 0, 0);
+                cairo_paint(cr);
+                cairo_restore(cr);
                 break;
             }
 

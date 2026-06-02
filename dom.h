@@ -126,6 +126,8 @@ struct DOMNode {
     bool dirty = false;
     bool is_body = false;
 
+    int visibility = 0;  // 0=visible, 1=hidden, 2=collapse
+
     // Interactive state
     bool is_hovered = false;
     bool is_focused = false;
