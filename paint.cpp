@@ -382,6 +382,18 @@ static void paint_box(LayoutBox* box, DisplayList& dl, float offset_x, float off
     float cx = offset_x + box->content_rect.x;
     float cy = offset_y + box->content_rect.y;
 
+    // CSS transform: push BEFORE anything else so the whole element is transformed
+    bool do_transform = node && !box->css_transform.empty();
+    if (do_transform) {
+        Rect bb = box->border_box();
+        float tcx = offset_x + bb.x + bb.w / 2;
+        float tcy = offset_y + bb.y + bb.h / 2;
+        PaintCommand tcmd;
+        tcmd.type = PaintCmdType::PushTransform;
+        tcmd.transform_matrix = parse_css_transform_matrix(box->css_transform, tcx, tcy);
+        dl.push_back(tcmd);
+    }
+
     // Debug: trace form control painting
     if (node && (node->tag_name == "input" || node->tag_name == "textarea") && box->type != LayoutBoxType::Text) {
         Rect bb = box->border_box();
@@ -676,18 +688,6 @@ static void paint_box(LayoutBox* box, DisplayList& dl, float offset_x, float off
         cmd.object_fit = node ? node->object_fit : 0;
         cmd.dom_node = node;
         dl.push_back(cmd);
-    }
-
-    // CSS transform: wrap children in PushTransform/PopTransform
-    bool do_transform = node && !box->css_transform.empty();
-    if (do_transform) {
-        Rect bb = box->border_box();
-        float tcx = offset_x + bb.x + bb.w / 2;
-        float tcy = offset_y + bb.y + bb.h / 2;
-        PaintCommand tcmd;
-        tcmd.type = PaintCmdType::PushTransform;
-        tcmd.transform_matrix = parse_css_transform_matrix(box->css_transform, tcx, tcy);
-        dl.push_back(tcmd);
     }
 
     // Children
