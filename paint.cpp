@@ -1145,6 +1145,12 @@ static void paint_box(LayoutBox* box, DisplayList& dl, float offset_x, float off
         PaintCommand fcmd;
         fcmd.type = PaintCmdType::PopFilter;
         fcmd.filters = parse_css_filter_list(box->css_filter);
+        // Store the element's border box so the render pass knows where to blit
+        Rect bb = box->border_box();
+        float blur_pad = 0;
+        for (const auto& fd : fcmd.filters) if (fd.type == FilterDef::Blur) blur_pad = std::max(blur_pad, fd.value * 3.0f);
+        fcmd.rect = { offset_x + bb.x - blur_pad, offset_y + bb.y - blur_pad,
+                      bb.w + blur_pad * 2.0f, bb.h + blur_pad * 2.0f };
         dl.push_back(fcmd);
     }
 }
@@ -1541,13 +1547,32 @@ void render_display_list(cairo_t* cr, const DisplayList& dl, float scroll_x, flo
             case PaintCmdType::PopFilter: {
                 cairo_pattern_t* pat = cairo_pop_group(cr);
                 if (pat) {
-                    cairo_surface_t* surf = nullptr;
-                    if (cairo_pattern_get_surface(pat, &surf) == CAIRO_STATUS_SUCCESS && surf) {
+                    if (!cmd.filters.empty() && cmd.rect.w > 0 && cmd.rect.h > 0) {
+                        // cmd.rect is in document space (= cr user space, since cr has scroll translate).
+                        // The pop_group pattern uses cr's CTM (pattern matrix = cr's CTM).
+                        // So sampling the pattern at cr user coord (rx,ry) gets the element's top-left.
+                        float rx = cmd.rect.x, ry = cmd.rect.y;   // document / cr-user coords
+                        float rw = cmd.rect.w, rh = cmd.rect.h;
+                        int sw = (int)ceil(rw), sh = (int)ceil(rh);
+                        cairo_surface_t* img = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, sw, sh);
+                        cairo_t* tmp = cairo_create(img);
+                        // translate(-rx,-ry) so doc coord (rx,ry) → tmp user (rx,ry) → pattern at (rx,ry)
+                        // which is the element's top-left in cr user space → image pixel (0,0)
+                        cairo_translate(tmp, -rx, -ry);
+                        cairo_set_source(tmp, pat);
+                        cairo_paint(tmp);
+                        cairo_destroy(tmp);
+                        // Apply pixel-space filters
                         for (const auto& f : cmd.filters)
-                            apply_filter_to_surface(surf, f);
+                            apply_filter_to_surface(img, f);
+                        // Paint back: surface_set(cr, img, rx, ry) maps img pixel(0,0) → cr user(rx,ry)
+                        cairo_set_source_surface(cr, img, rx, ry);
+                        cairo_paint(cr);
+                        cairo_surface_destroy(img);
+                    } else {
+                        cairo_set_source(cr, pat);
+                        cairo_paint(cr);
                     }
-                    cairo_set_source(cr, pat);
-                    cairo_paint(cr);
                     cairo_pattern_destroy(pat);
                 }
                 break;

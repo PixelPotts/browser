@@ -3706,10 +3706,11 @@ static gboolean anim_tick(gpointer data) {
                     gint64 elapsed = now - na.start_us - (gint64)na.delay_ms * 1000;
                     if (elapsed >= 0) {
                         float t = (float)elapsed / (na.duration_ms * 1000.0f);
-                        if (na.iteration_count == 0) t = fmodf(t, 1.0f); // infinite
+                        bool alt = na.alternate;  // save before possible erase
+                        if (na.iteration_count == 0) { t = fmodf(t, 1.0f); any_active = true; } // infinite
                         else if (t > 1.0f) { t = 1.0f; g_node_animations.erase(ait); }
                         else any_active = true;
-                        if (na.alternate) t = t < 0.5f ? 2.0f*t : 2.0f*(1.0f-t);
+                        if (alt) t = t < 0.5f ? 2.0f*t : 2.0f*(1.0f-t);
                         // Find surrounding keyframe stops
                         const auto& stops = kit->second.stops;
                         size_t lo = 0, hi = 0;
@@ -3737,18 +3738,20 @@ static gboolean anim_tick(gpointer data) {
                         interp_color("background-color");
                         interp_color("color");
                         interp_color("border-color");
-                        // opacity
+                        // opacity: inject via style_props so restyle picks it up
                         auto opl = stops[lo].props.find("opacity");
                         auto oph = stops[hi].props.find("opacity");
                         if (opl != stops[lo].props.end() && oph != stops[hi].props.end()) {
                             try {
                                 float v0 = std::stof(opl->second), v1 = std::stof(oph->second);
-                                node->opacity = v0 + frac*(v1-v0);
+                                char buf[32];
+                                snprintf(buf, sizeof(buf), "%.4f", v0 + frac*(v1-v0));
+                                node->style_props["opacity"] = buf;
                             } catch(...) {}
                         }
-                        // transform: just use nearest keyframe
+                        // transform: inject via style_props
                         auto trl = stops[lo].props.find("transform");
-                        if (trl != stops[lo].props.end()) node->css_transform = trl->second;
+                        if (trl != stops[lo].props.end()) node->style_props["transform"] = trl->second;
                     }
                 }
             }
