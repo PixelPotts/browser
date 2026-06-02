@@ -1920,9 +1920,6 @@ static void layout_table(LayoutBox* box, float containing_width, float containin
     }
     box->content_rect.w = content_width;
 
-    // Determine column count
-    int num_cols = count_table_columns(box);
-
     // Border-spacing (simple: 2px default)
     int border_spacing = 2;
 
