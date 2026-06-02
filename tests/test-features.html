@@ -526,5 +526,151 @@ h2 { color: #333; margin-top: 30px; }
     <div class="wb-box wb-wrap">Superlongwordthatdoesntfit and some normal text here</div>
 </div>
 
+
+<!-- ============================================================ -->
+<!-- ROUND 5 FEATURES -->
+<!-- ============================================================ -->
+
+<!-- A: min() / max() / clamp() -->
+<div class="section">
+<h2>Round 5-A: min() / max() / clamp()</h2>
+<style>
+.minmax-a { background: #3498db; color: white; padding: 8px; margin: 6px 0; }
+.minmax-b { background: #e74c3c; color: white; padding: 8px; margin: 6px 0; }
+.minmax-c { background: #2ecc71; color: white; padding: 8px; margin: 6px 0; }
+</style>
+<div class="minmax-a" style="width: min(300px, 80%)">min(300px, 80%) — shrinks at narrow viewport</div>
+<div class="minmax-b" style="width: max(200px, 30%)">max(200px, 30%) — at least 200px wide</div>
+<div class="minmax-c" style="width: clamp(150px, 50%, 400px)">clamp(150px, 50%, 400px) — clamped between 150 and 400</div>
+</div>
+
+<!-- B: CSS Grid -->
+<div class="section">
+<h2>Round 5-B: CSS Grid</h2>
+<style>
+.grid-3col {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 12px;
+    background: #ecf0f1;
+    padding: 12px;
+}
+.grid-mixed {
+    display: grid;
+    grid-template-columns: 200px 1fr 100px;
+    gap: 8px;
+    background: #dfe6e9;
+    padding: 10px;
+    margin-top: 10px;
+}
+.grid-cell { background: #3498db; color: white; padding: 15px; text-align: center; border-radius: 4px; }
+.grid-cell:nth-child(2) { background: #e74c3c; }
+.grid-cell:nth-child(3) { background: #2ecc71; }
+.grid-cell:nth-child(4) { background: #f39c12; }
+.grid-cell:nth-child(5) { background: #9b59b6; }
+.grid-cell:nth-child(6) { background: #1abc9c; }
+</style>
+<p>3 equal columns (1fr 1fr 1fr):</p>
+<div class="grid-3col">
+  <div class="grid-cell">Cell 1</div>
+  <div class="grid-cell">Cell 2</div>
+  <div class="grid-cell">Cell 3</div>
+  <div class="grid-cell">Cell 4</div>
+  <div class="grid-cell">Cell 5</div>
+  <div class="grid-cell">Cell 6</div>
+</div>
+<p>Mixed columns (200px / 1fr / 100px):</p>
+<div class="grid-mixed">
+  <div class="grid-cell">Fixed 200px</div>
+  <div class="grid-cell">Flexible 1fr</div>
+  <div class="grid-cell">100px</div>
+</div>
+</div>
+
+<!-- C: position: sticky -->
+<div class="section" style="height: 300px; overflow: scroll; border: 2px solid #ddd; padding: 0;">
+<h2 style="padding: 10px;">Round 5-C: position: sticky</h2>
+<style>
+.sticky-header {
+    position: sticky;
+    top: 0;
+    background: #2c3e50;
+    color: white;
+    padding: 12px 20px;
+    font-weight: bold;
+    z-index: 10;
+}
+.scroll-content { padding: 20px; }
+.scroll-row { background: #ecf0f1; margin: 8px 0; padding: 12px; border-radius: 4px; }
+</style>
+<div class="sticky-header">Sticky Header — stays at top while scrolling</div>
+<div class="scroll-content">
+  <div class="scroll-row">Row 1 of scrollable content</div>
+  <div class="scroll-row">Row 2 of scrollable content</div>
+  <div class="scroll-row">Row 3 of scrollable content</div>
+  <div class="scroll-row">Row 4 of scrollable content</div>
+  <div class="scroll-row">Row 5 of scrollable content</div>
+  <div class="scroll-row">Row 6 of scrollable content</div>
+  <div class="scroll-row">Row 7 of scrollable content</div>
+  <div class="scroll-row">Row 8 — scroll down to see header stay</div>
+</div>
+</div>
+
+<!-- D: Table layout -->
+<div class="section">
+<h2>Round 5-D: Table layout</h2>
+<style>
+table.demo-table { border-collapse: collapse; width: 100%; }
+table.demo-table th, table.demo-table td {
+    border: 1px solid #bdc3c7;
+    padding: 10px 14px;
+    text-align: left;
+}
+table.demo-table th { background: #2c3e50; color: white; }
+table.demo-table tr:nth-child(even) td { background: #ecf0f1; }
+</style>
+<table class="demo-table">
+  <thead>
+    <tr><th>Name</th><th>Role</th><th>Status</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Alice</td><td>Engineer</td><td>Active</td></tr>
+    <tr><td>Bob</td><td>Designer</td><td>Active</td></tr>
+    <tr><td>Carol</td><td>Manager</td><td>Away</td></tr>
+    <tr><td>Dave</td><td>Engineer</td><td>Active</td></tr>
+  </tbody>
+</table>
+</div>
+
+<!-- E: details/summary toggle -->
+<div class="section">
+<h2>Round 5-E: &lt;details&gt; / &lt;summary&gt; toggle</h2>
+<style>
+details { border: 1px solid #bdc3c7; border-radius: 6px; padding: 8px 14px; margin: 10px 0; }
+summary { font-weight: bold; cursor: pointer; padding: 4px 0; }
+details[open] { background: #eaf4fb; }
+.detail-content { margin-top: 10px; padding: 10px; background: white; border-radius: 4px; }
+</style>
+<details>
+  <summary>Click to expand: Browser Features</summary>
+  <div class="detail-content">
+    <p>This browser supports: HTML parsing, CSS layout, JavaScript via QuickJS, and Cairo rendering.</p>
+    <ul><li>Block layout</li><li>Flex layout</li><li>CSS Grid</li><li>CSS Transitions</li></ul>
+  </div>
+</details>
+<details open>
+  <summary>Already open: About This Engine</summary>
+  <div class="detail-content">
+    <p>Built in C++ with GTK3, Pango text, and Cairo graphics. Click the summary to collapse.</p>
+  </div>
+</details>
+<details>
+  <summary>FAQ</summary>
+  <div class="detail-content">
+    <p>Q: Does it support CSS variables? A: Yes, via the var() function.</p>
+  </div>
+</details>
+</div>
+
 </body>
 </html>

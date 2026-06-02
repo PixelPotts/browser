@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cstdio>
+#include <sstream>
 
 // ---- LayoutBox destructor ----
 
@@ -48,6 +49,7 @@ static LayoutBoxType display_type_for(DOMNode* node) {
 
     // Check if inline by tag or display property
     if (d == DOMNode::Display::Inline) return LayoutBoxType::Inline;
+    if (d == DOMNode::Display::Grid)   return LayoutBoxType::Grid;
 
     // Block by default for elements, or explicit Block
     if (d == DOMNode::Display::Block) return LayoutBoxType::Block;
@@ -126,6 +128,10 @@ static void copy_style(LayoutBox* box, DOMNode* node) {
     box->word_break = node->word_break;
     box->overflow_wrap = node->overflow_wrap;
     box->text_overflow = node->text_overflow;
+    box->grid_template_columns = node->grid_template_columns;
+    box->grid_template_rows = node->grid_template_rows;
+    box->column_gap = node->column_gap > 0 ? node->column_gap : node->gap;
+    box->row_gap = node->row_gap > 0 ? node->row_gap : node->gap;
     {
         auto it = node->style_props.find("background-repeat");
         if (it != node->style_props.end()) {
@@ -262,7 +268,13 @@ std::unique_ptr<LayoutBox> build_layout_tree(DOMNode* node, PangoContext* pango_
     }
 
     // Build children
+    // <details>: only show <summary> when closed; show all when open
+    bool is_details = (tag == "details");
+    bool details_open = is_details && node->attributes.count("open");
+
     for (auto& child_node : node->children) {
+        // For closed <details>, hide all children except <summary>
+        if (is_details && !details_open && child_node->tag_name != "summary") continue;
         auto child_box = build_layout_tree(child_node.get(), pango_ctx);
         if (child_box) {
             child_box->parent = box.get();
@@ -558,6 +570,10 @@ static void layout_block(LayoutBox* box, float containing_width, float containin
 static void layout_inline(LayoutBox* box, float containing_width, PangoContext* pango_ctx);
 static void layout_flex(LayoutBox* box, float containing_width, float containing_height,
                          PangoContext* pango_ctx);
+static void layout_grid(LayoutBox* box, float containing_width, float containing_height,
+                         PangoContext* pango_ctx);
+static void layout_table(LayoutBox* box, float containing_width, float containing_height,
+                          PangoContext* pango_ctx);
 
 // Measure the max-content (intrinsic) width of a box
 // This is the minimum width at which the box can render without overflow
@@ -730,6 +746,9 @@ static void layout_box(LayoutBox* box, float containing_width, float containing_
         case LayoutBoxType::Flex:
             layout_flex(box, containing_width, containing_height, pango_ctx);
             break;
+        case LayoutBoxType::Grid:
+            layout_grid(box, containing_width, containing_height, pango_ctx);
+            break;
         case LayoutBoxType::Text:
             // Text nodes are laid out by their parent's inline context
             break;
@@ -834,6 +853,13 @@ static void layout_table_row(LayoutBox* box, float containing_width, float conta
 static void layout_block(LayoutBox* box, float containing_width, float containing_height,
                           PangoContext* pango_ctx) {
     DOMNode* node = box->dom_node;
+
+    // Table: use dedicated table layout
+    if (node && node->tag_name == "table") {
+        copy_style(box, node);
+        layout_table(box, containing_width, containing_height, pango_ctx);
+        return;
+    }
 
     // Table row: lay out cells horizontally
     if (node && node->tag_name == "tr") {
@@ -1682,6 +1708,279 @@ static void layout_flex(LayoutBox* box, float containing_width, float containing
 
     box->scroll_width = box->content_rect.w;
     box->scroll_height = box->content_rect.h;
+}
+
+// ---- CSS Grid layout ----
+
+// Parse grid-template-columns/rows: "1fr 2fr", "200px 1fr", "repeat(3, 1fr)", "auto"
+// Returns vector of (value, isFr) pairs. isFr=true means fr unit, false means px/auto.
+static std::vector<std::pair<float,bool>> parse_grid_track_list(const std::string& raw, float avail) {
+    std::vector<std::pair<float,bool>> tracks;
+    if (raw.empty()) return tracks;
+
+    // Expand repeat(n, ...) first
+    std::string expanded;
+    {
+        size_t i = 0;
+        while (i < raw.size()) {
+            size_t rp = raw.find("repeat(", i);
+            if (rp == std::string::npos) { expanded += raw.substr(i); break; }
+            expanded += raw.substr(i, rp - i);
+            size_t inner_start = rp + 7;
+            // find matching )
+            int depth = 1; size_t j = inner_start;
+            while (j < raw.size() && depth > 0) {
+                if (raw[j] == '(') ++depth;
+                else if (raw[j] == ')') --depth;
+                ++j;
+            }
+            std::string inner = raw.substr(inner_start, j - inner_start - 1);
+            size_t comma = inner.find(',');
+            if (comma != std::string::npos) {
+                int count = 1;
+                try { count = std::stoi(inner.substr(0, comma)); } catch (...) {}
+                std::string tmpl = inner.substr(comma + 1);
+                while (!tmpl.empty() && tmpl[0] == ' ') tmpl.erase(0, 1);
+                for (int k = 0; k < count; ++k) {
+                    if (!expanded.empty() && expanded.back() != ' ') expanded += ' ';
+                    expanded += tmpl;
+                }
+            }
+            i = j;
+        }
+    }
+
+    // Tokenize by spaces
+    std::istringstream iss(expanded);
+    std::string tok;
+    while (iss >> tok) {
+        if (tok.back() == '%') {
+            float pct = 0; try { pct = std::stof(tok); } catch (...) {}
+            tracks.push_back({avail * pct / 100.0f, false});
+        } else if (tok.size() >= 2 && tok.substr(tok.size()-2) == "fr") {
+            float fr = 1; try { fr = std::stof(tok); } catch (...) {}
+            tracks.push_back({fr, true});
+        } else if (tok == "auto") {
+            tracks.push_back({0, false}); // auto = 0px placeholder, treated as 1fr
+        } else {
+            // px, em, etc. — parse as px
+            float px = 0;
+            if (tok.size() >= 2 && tok.substr(tok.size()-2) == "px") {
+                try { px = std::stof(tok); } catch (...) {}
+            } else {
+                try { px = std::stof(tok); } catch (...) {}
+            }
+            tracks.push_back({px, false});
+        }
+    }
+    return tracks;
+}
+
+static void layout_grid(LayoutBox* box, float containing_width, float containing_height,
+                         PangoContext* pango_ctx) {
+    DOMNode* node = box->dom_node;
+
+    // Resolve content width
+    float content_width = -1;
+    if (node) {
+        content_width = resolve_width(node, containing_width);
+        if (content_width >= 0 && node->box_sizing == 1) {
+            content_width -= box->padding.horizontal() + box->border.horizontal();
+            if (content_width < 0) content_width = 0;
+        }
+    }
+    if (content_width < 0) {
+        content_width = containing_width - box->margin.horizontal()
+                        - box->padding.horizontal() - box->border.horizontal();
+        if (content_width < 0) content_width = 0;
+    }
+    box->content_rect.w = content_width;
+
+    // Parse column track list
+    std::string col_template = box->grid_template_columns;
+    int col_gap = box->column_gap;
+    int row_gap = box->row_gap;
+
+    std::vector<std::pair<float,bool>> col_tracks = parse_grid_track_list(col_template, content_width);
+    if (col_tracks.empty()) col_tracks.push_back({1.0f, true}); // default: 1 column
+
+    int num_cols = (int)col_tracks.size();
+
+    // Compute fixed-size columns and remaining space for fr units
+    float fixed_total = (float)(num_cols - 1) * col_gap;
+    float total_fr = 0;
+    for (auto& t : col_tracks) {
+        if (!t.second) fixed_total += t.first;
+        else total_fr += t.first;
+    }
+    float fr_unit = 0;
+    if (total_fr > 0) fr_unit = std::max(0.0f, (content_width - fixed_total) / total_fr);
+
+    // Resolve final column widths
+    std::vector<float> col_widths(num_cols);
+    for (int c = 0; c < num_cols; ++c)
+        col_widths[c] = col_tracks[c].second ? col_tracks[c].first * fr_unit : col_tracks[c].first;
+
+    // Auto-place children left→right, wrap to next row
+    // Skip non-visible children
+    std::vector<LayoutBox*> items;
+    for (auto& child : box->children) {
+        if (child->type != LayoutBoxType::None) items.push_back(child.get());
+    }
+
+    float y_cursor = 0;
+    size_t item_idx = 0;
+    while (item_idx < items.size()) {
+        float row_height = 0;
+        // Lay out one row of up to num_cols items
+        std::vector<LayoutBox*> row_items;
+        for (int c = 0; c < num_cols && item_idx < items.size(); ++c, ++item_idx) {
+            row_items.push_back(items[item_idx]);
+        }
+        // Compute column x positions
+        float x_cursor = 0;
+        for (int c = 0; c < (int)row_items.size(); ++c) {
+            LayoutBox* child = row_items[c];
+            float cw = col_widths[c];
+            // Set child width and layout
+            float child_content_w = cw - child->padding.horizontal() - child->border.horizontal() - child->margin.horizontal();
+            if (child_content_w < 0) child_content_w = 0;
+            child->content_rect.w = child_content_w;
+            layout_box(child, cw, containing_height, pango_ctx);
+            // Position child
+            child->content_rect.x = x_cursor + child->margin.left + child->border.left + child->padding.left;
+            child->content_rect.y = y_cursor + child->margin.top + child->border.top + child->padding.top;
+            float ch = child->content_rect.h + child->padding.vertical() + child->border.vertical() + child->margin.vertical();
+            if (ch > row_height) row_height = ch;
+            x_cursor += cw + col_gap;
+        }
+        y_cursor += row_height + row_gap;
+    }
+
+    // Resolve height
+    float content_height = -1;
+    if (node) content_height = resolve_height(node, containing_height);
+    if (content_height < 0) content_height = y_cursor;
+    if (node) content_height = clamp_size(content_height, node, false);
+    box->content_rect.h = content_height;
+
+    if (node && node->halign_center) {
+        float total_w = content_width + box->padding.horizontal() + box->border.horizontal();
+        float leftover = containing_width - total_w - box->margin.left - box->margin.right;
+        if (leftover > 0) { box->margin.left = leftover / 2; box->margin.right = leftover / 2; }
+    }
+}
+
+// ---- Table layout ----
+
+// Determine column count from all rows in the table (scanning thead/tbody/tfoot/tr)
+static int count_table_columns(LayoutBox* table_box) {
+    int max_cols = 0;
+    std::function<void(LayoutBox*)> scan = [&](LayoutBox* b) {
+        if (!b) return;
+        DOMNode* dn = b->dom_node;
+        if (dn && dn->tag_name == "tr") {
+            int cols = 0;
+            for (auto& cell : b->children) {
+                int span = 1;
+                if (cell->dom_node) {
+                    auto cit = cell->dom_node->attributes.find("colspan");
+                    if (cit != cell->dom_node->attributes.end())
+                        try { span = std::stoi(cit->second); } catch (...) {}
+                    if (span < 1) span = 1;
+                }
+                cols += span;
+            }
+            if (cols > max_cols) max_cols = cols;
+            return;
+        }
+        for (auto& child : b->children) scan(child.get());
+    };
+    scan(table_box);
+    return max_cols > 0 ? max_cols : 1;
+}
+
+static void layout_table(LayoutBox* box, float containing_width, float containing_height,
+                          PangoContext* pango_ctx) {
+    DOMNode* node = box->dom_node;
+
+    // Resolve table width
+    float content_width = -1;
+    if (node) {
+        content_width = resolve_width(node, containing_width);
+        if (content_width >= 0 && node->box_sizing == 1) {
+            content_width -= box->padding.horizontal() + box->border.horizontal();
+            if (content_width < 0) content_width = 0;
+        }
+    }
+    if (content_width < 0) {
+        content_width = containing_width - box->margin.horizontal()
+                        - box->padding.horizontal() - box->border.horizontal();
+        if (content_width < 0) content_width = 0;
+    }
+    box->content_rect.w = content_width;
+
+    // Determine column count
+    int num_cols = count_table_columns(box);
+
+    // Border-spacing (simple: 2px default)
+    int border_spacing = 2;
+
+    // Lay out rows, collecting row box pointers
+    // Rows may be direct children (tr) or nested in thead/tbody/tfoot
+    std::vector<LayoutBox*> row_boxes;
+    std::function<void(LayoutBox*)> collect_rows = [&](LayoutBox* b) {
+        if (!b) return;
+        DOMNode* dn = b->dom_node;
+        if (dn && dn->tag_name == "tr") { row_boxes.push_back(b); return; }
+        for (auto& c : b->children) collect_rows(c.get());
+    };
+    collect_rows(box);
+
+    float y_cursor = 0;
+    for (LayoutBox* row : row_boxes) {
+        row->content_rect.x = box->padding.left;
+        row->content_rect.y = y_cursor;
+        layout_table_row(row, content_width, containing_height, pango_ctx);
+        float row_h = row->content_rect.h + row->border.vertical() + row->margin.vertical();
+        y_cursor += row_h + border_spacing;
+    }
+
+    // Set row group (thead/tbody/tfoot) positions to stack vertically
+    float y_group = 0;
+    for (auto& child : box->children) {
+        DOMNode* dn = child->dom_node;
+        if (!dn) continue;
+        if (dn->tag_name == "thead" || dn->tag_name == "tbody" || dn->tag_name == "tfoot") {
+            child->content_rect.x = 0;
+            child->content_rect.y = y_group;
+            // Compute height as sum of its rows
+            float grp_h = 0;
+            for (auto& row_b : child->children) {
+                if (row_b->dom_node && row_b->dom_node->tag_name == "tr") {
+                    row_b->content_rect.y = grp_h; // relative to group
+                    grp_h += row_b->content_rect.h + row_b->border.vertical() + border_spacing;
+                }
+            }
+            child->content_rect.w = content_width;
+            child->content_rect.h = grp_h;
+            y_group += grp_h;
+        } else if (dn->tag_name == "tr") {
+            child->content_rect.y = y_group;
+            y_group += child->content_rect.h + border_spacing;
+        }
+    }
+
+    float total_h = y_cursor;
+    float resolved_h = node ? resolve_height(node, containing_height) : -1;
+    if (resolved_h >= 0) total_h = resolved_h;
+    box->content_rect.h = total_h;
+
+    if (node && node->halign_center) {
+        float total_w = content_width + box->padding.horizontal() + box->border.horizontal();
+        float leftover = containing_width - total_w - box->margin.left - box->margin.right;
+        if (leftover > 0) { box->margin.left = leftover / 2; box->margin.right = leftover / 2; }
+    }
 }
 
 // ---- Layout absolutely positioned children ----

@@ -126,6 +126,12 @@ DisplayList generate_display_list(LayoutBox* root);
 // Generate display list for position:fixed elements (rendered without scroll)
 DisplayList generate_fixed_display_list(LayoutBox* root);
 
+// Collect position:sticky elements for dynamic rendering
+void collect_sticky_boxes(LayoutBox* root, std::vector<LayoutBox*>& out);
+
+// Paint a single layout box into a display list (with explicit offset)
+void paint_box(LayoutBox* box, DisplayList& dl, float offset_x, float offset_y);
+
 // Render display list to cairo context
 void render_display_list(cairo_t* cr, const DisplayList& dl, float scroll_x, float scroll_y,
                           float viewport_width, float viewport_height);

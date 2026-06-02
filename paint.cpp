@@ -747,7 +747,7 @@ static std::vector<BoxShadow> parse_box_shadow(const std::string& raw) {
 
 // ---- Display list generation ----
 
-static void paint_box(LayoutBox* box, DisplayList& dl, float offset_x, float offset_y) {
+void paint_box(LayoutBox* box, DisplayList& dl, float offset_x, float offset_y) {
     if (!box) return;
     if (box->type == LayoutBoxType::None) return;
     if (box->visibility == 1) return;  // visibility: hidden — skip painting, keep layout space
@@ -1113,8 +1113,8 @@ static void paint_box(LayoutBox* box, DisplayList& dl, float offset_x, float off
 
     for (size_t idx : paint_order) {
         auto& child = box->children[idx];
-        // Skip position:fixed children — they go into a separate display list
-        if (child->position == 3) continue;
+        // Skip position:fixed and position:sticky — rendered in separate passes
+        if (child->position == 3 || child->position == 4) continue;
         paint_box(child.get(), dl, child_offset_x, child_offset_y);
     }
 
@@ -1160,6 +1160,20 @@ DisplayList generate_display_list(LayoutBox* root) {
     if (!root) return dl;
     paint_box(root, dl, 0, 0);
     return dl;
+}
+
+// Collect position:sticky elements (raw ptrs) for dynamic viewport-clamped rendering
+void collect_sticky_boxes(LayoutBox* box, std::vector<LayoutBox*>& out) {
+    if (!box) return;
+    for (auto& child : box->children) {
+        if (child->position == 4) {
+            out.push_back(child.get());
+            // Recurse into sticky children (they may have sticky descendants)
+            collect_sticky_boxes(child.get(), out);
+        } else {
+            collect_sticky_boxes(child.get(), out);
+        }
+    }
 }
 
 // Collect fixed-position elements into a separate display list

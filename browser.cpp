@@ -433,6 +433,26 @@ static double eval_calc(const std::string& expr, int fs_ctx) {
     return result;
 }
 
+// Split comma-separated CSS function args, respecting nested parens
+static std::vector<std::string> split_css_fn_args(const std::string& inner) {
+    std::vector<std::string> args;
+    int depth = 0;
+    size_t start = 0;
+    for (size_t i = 0; i <= inner.size(); ++i) {
+        char c = i < inner.size() ? inner[i] : ',';
+        if (c == '(') ++depth;
+        else if (c == ')') --depth;
+        else if (c == ',' && depth == 0) {
+            std::string tok = inner.substr(start, i - start);
+            size_t a = tok.find_first_not_of(" \t\r\n");
+            size_t b = tok.find_last_not_of(" \t\r\n");
+            args.push_back(a == std::string::npos ? "" : tok.substr(a, b-a+1));
+            start = i + 1;
+        }
+    }
+    return args;
+}
+
 // parse a CSS length value → pixels (best-effort; 'auto' → 0)
 // fs_ctx: font-size of the element's context for em/ch/ex resolution (default 16)
 static int parse_px_val(const std::string& raw, int fs_ctx = 16) {
@@ -440,12 +460,33 @@ static int parse_px_val(const std::string& raw, int fs_ctx = 16) {
     if (v.empty() || v=="auto") return 0;
     // Handle calc() expressions
     if (v.size() > 6 && v.substr(0, 5) == "calc(") {
-        // Extract content between calc( and )
         size_t start = 5;
         size_t end = v.rfind(')');
         if (end == std::string::npos) end = v.size();
         std::string expr = v.substr(start, end - start);
         return (int)eval_calc(expr, fs_ctx);
+    }
+    // Handle min(), max(), clamp()
+    size_t paren = v.find('(');
+    if (paren != std::string::npos) {
+        std::string fn = v.substr(0, paren);
+        size_t q = v.rfind(')');
+        std::string inner = v.substr(paren + 1, q == std::string::npos ? v.size() - paren - 1 : q - paren - 1);
+        auto args = split_css_fn_args(inner);
+        if (fn == "min" && !args.empty()) {
+            int result = parse_px_val(args[0], fs_ctx);
+            for (size_t i = 1; i < args.size(); ++i) result = std::min(result, parse_px_val(args[i], fs_ctx));
+            return result;
+        } else if (fn == "max" && !args.empty()) {
+            int result = parse_px_val(args[0], fs_ctx);
+            for (size_t i = 1; i < args.size(); ++i) result = std::max(result, parse_px_val(args[i], fs_ctx));
+            return result;
+        } else if (fn == "clamp" && args.size() >= 3) {
+            int lo  = parse_px_val(args[0], fs_ctx);
+            int val = parse_px_val(args[1], fs_ctx);
+            int hi  = parse_px_val(args[2], fs_ctx);
+            return std::max(lo, std::min(val, hi));
+        }
     }
     return (int)parse_length_token(v, fs_ctx);
 }
@@ -932,7 +973,7 @@ struct BoxModel {
     std::string border_color;
     std::string border_style; // solid, dashed, etc.
     bool halign_center = false;
-    enum class Display : uint8_t { Inherit, Block, Inline, None, Flex, InlineBlock } display = Display::Inherit;
+    enum class Display : uint8_t { Inherit, Block, Inline, None, Flex, InlineBlock, Grid } display = Display::Inherit;
     enum class Float   : uint8_t { None, Left, Right }                               floatdir = Float::None;
     std::string bg_image; // resolved URL
     std::string bg_color; // raw CSS color value
@@ -1006,6 +1047,7 @@ static void apply_box(const std::string& decls, BoxModel& bm, int fs_ctx = 16) {
     { auto s=tolower_s(prop_val(decls,"display"));
       if      (s=="none")                       bm.display=BoxModel::Display::None;
       else if (s=="flex"||s=="inline-flex")     bm.display=BoxModel::Display::Flex;
+      else if (s=="grid"||s=="inline-grid")     bm.display=BoxModel::Display::Grid;
       else if (s=="inline-block")               bm.display=BoxModel::Display::InlineBlock;
       else if (s=="inline")                     bm.display=BoxModel::Display::Inline;
       else if (s=="block")                      bm.display=BoxModel::Display::Block; }
@@ -1588,11 +1630,16 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
                   } }
                 { auto s = prop_val(r.decls, "gap");
                   if (!s.empty()) { int px = parse_px_val(s, elem->fs_computed); if (px > 0) elem->gap = px; } }
+                { auto s = prop_val(r.decls, "grid-template-columns"); if (!s.empty()) elem->grid_template_columns = s; }
+                { auto s = prop_val(r.decls, "grid-template-rows");    if (!s.empty()) elem->grid_template_rows = s; }
+                { auto s = prop_val(r.decls, "column-gap"); if (!s.empty()) elem->column_gap = parse_px_val(s, elem->fs_computed); }
+                { auto s = prop_val(r.decls, "row-gap");    if (!s.empty()) elem->row_gap    = parse_px_val(s, elem->fs_computed); }
                 { auto s = tolower_s(prop_val(r.decls, "position"));
                   if      (s == "static")   elem->position = 0;
                   else if (s == "relative") elem->position = 1;
                   else if (s == "absolute") elem->position = 2;
-                  else if (s == "fixed")    elem->position = 3; }
+                  else if (s == "fixed")    elem->position = 3;
+                  else if (s == "sticky")   elem->position = 4; }
                 { auto s = prop_val(r.decls, "top");
                   if (!s.empty() && tolower_s(s) != "auto") elem->pos_top = parse_px_val(s, elem->fs_computed); }
                 { auto s = prop_val(r.decls, "left");
@@ -2136,6 +2183,7 @@ struct TabState {
     std::unique_ptr<LayoutBox> layout_root;      // layout tree
     DisplayList display_list;                    // paint commands
     DisplayList fixed_display_list;              // position:fixed paint commands
+    std::vector<LayoutBox*> sticky_boxes;        // position:sticky elements (raw ptrs into layout_root)
     PangoContext* pango_ctx = nullptr;           // shared Pango context
     float scroll_x = 0, scroll_y = 0;           // viewport scroll position
     float content_height = 0;                    // total page height for scrollbar
@@ -3828,6 +3876,10 @@ static void apply_css_to_node(DOMNode* node, const std::vector<CSSRule>& css) {
     node->align_items = 0;
     node->flex_wrap = 0;
     node->gap = 0;
+    node->grid_template_columns.clear();
+    node->grid_template_rows.clear();
+    node->column_gap = 0;
+    node->row_gap = 0;
     node->flex_grow = 0.0f;
     node->flex_shrink = 1.0f;
     node->flex_basis = -1;
@@ -3962,11 +4014,16 @@ static void apply_css_to_node(DOMNode* node, const std::vector<CSSRule>& css) {
           } }
         { auto s = prop_val(r.decls, "gap");
           if (!s.empty()) { int px = parse_px_val(s, node->fs_computed); if (px > 0) node->gap = px; } }
+        { auto s = prop_val(r.decls, "grid-template-columns"); if (!s.empty()) node->grid_template_columns = s; }
+        { auto s = prop_val(r.decls, "grid-template-rows");    if (!s.empty()) node->grid_template_rows = s; }
+        { auto s = prop_val(r.decls, "column-gap"); if (!s.empty()) node->column_gap = parse_px_val(s, node->fs_computed); }
+        { auto s = prop_val(r.decls, "row-gap");    if (!s.empty()) node->row_gap    = parse_px_val(s, node->fs_computed); }
         { auto s = tolower_s(prop_val(r.decls, "position"));
           if      (s == "static")   node->position = 0;
           else if (s == "relative") node->position = 1;
           else if (s == "absolute") node->position = 2;
-          else if (s == "fixed")    node->position = 3; }
+          else if (s == "fixed")    node->position = 3;
+          else if (s == "sticky")   node->position = 4; }
         { auto s = prop_val(r.decls, "top");
           if (!s.empty() && tolower_s(s) != "auto") node->pos_top = parse_px_val(s, node->fs_computed); }
         { auto s = prop_val(r.decls, "left");
@@ -4199,11 +4256,16 @@ static void apply_css_to_node(DOMNode* node, const std::vector<CSSRule>& css) {
           } }
         { auto s = prop_val(ist, "gap");
           if (!s.empty()) { int px = parse_px_val(s, node->fs_computed); if (px > 0) node->gap = px; } }
+        { auto s = prop_val(ist, "grid-template-columns"); if (!s.empty()) node->grid_template_columns = s; }
+        { auto s = prop_val(ist, "grid-template-rows");    if (!s.empty()) node->grid_template_rows = s; }
+        { auto s = prop_val(ist, "column-gap"); if (!s.empty()) node->column_gap = parse_px_val(s, node->fs_computed); }
+        { auto s = prop_val(ist, "row-gap");    if (!s.empty()) node->row_gap    = parse_px_val(s, node->fs_computed); }
         { auto s = tolower_s(prop_val(ist, "position"));
           if      (s == "static")   node->position = 0;
           else if (s == "relative") node->position = 1;
           else if (s == "absolute") node->position = 2;
-          else if (s == "fixed")    node->position = 3; }
+          else if (s == "fixed")    node->position = 3;
+          else if (s == "sticky")   node->position = 4; }
         { auto s = prop_val(ist, "top");
           if (!s.empty() && tolower_s(s) != "auto") node->pos_top = parse_px_val(s, node->fs_computed); }
         { auto s = prop_val(ist, "left");
@@ -4363,6 +4425,14 @@ static void apply_css_to_node(DOMNode* node, const std::vector<CSSRule>& css) {
             content = content.substr(1, content.size()-2);
         if (is_before) node->before_content = content;
         else node->after_content = content;
+    }
+
+    // --- 9a. UA disclosure triangle for <summary> ---
+    if (tname == "summary" && node->before_content.empty()) {
+        // Check if parent <details> is open
+        bool is_open = node->parent && node->parent->tag_name == "details"
+                       && node->parent->attributes.count("open");
+        node->before_content = is_open ? "\u25BC " : "\u25BA ";  // ▼ or ►
     }
 
     // --- 9. Form control UA defaults (intrinsic sizing) ---
@@ -4625,6 +4695,9 @@ static void layout_and_paint(TabState* tab) {
     // Generate display list
     tab->display_list = generate_display_list(tab->layout_root.get());
     tab->fixed_display_list = generate_fixed_display_list(tab->layout_root.get());
+    // Collect sticky boxes (position:sticky, raw ptrs into layout_root — valid until next layout)
+    tab->sticky_boxes.clear();
+    collect_sticky_boxes(tab->layout_root.get(), tab->sticky_boxes);
 
     fprintf(stderr, "[LAYOUT] Display list: %zu commands, %zu fixed\n",
             tab->display_list.size(), tab->fixed_display_list.size());
@@ -4673,14 +4746,36 @@ static gboolean on_draw_content(GtkWidget* widget, cairo_t* cr, gpointer data) {
     render_display_list(cr, tab->display_list, sx, sy,
                         (float)alloc.width, (float)alloc.height);
 
-    // Render position:fixed elements on top, compensating for GTK scroll
-    if (!tab->fixed_display_list.empty() && tab->viewport) {
+    // Get current scroll offset (used for both fixed and sticky)
+    float scroll_offset = 0;
+    if (tab->viewport) {
         GtkAdjustment* vadj = gtk_scrollable_get_vadjustment(GTK_SCROLLABLE(tab->viewport));
-        float scroll_offset = vadj ? (float)gtk_adjustment_get_value(vadj) : 0;
+        scroll_offset = vadj ? (float)gtk_adjustment_get_value(vadj) : 0;
+    }
+
+    // Render position:fixed elements on top, compensating for GTK scroll
+    if (!tab->fixed_display_list.empty()) {
         cairo_save(cr);
         cairo_translate(cr, 0, scroll_offset);  // cancel GTK viewport scroll
         render_display_list(cr, tab->fixed_display_list, 0, 0,
                             (float)alloc.width, (float)alloc.height);
+        cairo_restore(cr);
+    }
+
+    // Render position:sticky elements — clamped to viewport top
+    if (!tab->sticky_boxes.empty()) {
+        cairo_save(cr);
+        cairo_translate(cr, 0, scroll_offset);  // work in viewport coordinates
+        for (LayoutBox* sticky : tab->sticky_boxes) {
+            float top_off = (sticky->pos_top != INT_MIN) ? (float)sticky->pos_top : 0.0f;
+            // Viewport y = max(natural_y - scroll, top_off)
+            float vp_y = std::max(sticky->abs_y - scroll_offset, top_off);
+            float off_x = sticky->abs_x - sticky->content_rect.x;
+            float off_y = vp_y - sticky->content_rect.y;
+            DisplayList sdl;
+            paint_box(sticky, sdl, off_x, off_y);
+            render_display_list(cr, sdl, 0, 0, (float)alloc.width, (float)alloc.height);
+        }
         cairo_restore(cr);
     }
 
@@ -4754,6 +4849,24 @@ static gboolean on_draw_area_click(GtkWidget* widget, GdkEventButton* ev, gpoint
             }
         }
         link_node = link_node->parent;
+    }
+
+    // Check for <summary> click → toggle parent <details> open/closed
+    if (ev->type == GDK_BUTTON_PRESS) {
+        DOMNode* summary_node = hit.node;
+        while (summary_node && summary_node->tag_name != "summary")
+            summary_node = summary_node->parent;
+        if (summary_node && summary_node->parent && summary_node->parent->tag_name == "details") {
+            DOMNode* details = summary_node->parent;
+            if (details->attributes.count("open"))
+                details->attributes.erase("open");
+            else
+                details->attributes["open"] = "";
+            restyle_tree(tab->document->body ? tab->document->body : tab->document->root.get(),
+                         tab->css_rules);
+            layout_and_paint(tab);
+            return TRUE;
+        }
     }
 
     // Update :active and :focus state

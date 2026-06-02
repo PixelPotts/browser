@@ -145,6 +145,12 @@ struct LayoutBox {
     int overflow_wrap = 0;      // 0=normal, 1=break-word
     int text_overflow = 0;      // 0=clip, 1=ellipsis
 
+    // Round 5 features
+    std::string grid_template_columns;
+    std::string grid_template_rows;
+    int column_gap = 0;
+    int row_gap = 0;
+
     // Cleanup
     ~LayoutBox();
 

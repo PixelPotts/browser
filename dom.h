@@ -103,7 +103,7 @@ struct DOMNode {
     std::string border_color;
     std::string border_style;
     bool halign_center = false;
-    enum class Display : uint8_t { Inherit, Block, Inline, None, Flex, InlineBlock } display = Display::Inherit;
+    enum class Display : uint8_t { Inherit, Block, Inline, None, Flex, InlineBlock, Grid } display = Display::Inherit;
     enum class Float   : uint8_t { None, Left, Right } floatdir = Float::None;
     std::string bg_image;
     std::string bg_color;
@@ -150,6 +150,12 @@ struct DOMNode {
     std::string css_filter;     // CSS filter value (blur, brightness, etc.)
     int word_break = 0;         // 0=normal, 1=break-all, 2=keep-all
     int overflow_wrap = 0;      // 0=normal, 1=break-word, 2=anywhere
+
+    // CSS Grid container properties
+    std::string grid_template_columns; // e.g., "1fr 1fr 1fr", "200px 1fr"
+    std::string grid_template_rows;    // e.g., "auto auto"
+    int column_gap = 0;                // column-gap in px
+    int row_gap = 0;                   // row-gap in px
 
     // Interactive state
     bool is_hovered = false;
