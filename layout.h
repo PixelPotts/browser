@@ -116,6 +116,9 @@ struct LayoutBox {
     int overflow = 0;     // 0=visible, 1=hidden, 2=scroll, 3=auto
     std::string border_color;
     std::string border_style;
+    std::string border_side_color[4]; // [top, right, bottom, left] — per-side overrides
+    std::string border_side_style[4]; // [top, right, bottom, left]
+    std::string object_position;      // CSS object-position (for replaced elements)
     std::string box_shadow;
     int z_index = 0;
     int visibility = 0;        // 0=visible, 1=hidden

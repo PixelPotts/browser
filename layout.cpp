@@ -114,6 +114,11 @@ static void copy_style(LayoutBox* box, DOMNode* node) {
     box->pos_bottom = node->pos_bottom;
     box->border_color = node->border_color;
     box->border_style = node->border_style;
+    for (int i = 0; i < 4; ++i) {
+        box->border_side_color[i] = node->border_side_color[i];
+        box->border_side_style[i] = node->border_side_style[i];
+    }
+    box->object_position = node->object_position;
     box->text_decoration = node->text_decoration > 0 ? node->text_decoration : 0;
     box->visibility = node->visibility;
     box->bg_image = node->bg_image;
@@ -1324,7 +1329,15 @@ static void layout_inline(LayoutBox* box, float containing_width, PangoContext* 
         pango_attr_list_unref(al);
     }
 
-    if (containing_width > 0) {
+    // Resolve effective white-space (CSS inherited property)
+    int eff_ws = box->white_space;
+    if (eff_ws <= 0) {
+        LayoutBox* p = box->parent;
+        while (p && eff_ws <= 0) { if (p->white_space > 0) eff_ws = p->white_space; p = p->parent; }
+    }
+    bool no_wrap = (eff_ws == 1); // white-space: nowrap
+
+    if (containing_width > 0 && !no_wrap) {
         pango_layout_set_width(layout, (int)(containing_width * PANGO_SCALE));
         PangoWrapMode wrap2 = PANGO_WRAP_WORD_CHAR;
         if (box->word_break == 1) wrap2 = PANGO_WRAP_CHAR;

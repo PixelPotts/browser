@@ -672,5 +672,127 @@ details[open] { background: #eaf4fb; }
 </details>
 </div>
 
+<!-- Round 6: white-space nowrap, border-style dashed/dotted, inset shadow, object-position, per-side border -->
+
+<!-- R6-A: white-space: nowrap -->
+<div class="section">
+<h2>Round 6-A: white-space: nowrap</h2>
+<style>
+.nowrap-box { white-space: nowrap; border: 1px solid #3498db; padding: 8px; background: #eaf4fb; overflow: hidden; width: 200px; }
+.normal-wrap { width: 200px; border: 1px solid #95a5a6; padding: 8px; background: #f9f9f9; }
+</style>
+<p>Normal wrap (200px):</p>
+<div class="normal-wrap">This text wraps normally inside a 200px container with multiple words.</div>
+<p>white-space: nowrap (200px, clipped):</p>
+<div class="nowrap-box">This text should not wrap and stays on one line even when long.</div>
+</div>
+
+<!-- R6-B: border-style dashed / dotted -->
+<div class="section">
+<h2>Round 6-B: border-style dashed / dotted</h2>
+<style>
+.b-solid  { border: 3px solid #e74c3c; padding: 12px; margin: 8px 0; width: 200px; }
+.b-dashed { border: 3px dashed #27ae60; padding: 12px; margin: 8px 0; width: 200px; }
+.b-dotted { border: 3px dotted #8e44ad; padding: 12px; margin: 8px 0; width: 200px; }
+.b-mixed  { border-top: 3px dashed #e74c3c; border-bottom: 3px dotted #3498db;
+            border-left: 3px solid #27ae60; border-right: 3px solid #27ae60;
+            padding: 12px; margin: 8px 0; width: 200px; }
+</style>
+<div class="b-solid">Solid border (red)</div>
+<div class="b-dashed">Dashed border (green)</div>
+<div class="b-dotted">Dotted border (purple)</div>
+<div class="b-mixed">Mixed: dashed top, dotted bottom, solid sides</div>
+</div>
+
+<!-- R6-C: box-shadow inset -->
+<div class="section">
+<h2>Round 6-C: box-shadow inset</h2>
+<style>
+.inset-input {
+  display: block;
+  width: 220px;
+  padding: 10px 14px;
+  border: 1px solid #bdc3c7;
+  border-radius: 6px;
+  margin: 10px 0;
+  background: white;
+  box-shadow: inset 0 2px 4px rgba(0,0,0,0.15);
+  font-size: 15px;
+}
+.inset-pressed {
+  width: 120px;
+  padding: 10px;
+  background: #ecf0f1;
+  border: 1px solid #95a5a6;
+  border-radius: 4px;
+  margin: 10px 0;
+  text-align: center;
+  box-shadow: inset 0 3px 6px rgba(0,0,0,0.25), 0 1px 0 rgba(255,255,255,0.7);
+}
+</style>
+<div class="inset-input">Input with inset shadow</div>
+<div class="inset-pressed">Pressed button</div>
+</div>
+
+<!-- R6-D: object-position -->
+<div class="section">
+<h2>Round 6-D: object-position (contain/cover)</h2>
+<style>
+.img-frame { width: 200px; height: 120px; border: 2px solid #3498db; display: inline-block; margin: 8px; vertical-align: top; }
+.op-contain-center { object-fit: contain; object-position: center; width: 200px; height: 120px; }
+.op-contain-left   { object-fit: contain; object-position: left center; width: 200px; height: 120px; }
+.op-contain-right  { object-fit: contain; object-position: right center; width: 200px; height: 120px; }
+.op-cover-top      { object-fit: cover; object-position: top; width: 200px; height: 120px; }
+</style>
+<p>contain + center (default):</p>
+<img class="op-contain-center" src="https://picsum.photos/seed/a/300/200" alt="img">
+<p>contain + left:</p>
+<img class="op-contain-left" src="https://picsum.photos/seed/a/300/200" alt="img">
+<p>contain + right:</p>
+<img class="op-contain-right" src="https://picsum.photos/seed/a/300/200" alt="img">
+<p>cover + top:</p>
+<img class="op-cover-top" src="https://picsum.photos/seed/a/300/200" alt="img">
+</div>
+
+<!-- R6-E: per-side border color/style -->
+<div class="section">
+<h2>Round 6-E: per-side border color / style</h2>
+<style>
+.rainbow-border {
+  border-top:    4px solid #e74c3c;
+  border-right:  4px solid #f39c12;
+  border-bottom: 4px solid #27ae60;
+  border-left:   4px solid #3498db;
+  padding: 16px;
+  margin: 10px 0;
+  width: 220px;
+  background: #fafafa;
+}
+.mixed-style-border {
+  border-top:    3px dashed #8e44ad;
+  border-right:  3px solid #2980b9;
+  border-bottom: 3px dotted #16a085;
+  border-left:   3px solid #c0392b;
+  padding: 12px;
+  margin: 10px 0;
+  width: 220px;
+  background: #fafafa;
+}
+.thick-sides {
+  border-top:    1px solid #95a5a6;
+  border-bottom: 1px solid #95a5a6;
+  border-left:   6px solid #e74c3c;
+  border-right:  6px solid #3498db;
+  padding: 12px;
+  margin: 10px 0;
+  width: 220px;
+  background: #fafafa;
+}
+</style>
+<div class="rainbow-border">Rainbow: each side different color</div>
+<div class="mixed-style-border">Mixed styles: dashed top, solid right, dotted bottom, solid left</div>
+<div class="thick-sides">Thick colored sides (red left, blue right)</div>
+</div>
+
 </body>
 </html>

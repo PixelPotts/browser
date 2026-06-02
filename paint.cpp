@@ -794,7 +794,43 @@ void paint_box(LayoutBox* box, DisplayList& dl, float offset_x, float offset_y) 
         int br = node ? node->border_radius : 0;
 
         for (const auto& s : shadows) {
-            if (s.inset) continue; // TODO: inset shadows
+            if (s.inset) {
+                // Inset shadow: clip to border box, draw strips from each edge inward
+                float blur = std::max(s.blur, 1.0f);
+                int steps = std::max(1, std::min(8, (int)blur));
+                PaintCommand clip_cmd;
+                clip_cmd.type = PaintCmdType::PushClip;
+                clip_cmd.clip_rect = bb;
+                dl.push_back(clip_cmd);
+                for (int i = 0; i < steps; i++) {
+                    float alpha = s.color.a * (float)(steps - i) / steps;
+                    float depth = s.spread + blur * (float)(steps - i) / steps;
+                    // Top strip
+                    float top_h = std::max(0.0f, depth + s.offset_y);
+                    if (top_h > 0) { PaintCommand c; c.type = PaintCmdType::FillRect;
+                        c.rect = {bb.x, bb.y, bb.w, std::min(top_h, bb.h)};
+                        c.color = {s.color.r, s.color.g, s.color.b, alpha}; dl.push_back(c); }
+                    // Bottom strip
+                    float bot_h = std::max(0.0f, depth - s.offset_y);
+                    if (bot_h > 0) { PaintCommand c; c.type = PaintCmdType::FillRect;
+                        float bh = std::min(bot_h, bb.h);
+                        c.rect = {bb.x, bb.y + bb.h - bh, bb.w, bh};
+                        c.color = {s.color.r, s.color.g, s.color.b, alpha}; dl.push_back(c); }
+                    // Left strip
+                    float left_w = std::max(0.0f, depth + s.offset_x);
+                    if (left_w > 0) { PaintCommand c; c.type = PaintCmdType::FillRect;
+                        c.rect = {bb.x, bb.y, std::min(left_w, bb.w), bb.h};
+                        c.color = {s.color.r, s.color.g, s.color.b, alpha}; dl.push_back(c); }
+                    // Right strip
+                    float right_w = std::max(0.0f, depth - s.offset_x);
+                    if (right_w > 0) { PaintCommand c; c.type = PaintCmdType::FillRect;
+                        float rw = std::min(right_w, bb.w);
+                        c.rect = {bb.x + bb.w - rw, bb.y, rw, bb.h};
+                        c.color = {s.color.r, s.color.g, s.color.b, alpha}; dl.push_back(c); }
+                }
+                PaintCommand unclip; unclip.type = PaintCmdType::PopClip; dl.push_back(unclip);
+                continue;
+            }
             // Approximate Gaussian blur with concentric layers
             float blur = std::max(s.blur, 0.0f);
             int steps = std::max(1, (int)(blur / 2));
@@ -977,6 +1013,15 @@ void paint_box(LayoutBox* box, DisplayList& dl, float offset_x, float offset_y) 
             cmd.border_widths = box->border;
             cmd.border_color_val = bc;
             cmd.border_radius = node ? node->border_radius : 0;
+            cmd.border_style_str = bs;
+            // Per-side colors and styles
+            for (int i = 0; i < 4; ++i) {
+                cmd.border_color_per_side[i] = box->border_side_color[i].empty()
+                    ? bc : parse_css_color(box->border_side_color[i]);
+                if (!box->border_side_color[i].empty()) cmd.has_per_side_colors = true;
+                cmd.border_styles_per_side[i] = box->border_side_style[i].empty()
+                    ? bs : box->border_side_style[i];
+            }
             cmd.dom_node = node;
             dl.push_back(cmd);
         }
@@ -1093,6 +1138,7 @@ void paint_box(LayoutBox* box, DisplayList& dl, float offset_x, float offset_y) 
         cmd.natural_w = box->natural_width;
         cmd.natural_h = box->natural_height;
         cmd.object_fit = node ? node->object_fit : 0;
+        cmd.object_position = (node && !node->object_position.empty()) ? node->object_position : "";
         cmd.dom_node = node;
         dl.push_back(cmd);
     }
@@ -1274,51 +1320,95 @@ void render_display_list(cairo_t* cr, const DisplayList& dl, float scroll_x, flo
                 const auto& bc = cmd.border_color_val;
                 int radius = cmd.border_radius;
 
-                cairo_set_source_rgba(cr, bc.r, bc.g, bc.b, bc.a);
+                // Helper: set dash pattern for a border style
+                auto apply_dash = [&](const std::string& style) {
+                    if (style == "dashed") {
+                        double dashes[] = {6.0, 3.0};
+                        cairo_set_dash(cr, dashes, 2, 0);
+                    } else if (style == "dotted") {
+                        double dashes[] = {1.5, 1.5};
+                        cairo_set_dash(cr, dashes, 2, 0);
+                    } else {
+                        cairo_set_dash(cr, nullptr, 0, 0);
+                    }
+                };
 
                 if (radius > 0) {
-                    // Rounded border: draw as stroked rounded rect
+                    // Rounded border: draw as stroked rounded rect (single color)
+                    cairo_set_source_rgba(cr, bc.r, bc.g, bc.b, bc.a);
+                    apply_dash(cmd.border_style_str);
                     float avg_w = (bw.top + bw.right + bw.bottom + bw.left) / 4.0f;
                     float hr = std::min((float)radius, r.w / 2);
                     float vr = std::min((float)radius, r.h / 2);
-
                     float x = r.x + avg_w / 2;
                     float y = r.y + avg_w / 2;
                     float w = r.w - avg_w;
                     float h = r.h - avg_w;
-
                     cairo_new_path(cr);
                     cairo_arc(cr, x + hr, y + vr, hr, M_PI, 1.5 * M_PI);
                     cairo_arc(cr, x + w - hr, y + vr, hr, 1.5 * M_PI, 2 * M_PI);
                     cairo_arc(cr, x + w - hr, y + h - vr, vr, 0, 0.5 * M_PI);
                     cairo_arc(cr, x + hr, y + h - vr, vr, 0.5 * M_PI, M_PI);
                     cairo_close_path(cr);
-
                     cairo_set_line_width(cr, avg_w);
                     cairo_stroke(cr);
+                    cairo_set_dash(cr, nullptr, 0, 0);
                 } else {
-                    // Simple border: draw four rectangles
+                    // Simple border: draw four sides with per-side color and style
+                    // sides: 0=top, 1=right, 2=bottom, 3=left
+                    auto get_color = [&](int side) -> const CairoColor& {
+                        return cmd.has_per_side_colors ? cmd.border_color_per_side[side] : bc;
+                    };
+                    auto draw_solid = [&](float x, float y, float w, float h) {
+                        if (w > 0 && h > 0) { cairo_rectangle(cr, x, y, w, h); cairo_fill(cr); }
+                    };
+                    auto draw_stroked = [&](float x1, float y1, float x2, float y2, float lw, const std::string& style) {
+                        apply_dash(style);
+                        cairo_set_line_width(cr, lw);
+                        cairo_move_to(cr, x1, y1);
+                        cairo_line_to(cr, x2, y2);
+                        cairo_stroke(cr);
+                        cairo_set_dash(cr, nullptr, 0, 0);
+                    };
+
                     // Top
                     if (bw.top > 0) {
-                        cairo_rectangle(cr, r.x, r.y, r.w, bw.top);
-                        cairo_fill(cr);
+                        const auto& sc = get_color(0);
+                        const auto& st = cmd.border_styles_per_side[0];
+                        cairo_set_source_rgba(cr, sc.r, sc.g, sc.b, sc.a);
+                        if (st == "dashed" || st == "dotted")
+                            draw_stroked(r.x, r.y + bw.top/2, r.x + r.w, r.y + bw.top/2, bw.top, st);
+                        else draw_solid(r.x, r.y, r.w, bw.top);
                     }
                     // Bottom
                     if (bw.bottom > 0) {
-                        cairo_rectangle(cr, r.x, r.y + r.h - bw.bottom, r.w, bw.bottom);
-                        cairo_fill(cr);
+                        const auto& sc = get_color(2);
+                        const auto& st = cmd.border_styles_per_side[2];
+                        cairo_set_source_rgba(cr, sc.r, sc.g, sc.b, sc.a);
+                        if (st == "dashed" || st == "dotted") {
+                            float y = r.y + r.h - bw.bottom/2;
+                            draw_stroked(r.x, y, r.x + r.w, y, bw.bottom, st);
+                        } else draw_solid(r.x, r.y + r.h - bw.bottom, r.w, bw.bottom);
                     }
                     // Left
                     if (bw.left > 0) {
-                        cairo_rectangle(cr, r.x, r.y + bw.top,
-                                        bw.left, r.h - bw.top - bw.bottom);
-                        cairo_fill(cr);
+                        const auto& sc = get_color(3);
+                        const auto& st = cmd.border_styles_per_side[3];
+                        cairo_set_source_rgba(cr, sc.r, sc.g, sc.b, sc.a);
+                        if (st == "dashed" || st == "dotted") {
+                            float x = r.x + bw.left/2;
+                            draw_stroked(x, r.y + bw.top, x, r.y + r.h - bw.bottom, bw.left, st);
+                        } else draw_solid(r.x, r.y + bw.top, bw.left, r.h - bw.top - bw.bottom);
                     }
                     // Right
                     if (bw.right > 0) {
-                        cairo_rectangle(cr, r.x + r.w - bw.right, r.y + bw.top,
-                                        bw.right, r.h - bw.top - bw.bottom);
-                        cairo_fill(cr);
+                        const auto& sc = get_color(1);
+                        const auto& st = cmd.border_styles_per_side[1];
+                        cairo_set_source_rgba(cr, sc.r, sc.g, sc.b, sc.a);
+                        if (st == "dashed" || st == "dotted") {
+                            float x = r.x + r.w - bw.right/2;
+                            draw_stroked(x, r.y + bw.top, x, r.y + r.h - bw.bottom, bw.right, st);
+                        } else draw_solid(r.x + r.w - bw.right, r.y + bw.top, bw.right, r.h - bw.top - bw.bottom);
                     }
                 }
                 break;
@@ -1335,20 +1425,40 @@ void render_display_list(cairo_t* cr, const DisplayList& dl, float scroll_x, flo
                 float dx = cmd.dest_rect.x, dy = cmd.dest_rect.y;
                 float sx = dw / sw, sy = dh / sh;
 
+                // object-position: resolve "X Y" token (keyword, %, px) to offsets
+                auto resolve_obj_pos_axis = [](const std::string& tok, float avail, float rendered,
+                                                bool is_x) -> float {
+                    if (tok.empty() || tok == "center") return (avail - rendered) / 2;
+                    if (tok == "left" || tok == "top") return 0;
+                    if (tok == "right" || tok == "bottom") return avail - rendered;
+                    if (!tok.empty() && tok.back() == '%') {
+                        try { float pct = std::stof(tok) / 100.0f;
+                              return pct * (avail - rendered); } catch(...) {}
+                    }
+                    try { return std::stof(tok); } catch(...) {}
+                    return (avail - rendered) / 2;
+                };
+                auto get_obj_pos = [&](float rw, float rh) -> std::pair<float,float> {
+                    if (cmd.object_position.empty()) return {(dw-rw)/2, (dh-rh)/2};
+                    std::istringstream iss(cmd.object_position);
+                    std::string t1, t2;
+                    iss >> t1 >> t2;
+                    float ox = resolve_obj_pos_axis(t1, dw, rw, true);
+                    float oy = t2.empty() ? (dh-rh)/2 : resolve_obj_pos_axis(t2, dh, rh, false);
+                    return {ox, oy};
+                };
+
                 if (cmd.object_fit == 1 || cmd.object_fit == 3) {
                     // contain (or scale-down): fit inside, preserve aspect ratio
                     float scale = std::min(sx, sy);
                     if (cmd.object_fit == 3 && scale > 1.0f) scale = 1.0f; // scale-down: don't upscale
                     float rw = sw * scale, rh = sh * scale;
-                    dx += (dw - rw) / 2;
-                    dy += (dh - rh) / 2;
-                    sx = scale;
-                    sy = scale;
+                    auto [ox, oy] = get_obj_pos(rw, rh);
                     cairo_save(cr);
                     cairo_rectangle(cr, cmd.dest_rect.x, cmd.dest_rect.y, dw, dh);
                     cairo_clip(cr);
-                    cairo_translate(cr, dx, dy);
-                    cairo_scale(cr, sx, sy);
+                    cairo_translate(cr, dx + ox, dy + oy);
+                    cairo_scale(cr, scale, scale);
                     cairo_set_source_surface(cr, cmd.surface, 0, 0);
                     cairo_paint(cr);
                     cairo_restore(cr);
@@ -1356,8 +1466,7 @@ void render_display_list(cairo_t* cr, const DisplayList& dl, float scroll_x, flo
                     // cover: fill dest, preserve aspect ratio, clip overflow
                     float scale = std::max(sx, sy);
                     float rw = sw * scale, rh = sh * scale;
-                    float ox = (dw - rw) / 2;
-                    float oy = (dh - rh) / 2;
+                    auto [ox, oy] = get_obj_pos(rw, rh);
                     cairo_save(cr);
                     cairo_rectangle(cr, dx, dy, dw, dh);
                     cairo_clip(cr);
@@ -1367,9 +1476,8 @@ void render_display_list(cairo_t* cr, const DisplayList& dl, float scroll_x, flo
                     cairo_paint(cr);
                     cairo_restore(cr);
                 } else if (cmd.object_fit == 4) {
-                    // none: render at natural size, centered, clipped
-                    float ox = (dw - sw) / 2;
-                    float oy = (dh - sh) / 2;
+                    // none: render at natural size, with object-position offset
+                    auto [ox, oy] = get_obj_pos((float)sw, (float)sh);
                     cairo_save(cr);
                     cairo_rectangle(cr, dx, dy, dw, dh);
                     cairo_clip(cr);

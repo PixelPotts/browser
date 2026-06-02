@@ -98,10 +98,14 @@ struct DOMNode {
     int height_pct = -1;   // percentage height (0-100), -1=not percentage
     int object_fit = 0;    // 0=fill, 1=contain, 2=cover, 3=scale-down, 4=none
     float aspect_ratio = 0; // CSS aspect-ratio (0 = auto/unset, >0 = w/h ratio)
+    std::string object_position; // CSS object-position (default "50% 50%")
     int border_width[4] = {0,0,0,0};
     int border_radius   = 0;
     std::string border_color;
     std::string border_style;
+    // Per-side border color/style (override border_color/border_style if non-empty)
+    std::string border_side_color[4]; // [top, right, bottom, left]
+    std::string border_side_style[4]; // [top, right, bottom, left]
     bool halign_center = false;
     enum class Display : uint8_t { Inherit, Block, Inline, None, Flex, InlineBlock, Grid } display = Display::Inherit;
     enum class Float   : uint8_t { None, Left, Right } floatdir = Float::None;

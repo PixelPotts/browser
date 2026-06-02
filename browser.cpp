@@ -1114,6 +1114,11 @@ static void apply_box(const std::string& decls, BoxModel& bm, int fs_ctx = 16) {
           auto v=parse_box_shorthand(s); for(int i=0;i<4;++i) if(v[i]>0) bm.border_width[i]=v[i];
     }}
     { auto s=tolower_s(prop_val(decls,"border-style")); if (!s.empty()) bm.border_style=s; }
+    // per-side border-width (individual)
+    { auto s=prop_val(decls,"border-top-width");    if(!s.empty()) bm.border_width[0]=parse_px_val(s); }
+    { auto s=prop_val(decls,"border-right-width");  if(!s.empty()) bm.border_width[1]=parse_px_val(s); }
+    { auto s=prop_val(decls,"border-bottom-width"); if(!s.empty()) bm.border_width[2]=parse_px_val(s); }
+    { auto s=prop_val(decls,"border-left-width");   if(!s.empty()) bm.border_width[3]=parse_px_val(s); }
     { auto s=prop_val(decls,"border-radius"); if (!s.empty()) {
           size_t sl=s.find('/');
           bm.border_radius=parse_px_val(sl==std::string::npos ? s : s.substr(0,sl), fs_ctx);
@@ -1692,13 +1697,19 @@ static std::shared_ptr<Document> parse_html_to_dom(const std::string& html, cons
                 // font-stretch
                 { auto s = tolower_s(prop_val(r.decls, "font-stretch"));
                   if (!s.empty()) { int st = parse_font_stretch(s); if (st >= 0) elem->font_stretch = st; } }
-                // object-fit
+                // object-fit / object-position
                 { auto s = tolower_s(prop_val(r.decls, "object-fit"));
                   if      (s == "fill")       elem->object_fit = 0;
                   else if (s == "contain")    elem->object_fit = 1;
                   else if (s == "cover")      elem->object_fit = 2;
                   else if (s == "scale-down") elem->object_fit = 3;
                   else if (s == "none")       elem->object_fit = 4; }
+                { auto s = prop_val(r.decls, "object-position"); if (!s.empty()) elem->object_position = s; }
+                // per-side border color/style
+                { const char* cc[4]={"border-top-color","border-right-color","border-bottom-color","border-left-color"};
+                  for (int i=0;i<4;++i) { auto s=prop_val(r.decls,cc[i]); if (!s.empty()) elem->border_side_color[i]=s; } }
+                { const char* ss[4]={"border-top-style","border-right-style","border-bottom-style","border-left-style"};
+                  for (int i=0;i<4;++i) { auto s=tolower_s(prop_val(r.decls,ss[i])); if (!s.empty()) elem->border_side_style[i]=s; } }
                 // aspect-ratio
                 { auto s = prop_val(r.decls, "aspect-ratio");
                   if (!s.empty()) {
@@ -3898,6 +3909,8 @@ static void apply_css_to_node(DOMNode* node, const std::vector<CSSRule>& css) {
     node->object_fit = 0; node->aspect_ratio = 0;
     node->border_radius = 0;
     node->border_color.clear(); node->border_style.clear();
+    for (int i = 0; i < 4; ++i) { node->border_side_color[i].clear(); node->border_side_style[i].clear(); }
+    node->object_position.clear();
     node->halign_center = false;
     node->display = DOMNode::Display::Inherit;
     node->floatdir = DOMNode::Float::None;
@@ -4077,6 +4090,12 @@ static void apply_css_to_node(DOMNode* node, const std::vector<CSSRule>& css) {
                   float h = std::stof(s.substr(slash+1)); if (h > 0) node->aspect_ratio = w / h; } catch(...) {} }
               else { try { node->aspect_ratio = std::stof(s); } catch(...) {} }
           } } }
+        { auto s = prop_val(r.decls, "object-position"); if (!s.empty()) node->object_position = s; }
+        // per-side border color/style
+        { const char* cc[4]={"border-top-color","border-right-color","border-bottom-color","border-left-color"};
+          for (int i=0;i<4;++i) { auto s=prop_val(r.decls,cc[i]); if (!s.empty()) node->border_side_color[i]=s; } }
+        { const char* ss[4]={"border-top-style","border-right-style","border-bottom-style","border-left-style"};
+          for (int i=0;i<4;++i) { auto s=tolower_s(prop_val(r.decls,ss[i])); if (!s.empty()) node->border_side_style[i]=s; } }
         { auto s = prop_val(r.decls, "text-shadow"); if (!s.empty()) node->text_shadow = s; }
         { auto s = prop_val(r.decls, "font");
           if (!s.empty()) parse_font_shorthand(s, node, parent_fs); }
@@ -4315,6 +4334,12 @@ static void apply_css_to_node(DOMNode* node, const std::vector<CSSRule>& css) {
                   float h = std::stof(s.substr(slash+1)); if (h > 0) node->aspect_ratio = w / h; } catch(...) {} }
               else { try { node->aspect_ratio = std::stof(s); } catch(...) {} }
           } } }
+        { auto s = prop_val(ist, "object-position"); if (!s.empty()) node->object_position = s; }
+        // per-side border color/style
+        { const char* cc[4]={"border-top-color","border-right-color","border-bottom-color","border-left-color"};
+          for (int i=0;i<4;++i) { auto s=prop_val(ist,cc[i]); if (!s.empty()) node->border_side_color[i]=s; } }
+        { const char* ss[4]={"border-top-style","border-right-style","border-bottom-style","border-left-style"};
+          for (int i=0;i<4;++i) { auto s=tolower_s(prop_val(ist,ss[i])); if (!s.empty()) node->border_side_style[i]=s; } }
         { auto s = prop_val(ist, "text-shadow"); if (!s.empty()) node->text_shadow = s; }
         { auto s = prop_val(ist, "font"); if (!s.empty()) parse_font_shorthand(s, node, parent_fs); }
         if (!node->font_family.empty()) node->font_family = css_font_to_pango(node->font_family);

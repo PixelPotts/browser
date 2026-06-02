@@ -68,12 +68,18 @@ struct PaintCommand {
     int border_radius = 0;
     // outline-specific
     float outline_w = 0;      // stroke width for DrawOutline
+    // Per-side border colors/styles (empty = use border_color_val / "solid")
+    CairoColor border_color_per_side[4] = {};  // [top, right, bottom, left]
+    bool has_per_side_colors = false;
+    std::string border_style_str;              // single border-style (for dashed/dotted)
+    std::string border_styles_per_side[4];     // [top, right, bottom, left]
 
     // DrawImage
     cairo_surface_t* surface = nullptr;  // not owned
     Rect dest_rect;
     int object_fit = 0;  // 0=fill, 1=contain, 2=cover, 3=scale-down, 4=none
     int natural_w = 0, natural_h = 0;  // intrinsic image dimensions
+    std::string object_position;        // CSS object-position value
 
     // PushClip
     Rect clip_rect;
