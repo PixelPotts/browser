@@ -133,8 +133,9 @@ struct DOMNode {
     int visibility = 0;  // 0=visible, 1=hidden, 2=collapse
 
     // CSS transform / transition
-    std::string css_transform;   // raw CSS transform value
-    std::string css_transition;  // raw CSS transition value (e.g. "background-color 0.3s ease")
+    std::string css_transform;        // raw CSS transform value
+    std::string css_transition;       // raw CSS transition value (e.g. "background-color 0.3s ease")
+    std::string css_transform_origin; // e.g. "50% 50%", "top left", "0 0"
 
     // outline (painted outside border, doesn't affect layout)
     int outline_width = 0;

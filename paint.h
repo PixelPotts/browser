@@ -83,6 +83,7 @@ struct PaintCommand {
 
     // PushClip
     Rect clip_rect;
+    int clip_radius = 0;   // border-radius for rounded clip path
 
     // PushOpacity
     float opacity = 1.0;
@@ -115,12 +116,15 @@ using DisplayList = std::vector<PaintCommand>;
 struct AnimState {
     uint32_t node_id = 0;
     CairoColor from_color, to_color;
+    float from_val = 0, to_val = 1;   // for scalar properties (opacity)
     gint64 start_us = 0;   // g_get_monotonic_time() at start
     int duration_ms = 0;
 };
 
-// Global animation map: node_id → AnimState (defined in browser.cpp)
-extern std::unordered_map<uint32_t, AnimState> g_animations;
+// Global animation maps: node_id → AnimState (defined in browser.cpp)
+extern std::unordered_map<uint32_t, AnimState> g_animations;         // background-color
+extern std::unordered_map<uint32_t, AnimState> g_color_animations;   // color (text)
+extern std::unordered_map<uint32_t, AnimState> g_opacity_animations; // opacity
 extern bool g_anim_pending;   // true when a new animation was queued
 extern guint g_anim_timer_id; // g_timeout handle (0 = not running)
 

@@ -383,7 +383,9 @@ static void apply_filter_to_surface(cairo_surface_t* surf, const FilterDef& f) {
 }
 
 // CSS transform parser helper
-static cairo_matrix_t parse_css_transform_matrix(const std::string& val, float cx, float cy) {
+// box_w / box_h: border-box dimensions for resolving percentage translate
+static cairo_matrix_t parse_css_transform_matrix(const std::string& val, float cx, float cy,
+                                                   float box_w = 0, float box_h = 0) {
     cairo_matrix_t m;
     cairo_matrix_init_identity(&m);
     size_t i = 0, n = val.size();
@@ -401,13 +403,30 @@ static cairo_matrix_t parse_css_transform_matrix(const std::string& val, float c
         while (i < n && val[i] != ')') ++i;
         std::string args_str = val.substr(arg_start, i - arg_start);
         if (i < n) ++i; // skip ')'
-        // Parse comma/space separated numbers
-        std::vector<double> args;
+        // Parse comma/space separated numbers (handle % suffix)
+        struct ArgVal { double v; bool is_pct; };
+        std::vector<ArgVal> raw_args;
+        std::vector<double> args;  // resolved numeric values
         std::string tok;
         for (char c : args_str + ",") {
             if (c == ',' || c == ' ' || c == '\t') {
-                if (!tok.empty()) { try { args.push_back(std::stod(tok)); } catch(...){} tok.clear(); }
+                if (!tok.empty()) {
+                    bool pct = !tok.empty() && tok.back() == '%';
+                    if (pct) tok.pop_back();
+                    try { raw_args.push_back({std::stod(tok), pct}); } catch(...) {}
+                    tok.clear();
+                }
             } else tok += c;
+        }
+        // Build args resolving % for translate functions
+        bool is_translate = (func == "translate" || func == "translatex" || func == "translatey");
+        for (size_t ai = 0; ai < raw_args.size(); ++ai) {
+            if (is_translate && raw_args[ai].is_pct) {
+                float dim = (ai == 0) ? box_w : box_h;
+                args.push_back(raw_args[ai].v / 100.0 * dim);
+            } else {
+                args.push_back(raw_args[ai].v);
+            }
         }
         cairo_matrix_t step;
         cairo_matrix_init_identity(&step);
@@ -769,11 +788,33 @@ void paint_box(LayoutBox* box, DisplayList& dl, float offset_x, float offset_y) 
     bool do_transform = node && !box->css_transform.empty();
     if (do_transform) {
         Rect bb = box->border_box();
-        float tcx = offset_x + bb.x + bb.w / 2;
-        float tcy = offset_y + bb.y + bb.h / 2;
+        // Resolve transform-origin (default 50% 50% = center)
+        auto resolve_origin_axis = [](const std::string& tok, float pos, float dim) -> float {
+            if (tok.empty() || tok == "center") return pos + dim / 2;
+            if (tok == "left" || tok == "top") return pos;
+            if (tok == "right" || tok == "bottom") return pos + dim;
+            if (!tok.empty() && tok.back() == '%') {
+                try { return pos + std::stof(tok) / 100.0f * dim; } catch(...) {}
+            }
+            try { return pos + std::stof(tok); } catch(...) {}
+            return pos + dim / 2;
+        };
+        float tcx, tcy;
+        const std::string& origin = box->css_transform_origin;
+        if (origin.empty()) {
+            tcx = offset_x + bb.x + bb.w / 2;
+            tcy = offset_y + bb.y + bb.h / 2;
+        } else {
+            std::istringstream oss(origin);
+            std::string o1, o2;
+            oss >> o1 >> o2;
+            tcx = resolve_origin_axis(o1, offset_x + bb.x, bb.w);
+            tcy = o2.empty() ? (offset_y + bb.y + bb.h / 2)
+                             : resolve_origin_axis(o2, offset_y + bb.y, bb.h);
+        }
         PaintCommand tcmd;
         tcmd.type = PaintCmdType::PushTransform;
-        tcmd.transform_matrix = parse_css_transform_matrix(box->css_transform, tcx, tcy);
+        tcmd.transform_matrix = parse_css_transform_matrix(box->css_transform, tcx, tcy, bb.w, bb.h);
         dl.push_back(tcmd);
     }
 
@@ -858,6 +899,42 @@ void paint_box(LayoutBox* box, DisplayList& dl, float offset_x, float offset_y) 
         }
     }
 
+    // Helper: interpolate an AnimState at current time (ease in-out)
+    auto interp_anim = [](const AnimState& a) -> float {
+        gint64 now = g_get_monotonic_time();
+        float t = (float)(now - a.start_us) / (a.duration_ms * 1000.0f);
+        t = std::min(1.0f, t);
+        return t * t * (3 - 2*t); // ease in-out
+    };
+    auto interp_color_anim = [&](const AnimState& a) -> CairoColor {
+        float te = interp_anim(a);
+        return {a.from_color.r + (a.to_color.r - a.from_color.r) * te,
+                a.from_color.g + (a.to_color.g - a.from_color.g) * te,
+                a.from_color.b + (a.to_color.b - a.from_color.b) * te,
+                a.from_color.a + (a.to_color.a - a.from_color.a) * te};
+    };
+
+    // Animated opacity: override box->opacity during this frame
+    float effective_opacity = (float)box->opacity;
+    if (node && !g_opacity_animations.empty()) {
+        auto it = g_opacity_animations.find(node->node_id);
+        if (it != g_opacity_animations.end()) {
+            float te = interp_anim(it->second);
+            effective_opacity = it->second.from_val + (it->second.to_val - it->second.from_val) * te;
+        }
+    }
+
+    // Animated text color
+    CairoColor anim_text_color = {};
+    bool has_anim_text_color = false;
+    if (node && !g_color_animations.empty()) {
+        auto it = g_color_animations.find(node->node_id);
+        if (it != g_color_animations.end()) {
+            anim_text_color = interp_color_anim(it->second);
+            has_anim_text_color = true;
+        }
+    }
+
     // Background (with CSS transition animation support)
     std::string bg = box->bg_color;
     bool has_anim_bg = false;
@@ -865,16 +942,7 @@ void paint_box(LayoutBox* box, DisplayList& dl, float offset_x, float offset_y) 
     if (node && !g_animations.empty()) {
         auto it = g_animations.find(node->node_id);
         if (it != g_animations.end()) {
-            gint64 now = g_get_monotonic_time();
-            float t = (float)((now - it->second.start_us) / 1000.0 / it->second.duration_ms);
-            t = std::min(1.0f, t);
-            float te = t * t * (3 - 2*t);  // ease in-out
-            anim_bg = {
-                it->second.from_color.r + (it->second.to_color.r - it->second.from_color.r) * te,
-                it->second.from_color.g + (it->second.to_color.g - it->second.from_color.g) * te,
-                it->second.from_color.b + (it->second.to_color.b - it->second.from_color.b) * te,
-                it->second.from_color.a + (it->second.to_color.a - it->second.from_color.a) * te,
-            };
+            anim_bg = interp_color_anim(it->second);
             has_anim_bg = true;
         }
     }
@@ -1046,12 +1114,12 @@ void paint_box(LayoutBox* box, DisplayList& dl, float offset_x, float offset_y) 
         dl.push_back(cmd);
     }
 
-    // Opacity
-    bool has_opacity = box->opacity < 1.0 && box->opacity >= 0;
+    // Opacity (use animated value if active)
+    bool has_opacity = effective_opacity < 1.0f && effective_opacity >= 0;
     if (has_opacity) {
         PaintCommand cmd;
         cmd.type = PaintCmdType::PushOpacity;
-        cmd.opacity = (float)box->opacity;
+        cmd.opacity = effective_opacity;
         dl.push_back(cmd);
     }
 
@@ -1064,6 +1132,7 @@ void paint_box(LayoutBox* box, DisplayList& dl, float offset_x, float offset_y) 
         bb.x += offset_x;
         bb.y += offset_y;
         cmd.clip_rect = bb;
+        cmd.clip_radius = node ? node->border_radius : 0;
         dl.push_back(cmd);
     }
 
@@ -1077,7 +1146,7 @@ void paint_box(LayoutBox* box, DisplayList& dl, float offset_x, float offset_y) 
         }
         if (text_color_str.empty()) text_color_str = "black";
 
-        CairoColor tc = parse_css_color(text_color_str);
+        CairoColor tc = has_anim_text_color ? anim_text_color : parse_css_color(text_color_str);
         PaintCommand cmd;
         cmd.type = PaintCmdType::DrawText;
         cmd.pango_layout = box->pango_layout;
@@ -1702,8 +1771,21 @@ void render_display_list(cairo_t* cr, const DisplayList& dl, float scroll_x, flo
 
             case PaintCmdType::PushClip: {
                 cairo_save(cr);
-                cairo_rectangle(cr, cmd.clip_rect.x, cmd.clip_rect.y,
-                                cmd.clip_rect.w, cmd.clip_rect.h);
+                const auto& cr2 = cmd.clip_rect;
+                int crad = cmd.clip_radius;
+                if (crad > 0) {
+                    float hr = std::min((float)crad, cr2.w / 2);
+                    float vr = std::min((float)crad, cr2.h / 2);
+                    float x = cr2.x, y = cr2.y, w = cr2.w, h = cr2.h;
+                    cairo_new_path(cr);
+                    cairo_arc(cr, x+hr,   y+vr,   hr, M_PI,       1.5*M_PI);
+                    cairo_arc(cr, x+w-hr, y+vr,   hr, 1.5*M_PI,   2*M_PI);
+                    cairo_arc(cr, x+w-hr, y+h-vr, vr, 0,          0.5*M_PI);
+                    cairo_arc(cr, x+hr,   y+h-vr, vr, 0.5*M_PI,   M_PI);
+                    cairo_close_path(cr);
+                } else {
+                    cairo_rectangle(cr, cr2.x, cr2.y, cr2.w, cr2.h);
+                }
                 cairo_clip(cr);
                 break;
             }

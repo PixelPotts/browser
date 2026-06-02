@@ -45,7 +45,9 @@ static float g_viewport_h = 800.0f;
 static int g_root_font_size = 16;
 
 // ---- CSS Transition animation globals ----
-std::unordered_map<uint32_t, AnimState> g_animations;
+std::unordered_map<uint32_t, AnimState> g_animations;         // background-color
+std::unordered_map<uint32_t, AnimState> g_color_animations;   // color (text)
+std::unordered_map<uint32_t, AnimState> g_opacity_animations; // opacity
 bool g_anim_pending = false;
 guint g_anim_timer_id = 0;
 
@@ -2297,6 +2299,40 @@ void js_get_node_geometry(TabState* tab, uint32_t node_id, int& x, int& y, int& 
     h = (int)(bb.h);
 }
 
+// Get scroll/client dimensions from layout box
+void js_get_scroll_dims(TabState* tab, uint32_t node_id,
+                         int& client_w, int& client_h,
+                         int& scroll_w, int& scroll_h,
+                         int& scroll_top, int& scroll_left) {
+    client_w = client_h = scroll_w = scroll_h = scroll_top = scroll_left = 0;
+    if (!tab || !tab->layout_root) return;
+    LayoutBox* box = find_layout_box(tab->layout_root.get(), node_id);
+    if (!box) return;
+    // clientWidth/clientHeight: content + padding (no border)
+    client_w = (int)(box->content_rect.w + box->padding.left + box->padding.right);
+    client_h = (int)(box->content_rect.h + box->padding.top + box->padding.bottom);
+    // scrollWidth/scrollHeight: content overflow size
+    scroll_w = (int)std::max(box->scroll_width, box->content_rect.w);
+    scroll_h = (int)std::max(box->scroll_height, box->content_rect.h);
+    if (scroll_w == 0) scroll_w = client_w;
+    if (scroll_h == 0) scroll_h = client_h;
+    // scrollTop/scrollLeft: current scroll position
+    scroll_top  = (int)box->scroll_y;
+    scroll_left = (int)box->scroll_x;
+}
+
+// Set scroll position on a layout box (for scrollTop/scrollLeft setter)
+void js_set_scroll(TabState* tab, uint32_t node_id, int top, int left, bool set_top, bool set_left) {
+    if (!tab || !tab->layout_root) return;
+    LayoutBox* box = find_layout_box(tab->layout_root.get(), node_id);
+    if (!box) return;
+    float max_y = std::max(0.0f, box->scroll_height - box->content_rect.h);
+    float max_x = std::max(0.0f, box->scroll_width  - box->content_rect.w);
+    if (set_top)  box->scroll_y = std::min((float)top,  max_y);
+    if (set_left) box->scroll_x = std::min((float)left, max_x);
+    if (tab->drawing_area) gtk_widget_queue_draw(tab->drawing_area);
+}
+
 // ---- block container builder (main thread only) ----
 
 static bool has_css_var(const std::string& s) {
@@ -3739,17 +3775,16 @@ static gboolean anim_tick(gpointer data) {
 
     gint64 now = g_get_monotonic_time();
     bool any_active = false;
-    for (auto it = g_animations.begin(); it != g_animations.end(); ) {
-        AnimState& anim = it->second;
-        gint64 elapsed_us = now - anim.start_us;
-        float t = (float)elapsed_us / (anim.duration_ms * 1000.0f);
-        if (t >= 1.0f) {
-            it = g_animations.erase(it);
-        } else {
-            any_active = true;
-            ++it;
+    auto expire_map = [&](std::unordered_map<uint32_t, AnimState>& map) {
+        for (auto it = map.begin(); it != map.end(); ) {
+            float t = (float)(now - it->second.start_us) / (it->second.duration_ms * 1000.0f);
+            if (t >= 1.0f) it = map.erase(it);
+            else { any_active = true; ++it; }
         }
-    }
+    };
+    expire_map(g_animations);
+    expire_map(g_color_animations);
+    expire_map(g_opacity_animations);
 
     // Tick @keyframes animations
     if (!g_node_animations.empty() && tab->document) {
@@ -3845,8 +3880,10 @@ static void apply_css_to_node(DOMNode* node, const std::vector<CSSRule>& css) {
     if (node->node_type != DOMNode::ELEMENT) return;
     const std::string& tname = node->tag_name;
 
-    // Save previous bg_color to detect transitions
+    // Save previous values to detect transitions
     std::string prev_bg_color = node->bg_color;
+    std::string prev_color = node->color_computed;
+    double prev_opacity = node->opacity;
 
     // --- 1. Reset style fields to defaults ---
     node->fw_computed = -1;
@@ -4108,6 +4145,7 @@ static void apply_css_to_node(DOMNode* node, const std::vector<CSSRule>& css) {
         collect_custom_props(r.decls, node->custom_props);
         // transform / transition / outline / cursor / pointer-events
         { auto s = prop_val(r.decls, "transform"); if (!s.empty()) node->css_transform = s; }
+        { auto s = prop_val(r.decls, "transform-origin"); if (!s.empty()) node->css_transform_origin = s; }
         { auto s = prop_val(r.decls, "transition"); if (!s.empty()) node->css_transition = s; }
         { auto s = prop_val(r.decls, "outline"); if (!s.empty()) {
             // shorthand: outline: <width> <style> <color>
@@ -4349,6 +4387,7 @@ static void apply_css_to_node(DOMNode* node, const std::vector<CSSRule>& css) {
         // custom props, transform, transition, outline, cursor, pointer-events
         collect_custom_props(ist, node->custom_props);
         { auto s = prop_val(ist, "transform"); if (!s.empty()) node->css_transform = s; }
+        { auto s = prop_val(ist, "transform-origin"); if (!s.empty()) node->css_transform_origin = s; }
         { auto s = prop_val(ist, "transition"); if (!s.empty()) node->css_transition = s; }
         { auto s = prop_val(ist, "outline"); if (!s.empty()) {
             size_t p = s.find("px");
@@ -4565,6 +4604,37 @@ static void apply_css_to_node(DOMNode* node, const std::vector<CSSRule>& css) {
             anim.start_us = g_get_monotonic_time();
             anim.duration_ms = dur_ms;
             g_animations[node->node_id] = anim;
+            g_anim_pending = true;
+        }
+    }
+    // Opacity transition
+    if (!node->css_transition.empty() && node->opacity != prev_opacity) {
+        int dur_ms = get_transition_duration(node->css_transition, "opacity");
+        if (dur_ms <= 0) dur_ms = get_transition_duration(node->css_transition, "all");
+        if (dur_ms > 0) {
+            AnimState anim;
+            anim.node_id = node->node_id;
+            anim.from_val = (float)prev_opacity;
+            anim.to_val = (float)node->opacity;
+            anim.start_us = g_get_monotonic_time();
+            anim.duration_ms = dur_ms;
+            g_opacity_animations[node->node_id] = anim;
+            g_anim_pending = true;
+        }
+    }
+    // Text color transition
+    if (!node->css_transition.empty() && !prev_color.empty() &&
+        node->color_computed != prev_color && !node->color_computed.empty()) {
+        int dur_ms = get_transition_duration(node->css_transition, "color");
+        if (dur_ms <= 0) dur_ms = get_transition_duration(node->css_transition, "all");
+        if (dur_ms > 0) {
+            AnimState anim;
+            anim.node_id = node->node_id;
+            anim.from_color = parse_css_color(prev_color);
+            anim.to_color = parse_css_color(node->color_computed);
+            anim.start_us = g_get_monotonic_time();
+            anim.duration_ms = dur_ms;
+            g_color_animations[node->node_id] = anim;
             g_anim_pending = true;
         }
     }
@@ -5017,6 +5087,60 @@ static gboolean on_draw_area_click(GtkWidget* widget, GdkEventButton* ev, gpoint
     return TRUE;
 }
 
+// Find the nearest overflow scroll container for a node by walking layout tree upward
+static LayoutBox* find_scroll_container(LayoutBox* root, DOMNode* target_node) {
+    if (!root || !target_node) return nullptr;
+    // Find box for target
+    std::function<LayoutBox*(LayoutBox*, DOMNode*)> find = [&](LayoutBox* box, DOMNode* n) -> LayoutBox* {
+        if (!box) return nullptr;
+        if (box->dom_node == n) return box;
+        for (auto& c : box->children) { auto* f = find(c.get(), n); if (f) return f; }
+        return nullptr;
+    };
+    LayoutBox* target_box = find(root, target_node);
+    if (!target_box) return nullptr;
+    // Walk up the layout tree looking for overflow: scroll/auto container
+    LayoutBox* b = target_box->parent;
+    while (b) {
+        if ((b->overflow == 2 || b->overflow == 3) && b->scroll_height > b->content_rect.h + 1)
+            return b;
+        b = b->parent;
+    }
+    return nullptr;
+}
+
+// Scroll event handler for per-element scroll containers
+static gboolean on_draw_area_scroll(GtkWidget* widget, GdkEventScroll* ev, gpointer data) {
+    AppState* st = static_cast<AppState*>(data);
+    TabState* tab = st->ct;
+    if (!tab || !tab->layout_root) return FALSE;
+
+    // Adjust hit position for current scroll offset
+    GtkAdjustment* vadj = gtk_scrollable_get_vadjustment(GTK_SCROLLABLE(tab->viewport));
+    float scroll_offset = vadj ? (float)gtk_adjustment_get_value(vadj) : 0;
+    float doc_x = (float)ev->x;
+    float doc_y = (float)ev->y + scroll_offset;
+
+    HitTestResult hit = hit_test(tab->layout_root.get(), doc_x, doc_y);
+    if (!hit.node) return FALSE;
+
+    // Find scroll container ancestor
+    LayoutBox* sc = find_scroll_container(tab->layout_root.get(), hit.node);
+    if (!sc) return FALSE;  // let GTK handle viewport scroll
+
+    float delta = 60.0f;  // px per scroll step
+    if (ev->direction == GDK_SCROLL_DOWN || ev->direction == GDK_SCROLL_RIGHT)
+        sc->scroll_y = std::min(sc->scroll_y + delta, sc->scroll_height - sc->content_rect.h);
+    else if (ev->direction == GDK_SCROLL_UP || ev->direction == GDK_SCROLL_LEFT)
+        sc->scroll_y = std::max(sc->scroll_y - delta, 0.0f);
+    else if (ev->direction == GDK_SCROLL_SMOOTH) {
+        sc->scroll_y = std::clamp(sc->scroll_y + (float)(ev->delta_y * 30.0), 0.0f, sc->scroll_height - sc->content_rect.h);
+    }
+    sc->scroll_y = std::max(0.0f, sc->scroll_y);
+    gtk_widget_queue_draw(tab->drawing_area);
+    return TRUE;  // consume event (don't also scroll the viewport)
+}
+
 // Mouse motion handler for cursor changes
 static gboolean on_draw_area_motion(GtkWidget* widget, GdkEventMotion* ev, gpointer data) {
     AppState* st = static_cast<AppState*>(data);
@@ -5123,6 +5247,8 @@ static void create_tab_widgets(AppState* st, std::shared_ptr<TabState> tab) {
                      G_CALLBACK(on_draw_area_click), st);
     g_signal_connect(tab->drawing_area, "motion-notify-event",
                      G_CALLBACK(on_draw_area_motion), st);
+    g_signal_connect(tab->drawing_area, "scroll-event",
+                     G_CALLBACK(on_draw_area_scroll), st);
 
     // Re-layout on resize
     g_signal_connect(tab->scroll, "size-allocate",

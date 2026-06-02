@@ -1943,6 +1943,71 @@ static JSValue js_element_get_offsetLeft(JSContext* ctx, JSValueConst this_val) 
     return JS_NewInt32(ctx, x);
 }
 
+// ---- scroll/client dimension getters ----
+
+extern void js_get_scroll_dims(TabState* tab, uint32_t node_id,
+                                int& client_w, int& client_h,
+                                int& scroll_w, int& scroll_h,
+                                int& scroll_top, int& scroll_left);
+extern void js_set_scroll(TabState* tab, uint32_t node_id, int top, int left, bool set_top, bool set_left);
+
+static JSValue js_element_get_clientWidth(JSContext* ctx, JSValueConst this_val) {
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node || !g_js_engine || !g_js_engine->tab_state) return JS_NewInt32(ctx, 0);
+    int cw, ch, sw, sh, st, sl;
+    js_get_scroll_dims(g_js_engine->tab_state, node->node_id, cw, ch, sw, sh, st, sl);
+    return JS_NewInt32(ctx, cw);
+}
+static JSValue js_element_get_clientHeight(JSContext* ctx, JSValueConst this_val) {
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node || !g_js_engine || !g_js_engine->tab_state) return JS_NewInt32(ctx, 0);
+    int cw, ch, sw, sh, st, sl;
+    js_get_scroll_dims(g_js_engine->tab_state, node->node_id, cw, ch, sw, sh, st, sl);
+    return JS_NewInt32(ctx, ch);
+}
+static JSValue js_element_get_scrollWidth(JSContext* ctx, JSValueConst this_val) {
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node || !g_js_engine || !g_js_engine->tab_state) return JS_NewInt32(ctx, 0);
+    int cw, ch, sw, sh, st, sl;
+    js_get_scroll_dims(g_js_engine->tab_state, node->node_id, cw, ch, sw, sh, st, sl);
+    return JS_NewInt32(ctx, sw);
+}
+static JSValue js_element_get_scrollHeight(JSContext* ctx, JSValueConst this_val) {
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node || !g_js_engine || !g_js_engine->tab_state) return JS_NewInt32(ctx, 0);
+    int cw, ch, sw, sh, st, sl;
+    js_get_scroll_dims(g_js_engine->tab_state, node->node_id, cw, ch, sw, sh, st, sl);
+    return JS_NewInt32(ctx, sh);
+}
+static JSValue js_element_get_scrollTop(JSContext* ctx, JSValueConst this_val) {
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node || !g_js_engine || !g_js_engine->tab_state) return JS_NewInt32(ctx, 0);
+    int cw, ch, sw, sh, st, sl;
+    js_get_scroll_dims(g_js_engine->tab_state, node->node_id, cw, ch, sw, sh, st, sl);
+    return JS_NewInt32(ctx, st);
+}
+static JSValue js_element_set_scrollTop(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node || !g_js_engine || !g_js_engine->tab_state) return JS_UNDEFINED;
+    int v = 0; JS_ToInt32(ctx, &v, val);
+    js_set_scroll(g_js_engine->tab_state, node->node_id, v, 0, true, false);
+    return JS_UNDEFINED;
+}
+static JSValue js_element_get_scrollLeft(JSContext* ctx, JSValueConst this_val) {
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node || !g_js_engine || !g_js_engine->tab_state) return JS_NewInt32(ctx, 0);
+    int cw, ch, sw, sh, st, sl;
+    js_get_scroll_dims(g_js_engine->tab_state, node->node_id, cw, ch, sw, sh, st, sl);
+    return JS_NewInt32(ctx, sl);
+}
+static JSValue js_element_set_scrollLeft(JSContext* ctx, JSValueConst this_val, JSValueConst val) {
+    DOMNode* node = js_get_node(ctx, this_val);
+    if (!node || !g_js_engine || !g_js_engine->tab_state) return JS_UNDEFINED;
+    int v = 0; JS_ToInt32(ctx, &v, val);
+    js_set_scroll(g_js_engine->tab_state, node->node_id, 0, v, false, true);
+    return JS_UNDEFINED;
+}
+
 // ---- element.remove() (native) ----
 
 static JSValue js_element_remove(JSContext* ctx, JSValueConst this_val,
@@ -3358,33 +3423,33 @@ void js_bindings_init(JSEngine* engine) {
         JS_NewAtom(ctx, "offsetLeft"),
         JS_NewCFunction(ctx, (JSCFunction*)js_element_get_offsetLeft, "get offsetLeft", 0),
         JS_NewCFunction(ctx, js_noop_setter, "set offsetLeft", 1), JS_PROP_CONFIGURABLE);
-    // clientWidth/clientHeight same as offset*
+    // clientWidth/clientHeight — real content+padding dimensions
     JS_DefinePropertyGetSet(ctx, elem_proto,
         JS_NewAtom(ctx, "clientWidth"),
-        JS_NewCFunction(ctx, (JSCFunction*)js_element_get_offsetWidth, "get clientWidth", 0),
+        JS_NewCFunction(ctx, (JSCFunction*)js_element_get_clientWidth, "get clientWidth", 0),
         JS_NewCFunction(ctx, js_noop_setter, "set clientWidth", 1), JS_PROP_CONFIGURABLE);
     JS_DefinePropertyGetSet(ctx, elem_proto,
         JS_NewAtom(ctx, "clientHeight"),
-        JS_NewCFunction(ctx, (JSCFunction*)js_element_get_offsetHeight, "get clientHeight", 0),
+        JS_NewCFunction(ctx, (JSCFunction*)js_element_get_clientHeight, "get clientHeight", 0),
         JS_NewCFunction(ctx, js_noop_setter, "set clientHeight", 1), JS_PROP_CONFIGURABLE);
-    // scrollWidth/scrollHeight same as offset*
+    // scrollWidth/scrollHeight — overflow content dimensions
     JS_DefinePropertyGetSet(ctx, elem_proto,
         JS_NewAtom(ctx, "scrollWidth"),
-        JS_NewCFunction(ctx, (JSCFunction*)js_element_get_offsetWidth, "get scrollWidth", 0),
+        JS_NewCFunction(ctx, (JSCFunction*)js_element_get_scrollWidth, "get scrollWidth", 0),
         JS_NewCFunction(ctx, js_noop_setter, "set scrollWidth", 1), JS_PROP_CONFIGURABLE);
     JS_DefinePropertyGetSet(ctx, elem_proto,
         JS_NewAtom(ctx, "scrollHeight"),
-        JS_NewCFunction(ctx, (JSCFunction*)js_element_get_offsetHeight, "get scrollHeight", 0),
+        JS_NewCFunction(ctx, (JSCFunction*)js_element_get_scrollHeight, "get scrollHeight", 0),
         JS_NewCFunction(ctx, js_noop_setter, "set scrollHeight", 1), JS_PROP_CONFIGURABLE);
-    // scrollLeft / scrollTop — return 0, accept writes silently
+    // scrollLeft / scrollTop — real scroll position, settable
     JS_DefinePropertyGetSet(ctx, elem_proto,
         JS_NewAtom(ctx, "scrollLeft"),
-        JS_NewCFunction(ctx, (JSCFunction*)js_element_get_offsetTop, "get scrollLeft", 0),
-        JS_NewCFunction(ctx, js_noop_setter, "set scrollLeft", 1), JS_PROP_CONFIGURABLE);
+        JS_NewCFunction(ctx, (JSCFunction*)js_element_get_scrollLeft, "get scrollLeft", 0),
+        JS_NewCFunction(ctx, (JSCFunction*)js_element_set_scrollLeft, "set scrollLeft", 1), JS_PROP_CONFIGURABLE);
     JS_DefinePropertyGetSet(ctx, elem_proto,
         JS_NewAtom(ctx, "scrollTop"),
-        JS_NewCFunction(ctx, (JSCFunction*)js_element_get_offsetTop, "get scrollTop", 0),
-        JS_NewCFunction(ctx, js_noop_setter, "set scrollTop", 1), JS_PROP_CONFIGURABLE);
+        JS_NewCFunction(ctx, (JSCFunction*)js_element_get_scrollTop, "get scrollTop", 0),
+        JS_NewCFunction(ctx, (JSCFunction*)js_element_set_scrollTop, "set scrollTop", 1), JS_PROP_CONFIGURABLE);
 
     JS_SetClassProto(ctx, js_element_class_id, elem_proto);
 

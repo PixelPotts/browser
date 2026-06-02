@@ -129,6 +129,7 @@ struct LayoutBox {
     int pos_top = INT_MIN, pos_left = INT_MIN, pos_right = INT_MIN, pos_bottom = INT_MIN;
     // CSS transform / transition
     std::string css_transform;
+    std::string css_transform_origin; // e.g. "50% 50%"
     // outline (outside border, doesn't affect layout)
     int outline_width = 0;
     int outline_offset = 0;

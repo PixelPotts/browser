@@ -124,6 +124,7 @@ static void copy_style(LayoutBox* box, DOMNode* node) {
     box->bg_image = node->bg_image;
     box->text_shadow = node->text_shadow;
     box->css_transform = node->css_transform;
+    box->css_transform_origin = node->css_transform_origin;
     box->outline_width = node->outline_width;
     box->outline_offset = node->outline_offset;
     box->outline_color = node->outline_color;
