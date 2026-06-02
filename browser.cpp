@@ -4297,6 +4297,30 @@ static gboolean on_draw_area_click(GtkWidget* widget, GdkEventButton* ev, gpoint
                     break;
                 focusable = focusable->parent;
             }
+            // Fallback: hit_test sometimes returns an ancestor instead of the deepest
+            // focusable element. Search layout tree by abs coordinates.
+            if (!focusable && tab->layout_root) {
+                std::function<void(LayoutBox*)> find_focusable_at = [&](LayoutBox* b) {
+                    if (!b || focusable) return;
+                    if (b->dom_node && b->dom_node->node_type == DOMNode::ELEMENT) {
+                        const auto& tag = b->dom_node->tag_name;
+                        if (tag == "input" || tag == "textarea" || tag == "select" ||
+                            tag == "button" || tag == "a" || b->dom_node->attributes.count("tabindex")) {
+                            float bx = b->abs_x - b->padding.left - b->border.left;
+                            float by = b->abs_y - b->padding.top - b->border.top;
+                            float bw = b->content_rect.w + b->padding.horizontal() + b->border.horizontal();
+                            float bh = b->content_rect.h + b->padding.vertical() + b->border.vertical();
+                            if (doc_x >= bx && doc_x < bx + bw && doc_y >= by && doc_y < by + bh)
+                                focusable = b->dom_node;
+                        }
+                    }
+                    for (auto& c : b->children) find_focusable_at(c.get());
+                };
+                find_focusable_at(tab->layout_root.get());
+                if (focusable)
+                    fprintf(stderr, "[FOCUS-FALLBACK] found <%s> via layout tree search\n",
+                        focusable->tag_name.c_str());
+            }
             // Clear old focus
             std::function<void(DOMNode*)> clear_focus = [&](DOMNode* n) {
                 if (n->is_focused) { n->is_focused = false; needs_repaint = true; }
