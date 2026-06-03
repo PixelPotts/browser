@@ -794,5 +794,155 @@ details[open] { background: #eaf4fb; }
 <div class="thick-sides">Thick colored sides (red left, blue right)</div>
 </div>
 
+<!-- Round 7: rounded-overflow-clip, transform-origin, opacity/color transitions, scroll dims, per-element scroll -->
+
+<!-- R7-A: Rounded overflow clip -->
+<div class="section">
+<h2>Round 7-A: border-radius + overflow: hidden (clipped corners)</h2>
+<style>
+.card-clip { border-radius: 16px; overflow: hidden; width: 240px; border: 2px solid #3498db; }
+.card-clip img { width: 240px; height: 140px; display: block; object-fit: cover; }
+.card-clip .card-body { padding: 12px; background: white; }
+.inner-clip { border-radius: 12px; overflow: hidden; width: 200px; height: 60px; background: linear-gradient(to right, #e74c3c, #f39c12); color: white; font-weight: bold; display: flex; align-items: center; justify-content: center; }
+</style>
+<p>Image card with border-radius + overflow: hidden — corners should be clipped:</p>
+<div class="card-clip" style="margin: 10px 0;">
+  <img src="https://picsum.photos/seed/clip/240/140" alt="card img">
+  <div class="card-body">Card content clipped to rounded corners</div>
+</div>
+<p>Gradient div with radius + overflow hidden:</p>
+<div class="inner-clip">Clipped gradient box</div>
+</div>
+
+<!-- R7-B: transform-origin + translate(-50%, -50%) centering -->
+<div class="section">
+<h2>Round 7-B: transform-origin + translate(-50%, -50%)</h2>
+<style>
+.transform-stage { position: relative; height: 200px; background: #ecf0f1; border: 1px solid #bdc3c7; border-radius: 8px; overflow: hidden; }
+.centered-modal {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  background: white;
+  border-radius: 8px;
+  padding: 20px 30px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+  text-align: center;
+  border: 1px solid #ddd;
+}
+.rotate-box {
+  position: absolute;
+  top: 50%; left: 75%;
+  transform: translate(-50%, -50%) rotate(30deg);
+  background: #3498db;
+  color: white;
+  padding: 10px 20px;
+  border-radius: 4px;
+  transform-origin: center center;
+}
+</style>
+<div class="transform-stage">
+  <div class="centered-modal">Centered with translate(-50%, -50%)</div>
+  <div class="rotate-box">Rotated 30°</div>
+</div>
+</div>
+
+<!-- R7-C: CSS transitions for opacity and color -->
+<div class="section">
+<h2>Round 7-C: CSS transitions (opacity + color)</h2>
+<style>
+.fade-btn {
+  display: inline-block;
+  padding: 10px 20px;
+  background: #3498db;
+  color: white;
+  border-radius: 6px;
+  margin: 8px;
+  cursor: pointer;
+  opacity: 1;
+  transition: opacity 0.3s ease, background-color 0.3s ease;
+}
+.fade-btn:hover { opacity: 0.5; background-color: #2980b9; }
+.color-link {
+  color: #3498db;
+  text-decoration: underline;
+  cursor: pointer;
+  transition: color 0.3s ease;
+  margin: 8px;
+  display: inline-block;
+}
+.color-link:hover { color: #e74c3c; }
+.scale-card {
+  display: inline-block;
+  padding: 15px;
+  background: #2ecc71;
+  color: white;
+  border-radius: 8px;
+  margin: 8px;
+  cursor: pointer;
+  transition: transform 0.2s ease, background-color 0.2s ease;
+  transform-origin: center;
+}
+.scale-card:hover { transform: scale(1.1); background-color: #27ae60; }
+</style>
+<p>Hover these elements — they should transition smoothly:</p>
+<div class="fade-btn">Fade on hover</div>
+<div class="color-link">Color transition link</div>
+<div class="scale-card">Scale + bg-color</div>
+</div>
+
+<!-- R7-D: scrollWidth/clientHeight JS accuracy -->
+<div class="section">
+<h2>Round 7-D: scrollWidth / clientHeight accuracy</h2>
+<style>
+.scroll-test-box { width: 200px; height: 100px; overflow: auto; border: 1px solid #3498db; padding: 8px; }
+.scroll-inner { width: 400px; height: 300px; background: linear-gradient(135deg, #3498db, #9b59b6); border-radius: 4px; }
+#scroll-dims-output { font-family: monospace; font-size: 13px; margin-top: 8px; padding: 8px; background: #f5f5f5; border-radius: 4px; }
+</style>
+<div class="scroll-test-box" id="scroll-container">
+  <div class="scroll-inner"></div>
+</div>
+<div id="scroll-dims-output">Loading...</div>
+<script>
+(function() {
+  var el = document.getElementById('scroll-container');
+  var out = document.getElementById('scroll-dims-output');
+  function update() {
+    out.textContent = [
+      'clientWidth: '  + el.clientWidth  + ' (expect ~216)',
+      'clientHeight: ' + el.clientHeight + ' (expect ~116)',
+      'scrollWidth: '  + el.scrollWidth  + ' (expect ~416)',
+      'scrollHeight: ' + el.scrollHeight + ' (expect ~316)',
+      'scrollTop: '    + el.scrollTop
+    ].join('\n');
+  }
+  el.addEventListener('scroll', update);
+  update();
+})();
+</script>
+</div>
+
+<!-- R7-E: per-element scroll container -->
+<div class="section">
+<h2>Round 7-E: per-element overflow scroll (mouse wheel in box)</h2>
+<style>
+.inner-scroll { height: 150px; overflow-y: scroll; border: 2px solid #3498db; border-radius: 6px; padding: 8px; background: white; }
+.scroll-item { padding: 8px 12px; margin: 4px 0; border-radius: 4px; background: #eaf4fb; border-left: 3px solid #3498db; }
+</style>
+<p>Scroll with mouse wheel <em>inside</em> this box (should not scroll the page):</p>
+<div class="inner-scroll">
+  <div class="scroll-item">Item 1 — scroll me independently</div>
+  <div class="scroll-item">Item 2</div>
+  <div class="scroll-item">Item 3</div>
+  <div class="scroll-item">Item 4</div>
+  <div class="scroll-item">Item 5</div>
+  <div class="scroll-item">Item 6</div>
+  <div class="scroll-item">Item 7</div>
+  <div class="scroll-item">Item 8</div>
+  <div class="scroll-item">Item 9</div>
+  <div class="scroll-item">Item 10 — end of list</div>
+</div>
+</div>
+
 </body>
 </html>
