@@ -90,12 +90,19 @@ static bool fetch(const std::string& url, Buf& out) {
     curl_easy_setopt(c, CURLOPT_WRITEFUNCTION,  write_cb);
     curl_easy_setopt(c, CURLOPT_WRITEDATA,      &out);
     curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(c, CURLOPT_USERAGENT,      "Mozilla/5.0");
+    curl_easy_setopt(c, CURLOPT_USERAGENT,      "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
+    curl_easy_setopt(c, CURLOPT_ACCEPT_ENCODING, "");
     curl_easy_setopt(c, CURLOPT_TIMEOUT,        15L);
     curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 5L);
     curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, 0L);
     curl_easy_setopt(c, CURLOPT_NOSIGNAL,       1L);
-    CURLcode rc = curl_easy_perform(c); curl_easy_cleanup(c);
+    struct curl_slist* hdrs = nullptr;
+    hdrs = curl_slist_append(hdrs, "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8");
+    hdrs = curl_slist_append(hdrs, "Accept-Language: en-US,en;q=0.9");
+    curl_easy_setopt(c, CURLOPT_HTTPHEADER, hdrs);
+    CURLcode rc = curl_easy_perform(c);
+    curl_slist_free_all(hdrs);
+    curl_easy_cleanup(c);
     if (rc != CURLE_OK) {
         fprintf(stderr, "[fetch] FAILED url=%s err=%s\n", url.c_str(), curl_easy_strerror(rc));
     }

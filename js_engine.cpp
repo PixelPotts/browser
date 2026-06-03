@@ -26,10 +26,17 @@ static bool do_fetch(const std::string& url, FetchBuf& out) {
     curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, fetch_write_cb);
     curl_easy_setopt(c, CURLOPT_WRITEDATA, &out);
     curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(c, CURLOPT_USERAGENT, "Mozilla/5.0");
+    curl_easy_setopt(c, CURLOPT_USERAGENT, "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
+    curl_easy_setopt(c, CURLOPT_ACCEPT_ENCODING, "");
     curl_easy_setopt(c, CURLOPT_TIMEOUT, 15L);
     curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, 0L);
-    CURLcode rc = curl_easy_perform(c); curl_easy_cleanup(c);
+    struct curl_slist* fhdrs = nullptr;
+    fhdrs = curl_slist_append(fhdrs, "Accept: */*");
+    fhdrs = curl_slist_append(fhdrs, "Accept-Language: en-US,en;q=0.9");
+    curl_easy_setopt(c, CURLOPT_HTTPHEADER, fhdrs);
+    CURLcode rc = curl_easy_perform(c);
+    curl_slist_free_all(fhdrs);
+    curl_easy_cleanup(c);
     return rc == CURLE_OK;
 }
 
@@ -459,7 +466,8 @@ static JSModuleDef* js_module_loader(JSContext* ctx, const char* module_name, vo
             static_cast<std::string*>(ud)->append(p, s * n); return s * n; });
     curl_easy_setopt(c, CURLOPT_WRITEDATA, &source);
     curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(c, CURLOPT_USERAGENT, "Mozilla/5.0");
+    curl_easy_setopt(c, CURLOPT_USERAGENT, "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
+    curl_easy_setopt(c, CURLOPT_ACCEPT_ENCODING, "");
     curl_easy_setopt(c, CURLOPT_TIMEOUT, 15L);
     curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, 0L);
     CURLcode rc = curl_easy_perform(c);
@@ -1099,22 +1107,31 @@ void JSEngine::setupGlobals() {
     // ---- navigator object ----
     JSValue nav = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, nav, "userAgent",
-        JS_NewString(ctx, "Mozilla/5.0 (X11; Linux x86_64) MiniBrowser/1.0"));
+        JS_NewString(ctx, "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"));
     JS_SetPropertyStr(ctx, nav, "language", JS_NewString(ctx, "en-US"));
     JSValue langs = JS_NewArray(ctx);
     JS_SetPropertyUint32(ctx, langs, 0, JS_NewString(ctx, "en-US"));
     JS_SetPropertyUint32(ctx, langs, 1, JS_NewString(ctx, "en"));
     JS_SetPropertyStr(ctx, nav, "languages", langs);
     JS_SetPropertyStr(ctx, nav, "platform", JS_NewString(ctx, "Linux x86_64"));
-    JS_SetPropertyStr(ctx, nav, "vendor", JS_NewString(ctx, ""));
+    JS_SetPropertyStr(ctx, nav, "vendor", JS_NewString(ctx, "Google Inc."));
     JS_SetPropertyStr(ctx, nav, "appName", JS_NewString(ctx, "Netscape"));
-    JS_SetPropertyStr(ctx, nav, "appVersion", JS_NewString(ctx, "5.0 (X11; Linux x86_64) MiniBrowser/1.0"));
+    JS_SetPropertyStr(ctx, nav, "appVersion", JS_NewString(ctx, "5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"));
     JS_SetPropertyStr(ctx, nav, "product", JS_NewString(ctx, "Gecko"));
-    JS_SetPropertyStr(ctx, nav, "cookieEnabled", JS_FALSE);
+    JS_SetPropertyStr(ctx, nav, "productSub", JS_NewString(ctx, "20030107"));
+    JS_SetPropertyStr(ctx, nav, "cookieEnabled", JS_TRUE);
     JS_SetPropertyStr(ctx, nav, "onLine", JS_TRUE);
-    JS_SetPropertyStr(ctx, nav, "doNotTrack", JS_NewString(ctx, "1"));
+    JS_SetPropertyStr(ctx, nav, "doNotTrack", JS_NULL);
     JS_SetPropertyStr(ctx, nav, "maxTouchPoints", JS_NewInt32(ctx, 0));
     JS_SetPropertyStr(ctx, nav, "hardwareConcurrency", JS_NewInt32(ctx, 4));
+    JS_SetPropertyStr(ctx, nav, "deviceMemory", JS_NewInt32(ctx, 8));
+    // navigator.connection stub (NetworkInformation API)
+    JSValue conn = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, conn, "effectiveType", JS_NewString(ctx, "4g"));
+    JS_SetPropertyStr(ctx, conn, "downlink", JS_NewFloat64(ctx, 10.0));
+    JS_SetPropertyStr(ctx, conn, "rtt", JS_NewInt32(ctx, 50));
+    JS_SetPropertyStr(ctx, conn, "saveData", JS_FALSE);
+    JS_SetPropertyStr(ctx, nav, "connection", conn);
     // navigator.mediaDevices stub
     JSValue mediaDevices = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, nav, "mediaDevices", mediaDevices);
@@ -1125,6 +1142,11 @@ void JSEngine::setupGlobals() {
     JSValue geo = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, nav, "geolocation", geo);
     JS_SetPropertyStr(ctx, global, "navigator", nav);
+    // window.chrome — presence signals Chrome-based browser to detection scripts
+    JSValue chrome_obj = JS_NewObject(ctx);
+    JSValue chrome_rt = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, chrome_obj, "runtime", chrome_rt);
+    JS_SetPropertyStr(ctx, global, "chrome", chrome_obj);
 
     // ---- location object ----
     ParsedURL pu = parse_url(page_url);
@@ -1167,7 +1189,10 @@ void JSEngine::setupGlobals() {
     JS_SetPropertyStr(ctx, screen, "availHeight", JS_NewInt32(ctx, 1040));
     JS_SetPropertyStr(ctx, screen, "colorDepth", JS_NewInt32(ctx, 24));
     JS_SetPropertyStr(ctx, screen, "pixelDepth", JS_NewInt32(ctx, 24));
-    JS_SetPropertyStr(ctx, screen, "orientation", JS_NewObject(ctx));
+    JSValue orient = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, orient, "type", JS_NewString(ctx, "landscape-primary"));
+    JS_SetPropertyStr(ctx, orient, "angle", JS_NewInt32(ctx, 0));
+    JS_SetPropertyStr(ctx, screen, "orientation", orient);
     JS_SetPropertyStr(ctx, global, "screen", screen);
 
     // ---- performance object ----
